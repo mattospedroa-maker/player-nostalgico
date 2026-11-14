@@ -16,6 +16,9 @@ abstract class GifProvider {
   /// false = os termos da fonte proíbem download em massa; fica fora do "Baixar GIFs para todas".
   bool get allowBulk => true;
 
+  /// true = só GIFs de anime; usada só com palavras extras ou gênero de anime/J-pop.
+  bool get animeOnly => false;
+
   Future<List<GifCandidate>> search(String query, {int limit = 20});
 }
 
@@ -119,11 +122,22 @@ class NekosBestProvider extends GifProvider {
   bool get allowBulk => false;
 
   @override
+  bool get animeOnly => true;
+
+  @override
   Future<List<GifCandidate>> search(String query, {int limit = 20}) async {
     final wait = minInterval - DateTime.now().difference(_last);
     if (wait > Duration.zero) await Future<void>.delayed(wait);
     _last = DateTime.now();
     final uri = Uri.https('nekos.best', '/api/v2/search', {'query': query, 'type': '2', 'amount': '${limit.clamp(1, 20)}'});
+    final res = await client.get(uri, headers: {'User-Agent': 'PlayerNostalgico (app pessoal offline)'}).timeout(const Duration(seconds: 20));
+    if (res.statusCode != 200) return const [];
+    return parse(jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>);
+  }
+
+  /// GIFs aleatórios de uma categoria (ex.: "punch", "dance"), para combinar com o clima da música.
+  Future<List<GifCandidate>> random(String category, {int amount = 5}) async {
+    final uri = Uri.https('nekos.best', '/api/v2/$category', {'amount': '${amount.clamp(1, 20)}'});
     final res = await client.get(uri, headers: {'User-Agent': 'PlayerNostalgico (app pessoal offline)'}).timeout(const Duration(seconds: 20));
     if (res.statusCode != 200) return const [];
     return parse(jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>);

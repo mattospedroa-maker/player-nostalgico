@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
@@ -33,24 +34,66 @@ class GifFetcher {
 
   bool isFetching(Track t) => _running.contains(t.id);
 
-  /// Buscas, da mais específica para a mais larga:
-  /// palavras extras ("rock lee vs gaara"), "título artista", "artista", "título" e por fim o gênero.
-  static List<String> queriesFor(Track t, {List<String> extras = const []}) {
+  /// Clima do gênero -> categorias de GIF de anime (nekos.best). A primeira regra que bater vale.
+  static const _moods = <(String, List<String>)>[
+    (r'romant|love|amor|bachata|kizomba', ['kiss', 'hug', 'cuddle', 'handhold', 'blush']),
+    (r'\bemo\b|sad|triste|depress|sofr[eê]ncia', ['cry', 'hug', 'pat', 'sleep', 'pout']),
+    (r'indie|alternative|alternativ|pop.?rock|soft rock|britpop|surf', ['run', 'highfive', 'thumbsup', 'wave', 'laugh']),
+    (r'metal|rock|punk|hardcore|industrial|grunge|thrash|core\b|nu.?metal|djent|hard', ['punch', 'kick', 'shoot', 'slap', 'angry', 'yeet']),
+    (r'rap|hip.?hop|trap|drill|grime|phonk', ['shoot', 'smug', 'dance', 'thumbsup', 'yeet']),
+    (r'funk|disco|groove|boogie', ['dance', 'happy', 'clap', 'highfive', 'laugh']),
+    (r'electr|edm|house|techno|trance|dubstep|drum|bass|eurobeat|synth|hyperpop', ['dance', 'happy', 'yeet', 'highfive', 'run']),
+    (r'j-?pop|j-?rock|vocaloid|anime|anisong|city pop|idol', ['happy', 'dance', 'wave', 'wink', 'smile']),
+    (r'k-?pop|pop|teen', ['dance', 'happy', 'wave', 'smile', 'wink']),
+    (r'sertanejo|country|forr[oó]|pagode|samba|ax[eé]|arrocha|piseiro|brega|cumbia|reggaeton|latin|folk', ['dance', 'happy', 'clap', 'highfive', 'laugh', 'handhold']),
+    (r'reggae|ska|dub\b', ['dance', 'happy', 'nod', 'smile', 'thumbsup']),
+    (r'mpb|bossa|jazz|blues|soul|r&b|rnb|motown|swing', ['smile', 'nod', 'cuddle', 'handhold', 'pat']),
+    (r'gospel|worship|religi|cristã|christian', ['smile', 'hug', 'clap', 'happy', 'handhold']),
+    (r'soundtrack|trilha|\bost\b|score|game|epic|[eé]pic', ['run', 'kick', 'punch', 'thumbsup', 'wave']),
+    (r'lo.?fi|chill|ambient|acoustic|ac[uú]stic|classical|cl[aá]ssic|piano|instrumental|new age|orchestr|orquest|ballad|balada', ['sleep', 'yawn', 'cuddle', 'pat', 'smile']),
+    (r'kids|infantil|children', ['happy', 'wave', 'pat', 'hug', 'smile']),
+  ];
+
+  /// Gênero conhecido -> categorias do clima; gênero desconhecido -> mistura neutra; sem gênero -> nada.
+  static List<String> moodCategories(String genre) {
+    final g = genre.toLowerCase().trim();
+    if (g.isEmpty || g == 'desconhecido') return const [];
+    for (final (re, cats) in _moods) {
+      if (RegExp(re).hasMatch(g)) return cats;
+    }
+    return const ['happy', 'wave', 'smile', 'thumbsup', 'dance'];
+  }
+
+  /// As buscas em três grupos, na ordem dos 9 GIFs:
+  /// 2 pelo nome da música, 2 pelo artista, 2 pelo gênero, e o resto intercalando os três.
+  static GifPlan planFor(Track t, {List<String> extras = const []}) {
     final parsed = parseFileName(t.title);
     final title = parsed.title.trim();
     var artist = t.artist.trim();
     if (artist.isEmpty || artist == unknownArtist) artist = parsed.artist ?? '';
     final genre = t.genre.trim();
-    final qs = <String>[
-      ...extras,
-      if (artist.isNotEmpty) '$title $artist',
-      if (artist.isNotEmpty) artist,
-      title,
-      if (genre.isNotEmpty && genre.toLowerCase() != 'desconhecido') genre,
-    ];
-    final seen = <String>{};
-    return qs.map((q) => q.trim()).where((q) => q.length >= 2 && seen.add(q.toLowerCase())).toList();
+    final hasGenre = genre.isNotEmpty && genre.toLowerCase() != 'desconhecido';
+    // "Industrial Metal" -> também "metal concert"
+    final mainGenre = hasGenre ? genre.split(RegExp(r'[\s/,;-]+')).where((w) => w.length > 1).last : '';
+    List<String> uniq(List<String> qs) {
+      final seen = <String>{};
+      return qs.map((q) => q.trim()).where((q) => q.length >= 2 && seen.add(q.toLowerCase())).toList();
+    }
+
+    return GifPlan(
+      title: uniq([...extras, if (artist.isNotEmpty) '$title $artist', title]),
+      artist: uniq([if (artist.isNotEmpty) artist, if (artist.isNotEmpty) '$artist band', if (artist.isNotEmpty) '$artist live']),
+      genre: uniq([if (hasGenre) genre, if (hasGenre) '$mainGenre concert', if (hasGenre) '$mainGenre music']),
+      animeQueries: uniq(extras),
+      moods: hasGenre ? moodCategories(genre) : const [],
+    );
   }
+
+  /// Ordem das vagas: 2 da música, 2 do artista, 2 do gênero, depois anime no clima da música intercalado com o gênero.
+  static const slotOrder = [0, 0, 1, 1, 2, 2, 3, 2, 3];
+
+  /// Vagas guardadas para os GIFs de anime (só baixados música a música, nunca em massa).
+  static const animeSlots = 2;
 
   /// Pastas onde os GIFs da música ficam: `GIFs/Artista/Título/`.
   static (String, String) dirsFor(Track t) {
@@ -86,60 +129,118 @@ class GifFetcher {
       ..writeAsStringSync(jsonEncode(log));
   }
 
+  /// Versão da regra de escolha. Músicas buscadas com uma regra antiga são refeitas.
+  static const planVersion = 2;
+
+  /// Nomes dos arquivos baixados automaticamente (hash do conteúdo).
+  static final _autoName = RegExp(r'^[0-9a-f]{12}\.gif$');
+
   /// Baixa GIFs até a música ter [maxGifsPerTrack] fixados. Retorna quantos baixou.
   /// Sem [force], não repete uma busca recente que não achou nada.
+  /// Com [bulk] (biblioteca toda), não usa fontes que proíbem download em massa.
   Future<int> fetchFor(Track t, {bool force = false, bool bulk = false}) async {
     final root = gifs.gifRoot;
     if (root == null || t.id == null || _running.contains(t.id)) return 0;
-    final pinned = (await gifs.db.pinnedGifs(t.id!)).where((g) => File(g).existsSync()).toList();
-    final need = maxGifsPerTrack - pinned.length;
-    if (need <= 0) return 0;
     final key = t.path;
     final log = _readLog();
-    final last = DateTime.tryParse('${log[key] ?? ''}');
-    if (!force && last != null && DateTime.now().difference(last) < retryAfter) return 0;
+    final entry = log[key];
+    final version = entry is Map ? (entry['v'] as num?)?.toInt() ?? 1 : (entry == null ? planVersion : 1);
+    final last = DateTime.tryParse('${entry is Map ? entry['t'] : entry ?? ''}');
+    final (artistDir, titleDir) = dirsFor(t);
+    final dest = Directory(p.join(root, artistDir, titleDir));
+
+    var pinned = (await gifs.db.pinnedGifs(t.id!)).where((g) => File(g).existsSync()).toList();
+    if (version < planVersion) {
+      // regra antiga: apaga só os GIFs que o app baixou sozinho (os escolhidos à mão ficam)
+      for (final g in pinned.where((g) => _autoName.hasMatch(p.basename(g)) && p.isWithin(root, g))) {
+        await gifs.db.deleteGifEverywhere(g);
+        await File(g).delete().catchError((_) => File(g));
+      }
+      pinned = pinned.where((g) => File(g).existsSync()).toList();
+    }
+    final animeDone = entry is Map && entry['anime'] == true;
+    final plan0 = planFor(t, extras: gifs.extrasFor(t.artist, parseFileName(t.title).title));
+    // em massa, deixa vagas para os GIFs de anime que vêm quando a música tocar
+    final reserve = bulk && plan0.anime && providers.any((pr) => pr.animeOnly) ? animeSlots : 0;
+    final need = maxGifsPerTrack - reserve - pinned.length;
+    if (need <= 0) return 0;
+    final recent = last != null && DateTime.now().difference(last) < retryAfter;
+    final animePending = !bulk && plan0.anime && !animeDone;
+    if (version >= planVersion && !force && recent && !animePending) return 0;
 
     _running.add(t.id!);
     gifs.changed();
     var saved = 0;
     try {
-      final candidates = <GifCandidate>[];
-      final seen = <String>{};
-      for (final q in queriesFor(t, extras: gifs.extrasFor(t.artist, parseFileName(t.title).title))) {
-        for (final prov in providers.where((pr) => !bulk || pr.allowBulk)) {
-          try {
-            for (final c in await prov.search(q, limit: 20)) {
-              if (seen.add(c.url)) candidates.add(c);
+      final plan = plan0;
+      final seenUrls = <String>{};
+      final usable = providers.where((pr) => (!bulk || pr.allowBulk) && (!pr.animeOnly || plan.anime)).toList();
+
+      Future<List<GifCandidate>> collect(List<String> queries, {required bool anime}) async {
+        final out = <GifCandidate>[];
+        for (final q in queries) {
+          for (final prov in usable.where((pr) => pr.animeOnly == anime)) {
+            try {
+              for (final c in await prov.search(q, limit: 15)) {
+                if (seenUrls.add(c.url)) out.add(c);
+              }
+            } catch (_) {
+              // sem internet ou fonte fora do ar: tenta a próxima
             }
-          } catch (_) {
-            // sem internet ou fonte fora do ar: tenta a próxima
           }
+          if (out.length >= 8) break;
         }
-        if (candidates.length >= need * 2) break;
+        return out;
       }
 
-      final (artistDir, titleDir) = dirsFor(t);
-      final dest = Directory(p.join(root, artistDir, titleDir));
+      final rnd = Random(t.path.hashCode);
+      final titleC = await collect(plan.title, anime: false);
+      if (plan.anime) titleC.insertAll(0, await collect(plan.animeQueries, anime: true));
+      final artistC = (await collect(plan.artist, anime: false))..shuffle(rnd); // varia entre as músicas do artista
+      final genreC = (await collect(plan.genre, anime: false))..shuffle(rnd);
+      final animeC = <GifCandidate>[];
+      final nekos = usable.whereType<NekosBestProvider>().firstOrNull;
+      if (nekos != null && plan.moods.isNotEmpty) {
+        final cats = List.of(plan.moods)..shuffle(rnd);
+        for (final cat in cats.take(3)) {
+          try {
+            for (final c in await nekos.random(cat, amount: 2)) {
+              if (seenUrls.add(c.url)) animeC.add(c);
+            }
+          } catch (_) {}
+        }
+        animeC.shuffle(rnd);
+      }
+      final buckets = [titleC, artistC, genreC, animeC];
+
+      // hashes do que a música já tem, para não repetir o mesmo GIF
+      final have = pinned.map((g) => p.basenameWithoutExtension(g)).toSet();
       final credits = <String>[];
-      for (final c in candidates) {
-        if (saved >= need) break;
-        final name = '${sha1.convert(utf8.encode(c.url)).toString().substring(0, 12)}.gif';
-        final target = p.join(dest.path, name);
-        if (pinned.contains(target)) continue;
-        if (!File(target).existsSync()) {
+      var slot = 0;
+      while (saved < need && buckets.any((b) => b.isNotEmpty)) {
+        final want = slotOrder[(pinned.length + slot) % slotOrder.length];
+        slot++;
+        // se o grupo da vez acabou, pega do próximo que tiver
+        final bucket = [for (var k = 0; k < 4; k++) buckets[(want + k) % 4]].firstWhere((b) => b.isNotEmpty);
+        while (bucket.isNotEmpty) {
+          final c = bucket.removeAt(0);
           final bytes = await _download(c.url);
           if (bytes == null) continue;
+          final hash = sha1.convert(bytes).toString().substring(0, 12);
+          if (!have.add(hash)) continue; // mesmo GIF vindo de outro endereço
+          final target = p.join(dest.path, '$hash.gif');
           await dest.create(recursive: true);
-          await File(target).writeAsBytes(bytes, flush: true);
-          credits.add('$name · ${c.credit}');
+          if (!File(target).existsSync()) await File(target).writeAsBytes(bytes, flush: true);
+          credits.add('$hash.gif · ${c.credit}');
+          await gifs.db.pinGif(t.id!, target);
+          saved++;
+          break;
         }
-        await gifs.db.pinGif(t.id!, target);
-        saved++;
       }
       if (credits.isNotEmpty) {
         await File(p.join(dest.path, 'creditos.txt')).writeAsString('${credits.join('\n')}\n', mode: FileMode.append);
       }
-      log[key] = DateTime.now().toIso8601String();
+      log[key] = {'v': planVersion, 't': DateTime.now().toIso8601String(), 'anime': animeDone || !bulk};
       _writeLog(log);
     } finally {
       _running.remove(t.id);
@@ -167,4 +268,11 @@ class GifFetcher {
       return null;
     }
   }
+}
+
+/// Buscas de uma música, separadas por grupo.
+class GifPlan {
+  final List<String> title, artist, genre, animeQueries, moods;
+  const GifPlan({required this.title, required this.artist, required this.genre, required this.animeQueries, required this.moods});
+  bool get anime => animeQueries.isNotEmpty || moods.isNotEmpty;
 }

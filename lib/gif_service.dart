@@ -106,7 +106,9 @@ class GifService extends ChangeNotifier {
     final rnd = Random(t.path.hashCode);
     matching.shuffle(rnd);
     general.shuffle(rnd);
-    return [...pinned, ...matching, ...general].take(max).toList();
+    // não mostra o mesmo GIF duas vezes (arquivos baixados têm o nome = hash do conteúdo)
+    final seen = <String>{};
+    return [...pinned, ...matching, ...general].where((g) => seen.add(p.basename(g))).take(max).toList();
   }
 
   /// Copia GIFs escolhidos pelo usuário para `GIFs/Artista/` e fixa na música.

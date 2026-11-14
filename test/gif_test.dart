@@ -50,10 +50,19 @@ void main() {
     expect(NekosBestProvider(MockClient((_) async => http.Response('{}', 200))).allowBulk, isFalse);
   });
 
-  test('buscas: palavras extras, título+artista, artista, título, gênero', () {
-    final t = Track(path: '/m/x.mp3', title: '01 - Numb', artist: 'Linkin Park', album: 'Meteora', genre: 'Rock', addedAt: 0, modifiedAt: 0);
-    expect(GifFetcher.queriesFor(t, extras: ['rock lee vs gaara']),
-        ['rock lee vs gaara', 'Numb Linkin Park', 'Linkin Park', 'Numb', 'Rock']);
+  test('plano: 2 da música, 2 do artista, 2 do gênero e anime no clima do gênero', () {
+    final t = Track(path: '/m/x.mp3', title: '01 - Numb', artist: 'Linkin Park', album: 'Meteora', genre: 'Nu Metal', addedAt: 0, modifiedAt: 0);
+    final plan = GifFetcher.planFor(t, extras: ['naruto']);
+    expect(plan.title, ['naruto', 'Numb Linkin Park', 'Numb']);
+    expect(plan.artist.first, 'Linkin Park');
+    expect(plan.genre, ['Nu Metal', 'Metal concert', 'Metal music']);
+    expect(plan.moods, contains('punch'));
+    expect(GifFetcher.slotOrder.take(6), [0, 0, 1, 1, 2, 2]);
+    expect(GifFetcher.moodCategories('Sertanejo'), contains('dance'));
+    expect(GifFetcher.moodCategories('Lo-Fi'), contains('sleep'));
+    expect(GifFetcher.moodCategories('Alternative Rock'), contains('run'));
+    expect(GifFetcher.moodCategories('Polka'), isNotEmpty);
+    expect(GifFetcher.moodCategories(''), isEmpty);
   });
 
   group('GifFetcher', () {
@@ -82,12 +91,18 @@ void main() {
         if (req.url.host == 'api.openverse.org') {
           queries.add(req.url.queryParameters['q']!);
           return http.Response(jsonEncode({
-            'results': [for (var i = 0; i < 15; i++) {'url': 'https://img.test/${req.url.queryParameters['q']}$i.gif'}]
+            'results': [
+              for (var i = 0; i < 4; i++) {'url': 'https://img.test/dup$i.gif'},
+              for (var i = 0; i < 15; i++) {'url': 'https://img.test/${req.url.queryParameters['q']}$i.gif'},
+            ]
           }), 200);
         }
         if (req.url.host == 'img.test') {
           // um deles não é GIF de verdade
-          return req.url.path.contains('3') ? http.Response('<html>', 200) : http.Response.bytes(gifBytes, 200);
+          if (req.url.path.contains('3')) return http.Response('<html>', 200);
+          // "...dup..." = mesmo GIF em outro endereço
+          final id = req.url.path.replaceAll(RegExp(r'dup\d+'), 'dup');
+          return http.Response.bytes([...gifBytes, ...utf8.encode(id)], 200);
         }
         return http.Response('{}', 200);
       });
@@ -100,6 +115,9 @@ void main() {
       expect(pinned.every((g) => p.isWithin(p.join(root.path, 'GIFs', 'Rammstein', 'Sonne'), g)), isTrue);
       expect(File(p.join(root.path, 'GIFs', 'Rammstein', 'Sonne', 'creditos.txt')).existsSync(), isTrue);
       expect((await gifs.gifsFor(t)).length, 9);
+      // o GIF repetido em 4 endereços entra uma vez só
+      final names = pinned.map(p.basename).toSet();
+      expect(names.length, 9);
       // já tem 9: não baixa mais
       expect(await f.fetchFor(t, force: true), 0);
     });
