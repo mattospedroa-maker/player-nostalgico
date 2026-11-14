@@ -166,6 +166,10 @@ class AppDb {
   Future<void> pinGif(int trackId, String gifPath) =>
       db.insert('track_gifs', {'track_id': trackId, 'gif_path': gifPath}, conflictAlgorithm: ConflictAlgorithm.ignore);
 
+  /// Quantas músicas usam este GIF.
+  Future<int> gifUsers(String gifPath) async =>
+      (await db.query('track_gifs', where: 'gif_path = ?', whereArgs: [gifPath])).length;
+
   Future<void> deleteGifEverywhere(String gifPath) => db.delete('track_gifs', where: 'gif_path = ?', whereArgs: [gifPath]);
 
   Future<void> unpinGif(int trackId, String gifPath) =>

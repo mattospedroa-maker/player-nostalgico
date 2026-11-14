@@ -122,6 +122,35 @@ void main() {
       expect(await f.fetchFor(t, force: true), 0);
     });
 
+    test('duas músicas com o mesmo GIF usam o mesmo arquivo, baixado uma vez', () async {
+      await db.upsertTrack(Track(path: p.join(root.path, 'A.mp3'), title: 'Sonne', artist: 'Rammstein', album: 'Mutter', addedAt: 0, modifiedAt: 0));
+      await db.upsertTrack(Track(path: p.join(root.path, 'B.mp3'), title: 'Sonne Live', artist: 'Rammstein', album: 'Live', addedAt: 0, modifiedAt: 0));
+      final all = await db.allTracks();
+      var downloads = 0;
+      final client = MockClient((req) async {
+        if (req.url.host == 'api.openverse.org') {
+          return http.Response(jsonEncode({'results': [for (var i = 0; i < 9; i++) {'url': 'https://img.test/g$i.gif'}]}), 200);
+        }
+        if (req.url.host == 'img.test') {
+          downloads++;
+          return http.Response.bytes([...gifBytes, ...utf8.encode(req.url.path)], 200);
+        }
+        return http.Response('{}', 200);
+      });
+      final f = GifFetcher(gifs, client: client);
+      expect(await f.fetchFor(all[0]), 9);
+      expect(downloads, 9);
+      expect(await f.fetchFor(all[1]), 9);
+      expect(downloads, 9); // nada baixado de novo
+      expect((await db.pinnedGifs(all[1].id!)).toSet(), (await db.pinnedGifs(all[0].id!)).toSet());
+      final files = Directory(p.join(root.path, 'GIFs')).listSync(recursive: true).whereType<File>().where((f) => f.path.endsWith('.gif'));
+      expect(files.length, 9);
+      // tirar de uma música não apaga o arquivo da outra
+      final g = (await db.pinnedGifs(all[1].id!)).first;
+      await gifs.deleteGif(g, trackId: all[1].id);
+      expect(File(g).existsSync(), isTrue);
+    });
+
     test('sem internet não quebra e não repete a busca logo em seguida', () async {
       final t = await addTrack();
       var calls = 0;

@@ -86,6 +86,17 @@ class GifService extends ChangeNotifier {
 
   int get count => _cache.length;
 
+  /// Procura um GIF já guardado pelo nome do arquivo (os baixados têm nome = hash do conteúdo).
+  String? findByName(String name) {
+    for (final f in _cache) {
+      if (p.basename(f.path) == name && f.existsSync()) return f.path;
+    }
+    return null;
+  }
+
+  /// Registra um arquivo novo sem reler a pasta inteira.
+  void addToCache(String path) => _cache = [..._cache, File(path)];
+
   /// GIFs para a música: fixados primeiro, depois os que batem com artista/álbum/título/gênero, depois gerais.
   Future<List<String>> gifsFor(Track t, {int max = 9}) async {
     final pinned = t.id == null ? <String>[] : (await db.pinnedGifs(t.id!)).where((g) => File(g).existsSync()).toList();
@@ -151,8 +162,12 @@ class GifService extends ChangeNotifier {
     return target;
   }
 
-  /// Apaga o arquivo do GIF do celular (libera espaço).
-  Future<void> deleteGif(String path) async {
+  /// Tira o GIF da música; o arquivo só é apagado do celular se nenhuma outra música usa.
+  Future<void> deleteGif(String path, {int? trackId}) async {
+    if (trackId != null) {
+      await db.unpinGif(trackId, path);
+      if (await db.gifUsers(path) > 0) return refresh();
+    }
     await db.deleteGifEverywhere(path);
     final f = File(path);
     if (f.existsSync()) await f.delete();

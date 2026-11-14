@@ -121,6 +121,26 @@ class GifFetcher {
     }
   }
 
+  /// Endereço -> arquivo já baixado (GIFs/.indice.json), para não baixar o mesmo GIF duas vezes.
+  Map<String, dynamic> _readIndex() {
+    final root = gifs.gifRoot;
+    final f = root == null ? null : File(p.join(root, '.indice.json'));
+    if (f == null || !f.existsSync()) return {};
+    try {
+      return jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
+    } catch (_) {
+      return {};
+    }
+  }
+
+  void _writeIndex(Map<String, dynamic> index) {
+    final root = gifs.gifRoot;
+    if (root == null) return;
+    File(p.join(root, '.indice.json'))
+      ..parent.createSync(recursive: true)
+      ..writeAsStringSync(jsonEncode(index));
+  }
+
   void _writeLog(Map<String, dynamic> log) {
     final path = _logPath();
     if (path == null) return;
@@ -153,8 +173,9 @@ class GifFetcher {
     if (version < planVersion) {
       // regra antiga: apaga só os GIFs que o app baixou sozinho (os escolhidos à mão ficam)
       for (final g in pinned.where((g) => _autoName.hasMatch(p.basename(g)) && p.isWithin(root, g))) {
-        await gifs.db.deleteGifEverywhere(g);
-        await File(g).delete().catchError((_) => File(g));
+        await gifs.db.unpinGif(t.id!, g);
+        // o arquivo só sai do celular se nenhuma outra música usa
+        if (await gifs.db.gifUsers(g) == 0) await File(g).delete().catchError((_) => File(g));
       }
       pinned = pinned.where((g) => File(g).existsSync()).toList();
     }
@@ -215,6 +236,7 @@ class GifFetcher {
 
       // hashes do que a música já tem, para não repetir o mesmo GIF
       final have = pinned.map((g) => p.basenameWithoutExtension(g)).toSet();
+      final index = _readIndex();
       final credits = <String>[];
       var slot = 0;
       while (saved < need && buckets.any((b) => b.isNotEmpty)) {
@@ -224,14 +246,28 @@ class GifFetcher {
         final bucket = [for (var k = 0; k < 4; k++) buckets[(want + k) % 4]].firstWhere((b) => b.isNotEmpty);
         while (bucket.isNotEmpty) {
           final c = bucket.removeAt(0);
+          // 1) mesmo endereço já baixado para outra música: usa o mesmo arquivo, sem baixar
+          final known = index[c.url] as String?;
+          if (known != null && File(known).existsSync()) {
+            if (!have.add(p.basenameWithoutExtension(known))) continue;
+            await gifs.db.pinGif(t.id!, known);
+            saved++;
+            break;
+          }
           final bytes = await _download(c.url);
           if (bytes == null) continue;
           final hash = sha1.convert(bytes).toString().substring(0, 12);
           if (!have.add(hash)) continue; // mesmo GIF vindo de outro endereço
-          final target = p.join(dest.path, '$hash.gif');
-          await dest.create(recursive: true);
-          if (!File(target).existsSync()) await File(target).writeAsBytes(bytes, flush: true);
-          credits.add('$hash.gif · ${c.credit}');
+          // 2) mesmo conteúdo já guardado (por outra música): aponta para ele, não grava de novo
+          var target = gifs.findByName('$hash.gif');
+          if (target == null) {
+            target = p.join(dest.path, '$hash.gif');
+            await dest.create(recursive: true);
+            await File(target).writeAsBytes(bytes, flush: true);
+            gifs.addToCache(target);
+            credits.add('$hash.gif · ${c.credit}');
+          }
+          index[c.url] = target;
           await gifs.db.pinGif(t.id!, target);
           saved++;
           break;
@@ -240,6 +276,7 @@ class GifFetcher {
       if (credits.isNotEmpty) {
         await File(p.join(dest.path, 'creditos.txt')).writeAsString('${credits.join('\n')}\n', mode: FileMode.append);
       }
+      _writeIndex(index);
       log[key] = {'v': planVersion, 't': DateTime.now().toIso8601String(), 'anime': animeDone || !bulk};
       _writeLog(log);
     } finally {

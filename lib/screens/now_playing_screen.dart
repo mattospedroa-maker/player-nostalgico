@@ -399,7 +399,7 @@ Future<void> showGifManager(BuildContext context, Track t) async {
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   child: Text(
                       'Fixados: ${pinned.length} de $maxGifsPerTrack. Os GIFs ficam na pasta GIFs e funcionam sem internet. '
-                      'Alfinete fixa ou solta; lixeira apaga do celular.',
+                      'Alfinete fixa ou solta; lixeira tira da música (o arquivo só é apagado se nenhuma outra música usa).',
                       style: const TextStyle(fontSize: 12, color: Xp.blueText)),
                 ),
                 Expanded(
@@ -438,7 +438,7 @@ Future<void> showGifManager(BuildContext context, Track t) async {
                           top: 2,
                           child: GestureDetector(
                             onTap: () async {
-                              await app.gifs.deleteGif(gifs[i]);
+                              await app.gifs.deleteGif(gifs[i], trackId: t.id);
                               setSt(() {});
                             },
                             child: Container(
