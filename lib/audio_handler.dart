@@ -7,6 +7,9 @@ import 'dart:convert';
 import 'package:just_audio/just_audio.dart';
 import 'package:path/path.dart' as p;
 
+/// Erro ao ligar a notificação de mídia (aparece no Tocando agora, para dar para corrigir).
+String? audioInitError;
+
 /// Liga o player à notificação e à tela de bloqueio do Android:
 /// botões ♥ ⏮ ⏯ ⏭ e a arte com o GIF que está passando.
 class PlayerAudioHandler extends BaseAudioHandler with SeekHandler {

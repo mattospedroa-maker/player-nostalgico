@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
 
 import '../app_state.dart';
 import '../gif_fetcher.dart';
@@ -71,6 +72,13 @@ class _GifWebScreenState extends State<GifWebScreen> {
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..addJavaScriptChannel('PN', onMessageReceived: (m) => _save(m.message))
       ..setNavigationDelegate(NavigationDelegate(onPageFinished: (_) => _inject()));
+    // Android: aceita os cookies de login (Pinterest usa domínio de contas separado), para o login ficar salvo
+    final platform = _web.platform;
+    if (platform is AndroidWebViewController) {
+      AndroidWebViewCookieManager(const PlatformWebViewCookieManagerCreationParams())
+          .setAcceptThirdPartyCookies(platform, true)
+          .catchError((_) {});
+    }
     _open();
   }
 

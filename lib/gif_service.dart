@@ -104,7 +104,7 @@ class GifService extends ChangeNotifier {
     final matching = <String>[];
     final general = <String>[];
     for (final f in _cache) {
-      if (pinned.contains(f.path)) continue;
+      if (pinned.contains(f.path) || !f.existsSync()) continue;
       final tags = p.split(p.relative(p.dirname(f.path), from: gifRoot!)).where((s) => s != '.').map(_norm).toList()
         ..add(_norm(p.basenameWithoutExtension(f.path)));
       final hit = tags.any((tag) => tag.length >= 2 && keys.any((k) => k.contains(tag) || tag.contains(k)));

@@ -31,8 +31,9 @@ Future<void> main() async {
         androidStopForegroundOnPause: true,
       ),
     );
-  } catch (_) {
-    // desktop/testes: sem notificação
+  } catch (e) {
+    // desktop/testes: sem notificação. No Android, mostra o erro para dar para corrigir.
+    if (Platform.isAndroid) audioInitError = '$e';
   }
   final app = await AppState.create(handler: handler);
   runApp(

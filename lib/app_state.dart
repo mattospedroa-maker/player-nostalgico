@@ -65,6 +65,8 @@ class AppState extends ChangeNotifier {
       if (t != null) await s.toggleFavorite(t);
     };
     await s.reload();
+    // Android 13+: a notificação com os controles precisa desta permissão
+    if (Platform.isAndroid) unawaited(Permission.notification.request().catchError((_) => PermissionStatus.denied));
     return s;
   }
 

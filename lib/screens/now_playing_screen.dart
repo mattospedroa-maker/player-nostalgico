@@ -8,6 +8,7 @@ import 'package:just_audio/just_audio.dart';
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
+import '../audio_handler.dart';
 import '../filename_parser.dart';
 import '../gif_fetcher.dart';
 import '../gif_service.dart';
@@ -38,8 +39,10 @@ class NowPlayingScreen extends StatelessWidget {
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text(t.title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Xp.navy)),
                     Text(t.artist, style: const TextStyle(fontSize: 14, color: Xp.blueText)),
-                    Text([t.album, if (t.year != null) '${t.year}'].join(' · '),
+                    Text([t.album, if ((t.year ?? 0) > 0) '${t.year}'].join(' · '),
                         style: const TextStyle(fontSize: 12, color: Xp.blueMuted)),
+                    if (audioInitError != null)
+                      Text('Notificação desligada: $audioInitError', style: const TextStyle(fontSize: 11, color: Xp.red)),
                   ]),
                 ),
                 SeekBar(player: ps.player),
@@ -286,7 +289,7 @@ class _GifCarouselState extends State<GifCarousel> {
                   child: Container(
                     width: on ? 62 : 54,
                     decoration: BoxDecoration(border: Border.all(color: on ? Xp.navy : const Color(0xFF7A96C9), width: on ? 2 : 1)),
-                    child: Image.file(File(_gifs[k]), fit: BoxFit.cover, cacheWidth: 120),
+                    child: Image.file(File(_gifs[k]), fit: BoxFit.cover, cacheWidth: 120, errorBuilder: (_, _, _) => const ColoredBox(color: Colors.black26)),
                   ),
                 ),
               );
