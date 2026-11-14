@@ -26,10 +26,10 @@ class _Site {
 }
 
 final _sites = [
+  _Site('Pinterest', (q) => Uri.https('www.pinterest.com', '/search/pins/', {'q': q})),
   _Site('Google', (q) => Uri.https('www.google.com', '/search', {'tbm': 'isch', 'tbs': 'itp:animated', 'q': q})),
   _Site('Tenor', (q) => Uri.parse('https://tenor.com/search/${Uri.encodeComponent(q.replaceAll(' ', '-'))}-gifs')),
   _Site('GIPHY', (q) => Uri.parse('https://giphy.com/search/${Uri.encodeComponent(q.replaceAll(' ', '-'))}')),
-  _Site('Pinterest', (q) => Uri.https('www.pinterest.com', '/search/pins/', {'q': q})),
 ];
 
 /// Em modo salvar, intercepta o toque e manda para o app o endereço da imagem tocada.
