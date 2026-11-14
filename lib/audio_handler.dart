@@ -87,13 +87,21 @@ class PlayerAudioHandler extends BaseAudioHandler with SeekHandler {
     broadcast();
   }
 
+  /// Arte atual de cada música (caminho da música -> PNG), para não se perder quando o item é publicado de novo.
+  final Map<String, Uri> art = {};
+
   /// Arte da notificação. O Android não anima GIF, então usa o primeiro quadro (como PNG).
-  Future<void> setArtwork(String? gifPath, {required String cacheDir}) async {
-    final item = mediaItem.value;
-    if (item == null) return;
+  Future<void> setArtwork(String trackPath, String? gifPath, {required String cacheDir}) async {
     final png = gifPath == null ? null : await gifFrame(gifPath, cacheDir);
-    if (mediaItem.value?.id != item.id) return; // a música mudou enquanto convertia
-    mediaItem.add(item.copyWith(artUri: png == null ? null : Uri.file(png)));
+    if (png == null) {
+      art.remove(trackPath);
+    } else {
+      art[trackPath] = Uri.file(png);
+    }
+    final item = mediaItem.value;
+    if (item == null || item.id != trackPath) return; // a música mudou enquanto convertia
+    if (item.artUri == art[trackPath]) return;
+    mediaItem.add(item.copyWith(artUri: art[trackPath]));
   }
 }
 

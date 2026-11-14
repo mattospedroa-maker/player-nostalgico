@@ -88,7 +88,9 @@ class PlayerService extends ChangeNotifier {
       album: t.album == unknownAlbum ? null : t.album,
       genre: t.genre.isEmpty ? null : t.genre,
       duration: t.durationMs > 0 ? Duration(milliseconds: t.durationMs) : null,
+      artUri: h.art[t.path],
     ));
+    h.broadcast();
   }
 
   Future<void> togglePlay() => player.playing ? player.pause() : player.play();

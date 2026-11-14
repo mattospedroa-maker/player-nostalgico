@@ -264,7 +264,7 @@ class AppState extends ChangeNotifier {
   /// O carrossel avisa qual GIF está passando; ele vira a arte da notificação e da tela de bloqueio.
   Future<void> nowShowingGif(Track t, String? gif) async {
     if (player.current?.id != t.id) return;
-    await player.handler?.setArtwork(gif, cacheDir: dataDir);
+    await player.handler?.setArtwork(t.path, gif, cacheDir: dataDir);
   }
 
   /// Baixa GIFs para todas as músicas que ainda não têm 9.
