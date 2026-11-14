@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -38,6 +39,7 @@ class AppState extends ChangeNotifier {
   /// Download em massa ("Baixar GIFs para todas"): progresso feito/total, null = parado.
   (int, int)? bulkGifProgress;
   bool _cancelBulk = false;
+  final List<Track> _pending = [];
 
   List<Track> tracks = const [];
   List<Playlist> playlists = const [];
@@ -90,6 +92,7 @@ class AppState extends ChangeNotifier {
     if (root == null || scanning) return;
     scanning = true;
     scanProgress = 0;
+    final before = {for (final t in tracks) t.id};
     notifyListeners();
     try {
       await LibraryScanner(db, metadata).scan(root, onProgress: (d, t) {
@@ -100,6 +103,9 @@ class AppState extends ChangeNotifier {
       scanning = false;
       await reload();
     }
+    // músicas novas na biblioteca: busca GIFs sozinho, em segundo plano
+    final added = tracks.where((t) => !before.contains(t.id)).toList();
+    if (added.isNotEmpty && autoGifs) unawaited(fetchGifsForAll(only: added));
   }
 
   Organizer organizer({bool cleanNames = true}) =>
@@ -131,9 +137,13 @@ class AppState extends ChangeNotifier {
   }
 
   /// Baixa GIFs para todas as músicas que ainda não têm 9.
-  Future<int> fetchGifsForAll() async {
-    if (bulkGifProgress != null) return 0;
-    final list = List.of(tracks);
+  /// Com [only], baixa só para essas (ex.: músicas que acabaram de entrar na biblioteca).
+  Future<int> fetchGifsForAll({List<Track>? only}) async {
+    if (bulkGifProgress != null) {
+      if (only != null) _pending.addAll(only);
+      return 0;
+    }
+    final list = List.of(only ?? tracks);
     var total = 0;
     _cancelBulk = false;
     bulkGifProgress = (0, list.length);
@@ -148,6 +158,11 @@ class AppState extends ChangeNotifier {
     } finally {
       bulkGifProgress = null;
       notifyListeners();
+    }
+    if (_pending.isNotEmpty && !_cancelBulk) {
+      final next = List.of(_pending);
+      _pending.clear();
+      total += await fetchGifsForAll(only: next);
     }
     return total;
   }
