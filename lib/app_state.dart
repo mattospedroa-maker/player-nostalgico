@@ -1,12 +1,14 @@
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'db.dart';
+import 'gif_fetcher.dart';
 import 'gif_service.dart';
 import 'library_scanner.dart';
 import 'metadata.dart';
@@ -23,6 +25,19 @@ class AppState extends ChangeNotifier {
   final GifService gifs;
   final MetadataReader metadata = const FileMetadataReader();
   final String dataDir;
+  late final GifFetcher gifFetcher = GifFetcher(gifs, client: http.Client());
+  int? _lastAutoFetchId;
+
+  /// Baixar GIFs sozinho quando uma música começa a tocar.
+  bool get autoGifs => prefs.getBool('autoGifs') ?? true;
+  Future<void> setAutoGifs(bool v) async {
+    await prefs.setBool('autoGifs', v);
+    notifyListeners();
+  }
+
+  /// Download em massa ("Baixar GIFs para todas"): progresso feito/total, null = parado.
+  (int, int)? bulkGifProgress;
+  bool _cancelBulk = false;
 
   List<Track> tracks = const [];
   List<Playlist> playlists = const [];
@@ -37,6 +52,7 @@ class AppState extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     final s = AppState._(db, prefs, PlayerService(db), GifService(db), dir.path);
     s.gifs.sourceRoot = s.sourceRoot;
+    s.player.addListener(s._onPlayerChanged);
     await s.reload();
     return s;
   }
@@ -86,7 +102,8 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  Organizer organizer() => Organizer(sourceRoot: sourceRoot!, mb: MusicBrainzClient(), metadata: metadata);
+  Organizer organizer({bool cleanNames = true}) =>
+      Organizer(sourceRoot: sourceRoot!, mb: MusicBrainzClient(), metadata: metadata, cleanNames: cleanNames);
 
   /// Depois de mover arquivos, atualiza o banco sem perder favoritas/playlists/histórico.
   Future<void> applyMoves(List<MoveRecord> moves, {bool undo = false}) async {
@@ -94,7 +111,7 @@ class AppState extends ChangeNotifier {
       if (undo) {
         await db.moveTrack(m.to, m.from);
       } else {
-        await db.moveTrack(m.from, m.to, artist: m.artist, album: m.album);
+        await db.moveTrack(m.from, m.to, artist: m.artist, album: m.album, title: m.title.isEmpty ? null : m.title);
       }
     }
     await rescan();
@@ -104,6 +121,38 @@ class AppState extends ChangeNotifier {
       if (u != null && u.path != q.path) player.replaceTrack(u);
     }
   }
+
+  void _onPlayerChanged() {
+    final t = player.current;
+    if (t == null || t.id == _lastAutoFetchId || !autoGifs) return;
+    _lastAutoFetchId = t.id;
+    final fresh = byId(t.id) ?? t;
+    gifFetcher.fetchFor(fresh).catchError((_) => 0);
+  }
+
+  /// Baixa GIFs para todas as músicas que ainda não têm 9.
+  Future<int> fetchGifsForAll() async {
+    if (bulkGifProgress != null) return 0;
+    final list = List.of(tracks);
+    var total = 0;
+    _cancelBulk = false;
+    bulkGifProgress = (0, list.length);
+    notifyListeners();
+    try {
+      for (var i = 0; i < list.length; i++) {
+        if (_cancelBulk) break;
+        total += await gifFetcher.fetchFor(list[i]).catchError((_) => 0);
+        bulkGifProgress = (i + 1, list.length);
+        notifyListeners();
+      }
+    } finally {
+      bulkGifProgress = null;
+      notifyListeners();
+    }
+    return total;
+  }
+
+  void cancelBulkGifs() => _cancelBulk = true;
 
   Future<void> toggleFavorite(Track t) async {
     await db.setFavorite(t.id!, !t.favorite);

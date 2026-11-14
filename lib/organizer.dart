@@ -127,6 +127,12 @@ class MusicBrainzClient {
   }
 }
 
+String _usableArtist(String a) {
+  final t = a.trim();
+  if (t.isEmpty) return '';
+  return parseFileName('$t - x').artist ?? '';
+}
+
 String _norm(String s) => s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9À-ɏ぀-ヿ一-鿿]+'), '');
 
 /// Remove caracteres proibidos em nomes de pasta (Android/Windows).
@@ -138,9 +144,13 @@ String safeFolderName(String s) {
   return out;
 }
 
-/// Caminho final: Fonte/Artista/Álbum/arquivo.ext
-String targetPathFor(String sourceRoot, String filePath, String artist, String album) =>
-    p.join(sourceRoot, safeFolderName(artist), safeFolderName(album), p.basename(filePath));
+/// Caminho final: Fonte/Artista/Álbum/arquivo.ext (ou Título.ext, se [title] vier preenchido).
+String targetPathFor(String sourceRoot, String filePath, String artist, String album, {String? title}) => p.join(
+      sourceRoot,
+      safeFolderName(artist),
+      safeFolderName(album),
+      title == null || title.trim().isEmpty ? p.basename(filePath) : '${safeFolderName(title)}${p.extension(filePath).toLowerCase()}',
+    );
 
 /// Monta o plano e executa a organização da pasta-fonte.
 class Organizer {
@@ -149,7 +159,10 @@ class Organizer {
   final MetadataReader metadata;
   final bool useOnline;
 
-  Organizer({required this.sourceRoot, required this.mb, required this.metadata, this.useOnline = true});
+  /// Renomeia o arquivo para "Título.ext", tirando "00 - 002 - " e outros restos.
+  final bool cleanNames;
+
+  Organizer({required this.sourceRoot, required this.mb, required this.metadata, this.useOnline = true, this.cleanNames = true});
 
   /// Lista as músicas que ainda não estão em Artista/Álbum.
   List<File> filesToCheck() {
@@ -167,31 +180,40 @@ class Organizer {
   bool _isInsideGifFolder(String path) =>
       p.split(p.relative(path, from: sourceRoot)).first.toLowerCase() == 'gifs';
 
-  /// Já está em Fonte/Artista/Álbum/arquivo?
-  bool isOrganized(String path, String artist, String album) =>
-      p.equals(p.dirname(path), p.dirname(targetPathFor(sourceRoot, path, artist, album)));
+  String _target(String path, SongInfo info) =>
+      targetPathFor(sourceRoot, path, info.artist, info.album, title: cleanNames ? info.title : null);
+
+  /// Já está em Fonte/Artista/Álbum/arquivo (com o nome certo)?
+  bool isOrganized(String path, SongInfo info) => p.equals(path, _target(path, info));
 
   Future<SongInfo?> identify(String path) async {
     final tags = await metadata.read(path);
     final parsed = parseFileName(p.basenameWithoutExtension(path));
-    final title = (tags?.title.isNotEmpty ?? false) ? tags!.title : parsed.title;
-    final tagArtist = tags?.artist ?? '';
+    final rawTagTitle = tags?.title ?? '';
+    final parsedTag = rawTagTitle.isEmpty ? null : parseFileName(rawTagTitle);
+    final title = parsedTag?.title ?? parsed.title;
+    final tagArtist = _usableArtist(tags?.artist ?? '');
     final tagAlbum = tags?.album ?? '';
+    final tagsAreClean = rawTagTitle.isNotEmpty && parsedTag!.title == rawTagTitle.trim();
 
-    // 1. As tags do arquivo já dizem tudo: não precisa de internet.
-    if (tagArtist.isNotEmpty && tagAlbum.isNotEmpty) {
+    // 1. Tags completas e limpas: não precisa de internet.
+    if (tagArtist.isNotEmpty && tagAlbum.isNotEmpty && tagsAreClean) {
       return SongInfo(title: title, artist: tagArtist, album: tagAlbum, score: 100, source: 'tags');
     }
-    final artistHint = tagArtist.isNotEmpty ? tagArtist : parsed.artist;
+    final artistHint = tagArtist.isNotEmpty ? tagArtist : (parsedTag?.artist ?? parsed.artist);
 
-    // 2. Pesquisa o título (e o artista, se souber) no MusicBrainz.
+    // 2. Pesquisa o título limpo (e o artista, se souber) no MusicBrainz.
     if (useOnline && title.isNotEmpty) {
       final found = await mb.lookup(title, artist: artistHint);
       if (found != null) return found;
       if (artistHint != null) {
+        // a pista de artista pode estar errada (ex.: nome da cantora virtual em vez do produtor)
         final retry = await mb.lookup(title);
-        if (retry != null && _norm(retry.artist).contains(_norm(artistHint))) return retry;
+        if (retry != null && (_norm(retry.artist).contains(_norm(artistHint)) || retry.score >= 90)) return retry;
       }
+    }
+    if (tagArtist.isNotEmpty && tagAlbum.isNotEmpty) {
+      return SongInfo(title: title, artist: tagArtist, album: tagAlbum, score: 90, source: 'tags');
     }
     // 3. Sem resposta online, mas o nome do arquivo trazia o artista.
     if (artistHint != null && artistHint.isNotEmpty) {
@@ -214,11 +236,11 @@ class Organizer {
           plan.add(PlanItem(sourcePath: f.path, status: PlanStatus.notFound, message: 'Não encontrei artista/álbum'));
           continue;
         }
-        if (isOrganized(f.path, info.artist, info.album)) {
+        if (isOrganized(f.path, info)) {
           plan.add(PlanItem(sourcePath: f.path, info: info, status: PlanStatus.alreadyOrganized));
           continue;
         }
-        var target = targetPathFor(sourceRoot, f.path, info.artist, info.album);
+        var target = _target(f.path, info);
         target = _uniqueTarget(target, targets);
         targets.add(target);
         plan.add(PlanItem(sourcePath: f.path, targetPath: target, info: info, status: PlanStatus.move));
@@ -248,7 +270,7 @@ class Organizer {
       if (!src.existsSync()) continue;
       await Directory(p.dirname(item.targetPath!)).create(recursive: true);
       await _move(src, item.targetPath!);
-      done.add(MoveRecord(from: item.sourcePath, to: item.targetPath!, artist: item.info!.artist, album: item.info!.album));
+      done.add(MoveRecord(from: item.sourcePath, to: item.targetPath!, artist: item.info!.artist, album: item.info!.album, title: item.info!.title));
     }
     await File(undoLogPath).writeAsString(jsonEncode(done.map((m) => m.toJson()).toList()));
     _removeEmptyDirs(Directory(sourceRoot));
@@ -299,8 +321,13 @@ class MoveRecord {
   final String to;
   final String artist;
   final String album;
-  const MoveRecord({required this.from, required this.to, required this.artist, required this.album});
-  Map<String, String> toJson() => {'from': from, 'to': to, 'artist': artist, 'album': album};
-  static MoveRecord fromJson(Map<String, dynamic> j) =>
-      MoveRecord(from: j['from'] as String, to: j['to'] as String, artist: j['artist'] as String, album: j['album'] as String);
+  final String title;
+  const MoveRecord({required this.from, required this.to, required this.artist, required this.album, this.title = ''});
+  Map<String, String> toJson() => {'from': from, 'to': to, 'artist': artist, 'album': album, 'title': title};
+  static MoveRecord fromJson(Map<String, dynamic> j) => MoveRecord(
+      from: j['from'] as String,
+      to: j['to'] as String,
+      artist: j['artist'] as String,
+      album: j['album'] as String,
+      title: (j['title'] as String?) ?? '');
 }

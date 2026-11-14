@@ -8,10 +8,14 @@ import 'package:just_audio/just_audio.dart';
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
+import '../filename_parser.dart';
+import '../gif_fetcher.dart';
+import '../gif_service.dart';
 import '../models.dart';
 import '../player_service.dart';
 import '../theme.dart';
 import '../widgets.dart';
+import 'gif_web_screen.dart';
 
 class NowPlayingScreen extends StatelessWidget {
   const NowPlayingScreen({super.key});
@@ -141,15 +145,29 @@ class _GifCarouselState extends State<GifCarousel> {
   int _i = 0;
   Timer? _timer;
   DateTime _shownAt = DateTime.now();
+  late final GifService _gifService;
 
   @override
   void initState() {
     super.initState();
+    _gifService = context.read<AppState>().gifs;
+    _gifService.addListener(_onGifsChanged);
     _load();
+  }
+
+  int _lastCount = -1;
+  void _onGifsChanged() {
+    // recarrega quando chegam GIFs novos (download em segundo plano)
+    if (_gifService.count != _lastCount) {
+      _load();
+    } else if (mounted) {
+      setState(() {});
+    }
   }
 
   Future<void> _load() async {
     final app = context.read<AppState>();
+    _lastCount = app.gifs.count;
     final gifs = await app.gifs.gifsFor(widget.track);
     Uint8List? cover;
     if (gifs.isEmpty) cover = await app.metadata.cover(widget.track.path);
@@ -180,6 +198,7 @@ class _GifCarouselState extends State<GifCarousel> {
 
   @override
   void dispose() {
+    _gifService.removeListener(_onGifsChanged);
     _timer?.cancel();
     super.dispose();
   }
@@ -188,9 +207,13 @@ class _GifCarouselState extends State<GifCarousel> {
   Widget build(BuildContext context) {
     final elapsed = DateTime.now().difference(_shownAt).inMilliseconds / interval.inMilliseconds;
     final remaining = (interval.inSeconds - DateTime.now().difference(_shownAt).inSeconds).clamp(0, interval.inSeconds);
+    final app = context.read<AppState>();
+    final fetching = app.gifFetcher.isFetching(widget.track);
     return Column(children: [
       GestureDetector(
-        onTap: _gifs.length > 1 ? () => _go(_i + 1) : null,
+        onTap: _gifs.length > 1
+            ? () => _go(_i + 1)
+            : (_gifs.isEmpty && !fetching ? () => app.gifFetcher.fetchFor(widget.track, force: true) : null),
         onLongPress: () => showGifManager(context, widget.track).then((_) => _load()),
         child: Container(
           margin: const EdgeInsets.fromLTRB(10, 10, 10, 6),
@@ -205,11 +228,25 @@ class _GifCarouselState extends State<GifCarousel> {
             else if (_cover != null)
               Image.memory(_cover!, fit: BoxFit.cover)
             else
-              const Center(
+              Center(
                 child: Padding(
-                  padding: EdgeInsets.all(20),
-                  child: Text('Sem GIFs para esta música.\nSegure aqui para adicionar, ou coloque GIFs na pasta GIFs.',
-                      textAlign: TextAlign.center, style: TextStyle(color: Color(0xFF99FFFF), fontSize: 13)),
+                  padding: const EdgeInsets.all(20),
+                  child: Text(
+                      fetching
+                          ? 'Procurando GIFs de "${widget.track.title}"...'
+                          : 'Sem GIFs para esta música.\nToque para buscar na internet, ou segure para escolher do celular.',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Color(0xFF99FFFF), fontSize: 13)),
+                ),
+              ),
+            if (fetching && _gifs.isNotEmpty)
+              Positioned(
+                left: 6,
+                top: 6,
+                child: Container(
+                  color: Colors.black54,
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  child: const Text('Baixando GIFs...', style: TextStyle(color: Colors.white, fontSize: 11)),
                 ),
               ),
             if (_gifs.length > 1)
@@ -264,28 +301,73 @@ class _GifCarouselState extends State<GifCarousel> {
 
 Future<void> showGifManager(BuildContext context, Track t) async {
   final app = context.read<AppState>();
-  if (app.sourceRoot == null) return;
+  if (app.sourceRoot == null || t.id == null) return;
+  final parsedTitle = parseFileName(t.title).title;
+  final extras = TextEditingController(text: app.gifs.songExtras(t.artist, parsedTitle));
+  final messenger = ScaffoldMessenger.of(context);
+  final nav = Navigator.of(context);
   await showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Xp.bgTop,
     builder: (ctx) => StatefulBuilder(builder: (ctx, setSt) {
-      return FutureBuilder<List<String>>(
-        future: app.gifs.gifsFor(t, max: 200),
+      Future<void> saveExtras() => app.gifs.setSongExtras(t.artist, parsedTitle, extras.text);
+      return FutureBuilder<(List<String>, List<String>)>(
+        future: () async {
+          final pinned = (await app.db.pinnedGifs(t.id!)).where((g) => File(g).existsSync()).toList();
+          final all = await app.gifs.gifsFor(t, max: 60);
+          return (pinned, [...pinned, ...all.where((g) => !pinned.contains(g))]);
+        }(),
         builder: (ctx, snap) {
-          final gifs = snap.data ?? const [];
-          return SizedBox(
-            height: MediaQuery.of(ctx).size.height * .7,
-            child: Column(children: [
-              XpTitleBar(title: 'GIFs de "${t.title}"'),
-              Padding(
-                padding: const EdgeInsets.all(10),
-                child: Row(children: [
-                  Expanded(
-                    child: XpButton(
-                      label: 'Adicionar GIFs',
+          final pinned = snap.data?.$1 ?? const <String>[];
+          final gifs = snap.data?.$2 ?? const <String>[];
+          final fetching = app.gifFetcher.isFetching(t);
+          return Padding(
+            padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+            child: SizedBox(
+              height: MediaQuery.of(ctx).size.height * .8,
+              child: Column(children: [
+                XpTitleBar(title: 'GIFs de "$parsedTitle"'),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 10, 10, 4),
+                  child: Row(children: [
+                    Expanded(
+                      child: XpButton(
+                        label: fetching ? 'Baixando...' : 'Baixar sozinho',
+                        icon: Icons.cloud_download_outlined,
+                        primary: true,
+                        onTap: fetching
+                            ? null
+                            : () async {
+                                await saveExtras();
+                                setSt(() {});
+                                final n = await app.gifFetcher.fetchFor(t, force: true);
+                                messenger.showSnackBar(SnackBar(
+                                    content: Text(n == 0
+                                        ? (pinned.length >= maxGifsPerTrack
+                                            ? 'Esta música já tem $maxGifsPerTrack GIFs. Solte algum para baixar outros.'
+                                            : 'Nada novo nas fontes livres. Tente "Buscar na web".')
+                                        : '$n GIFs baixados.')));
+                                setSt(() {});
+                              },
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: XpButton(
+                        label: 'Buscar na web',
+                        icon: Icons.travel_explore,
+                        onTap: () async {
+                          await saveExtras();
+                          await nav.push(MaterialPageRoute<void>(builder: (_) => GifWebScreen(track: t)));
+                          setSt(() {});
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    XpButton(
+                      label: '',
                       icon: Icons.add_photo_alternate_outlined,
-                      primary: true,
                       onTap: () async {
                         final res = await FilePicker.pickFiles(
                           type: FileType.custom,
@@ -297,55 +379,87 @@ Future<void> showGifManager(BuildContext context, Track t) async {
                         setSt(() {});
                       },
                     ),
+                  ]),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  child: TextField(
+                    controller: extras,
+                    onSubmitted: (_) => saveExtras(),
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      filled: true,
+                      fillColor: Colors.white,
+                      border: OutlineInputBorder(),
+                      labelText: 'Palavras extras para buscar (ex.: rock lee vs gaara)',
+                    ),
                   ),
-                ]),
-              ),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 12),
-                child: Text('Os GIFs ficam salvos na pasta GIFs da sua pasta de músicas e funcionam sem internet. '
-                    'Toque no alfinete para fixar ou soltar um GIF desta música.',
-                    style: TextStyle(fontSize: 12, color: Xp.blueText)),
-              ),
-              Expanded(
-                child: FutureBuilder<List<String>>(
-                  future: app.db.pinnedGifs(t.id!),
-                  builder: (ctx, pinnedSnap) {
-                    final pinned = pinnedSnap.data ?? const [];
-                    return GridView.builder(
-                      padding: const EdgeInsets.all(10),
-                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, mainAxisSpacing: 6, crossAxisSpacing: 6),
-                      itemCount: gifs.length,
-                      itemBuilder: (ctx, i) {
-                        final isPinned = pinned.contains(gifs[i]);
-                        return Stack(fit: StackFit.expand, children: [
-                          Image.file(File(gifs[i]), fit: BoxFit.cover, cacheWidth: 240),
-                          Positioned(
-                            right: 2,
-                            top: 2,
-                            child: GestureDetector(
-                              onTap: () async {
-                                isPinned ? await app.db.unpinGif(t.id!, gifs[i]) : await app.db.pinGif(t.id!, gifs[i]);
-                                setSt(() {});
-                              },
-                              child: Container(
-                                padding: const EdgeInsets.all(3),
-                                color: isPinned ? const Color(0xFFFFD400) : Colors.black45,
-                                child: Icon(Icons.push_pin, size: 16, color: isPinned ? Colors.black : Colors.white),
-                              ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Text(
+                      'Fixados: ${pinned.length} de $maxGifsPerTrack. Os GIFs ficam na pasta GIFs e funcionam sem internet. '
+                      'Alfinete fixa ou solta; lixeira apaga do celular.',
+                      style: const TextStyle(fontSize: 12, color: Xp.blueText)),
+                ),
+                Expanded(
+                  child: GridView.builder(
+                    padding: const EdgeInsets.all(10),
+                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, mainAxisSpacing: 6, crossAxisSpacing: 6),
+                    itemCount: gifs.length,
+                    itemBuilder: (ctx, i) {
+                      final isPinned = pinned.contains(gifs[i]);
+                      return Stack(fit: StackFit.expand, children: [
+                        Image.file(File(gifs[i]), fit: BoxFit.cover, cacheWidth: 240),
+                        Positioned(
+                          right: 2,
+                          top: 2,
+                          child: GestureDetector(
+                            onTap: () async {
+                              if (isPinned) {
+                                await app.db.unpinGif(t.id!, gifs[i]);
+                              } else if (pinned.length < maxGifsPerTrack) {
+                                await app.db.pinGif(t.id!, gifs[i]);
+                              } else {
+                                messenger.showSnackBar(const SnackBar(content: Text('Máximo de $maxGifsPerTrack GIFs por música.')));
+                              }
+                              app.gifs.changed();
+                              setSt(() {});
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.all(3),
+                              color: isPinned ? const Color(0xFFFFD400) : Colors.black45,
+                              child: Icon(Icons.push_pin, size: 16, color: isPinned ? Colors.black : Colors.white),
                             ),
                           ),
-                        ]);
-                      },
-                    );
-                  },
+                        ),
+                        Positioned(
+                          left: 2,
+                          top: 2,
+                          child: GestureDetector(
+                            onTap: () async {
+                              await app.gifs.deleteGif(gifs[i]);
+                              setSt(() {});
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.all(3),
+                              color: Colors.black45,
+                              child: const Icon(Icons.delete_outline, size: 16, color: Colors.white),
+                            ),
+                          ),
+                        ),
+                      ]);
+                    },
+                  ),
                 ),
-              ),
-            ]),
+              ]),
+            ),
           );
         },
       );
     }),
   );
+  await app.gifs.setSongExtras(t.artist, parsedTitle, extras.text);
 }
 
 class SeekBar extends StatelessWidget {

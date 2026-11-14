@@ -1,0 +1,115 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:path/path.dart' as p;
+import 'package:player_nostalgico/db.dart';
+import 'package:player_nostalgico/gif_fetcher.dart';
+import 'package:player_nostalgico/gif_providers.dart';
+import 'package:player_nostalgico/gif_service.dart';
+import 'package:player_nostalgico/models.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
+final gifBytes = [...ascii.encode('GIF89a'), ...List.filled(20, 0)];
+
+void main() {
+  sqfliteFfiInit();
+
+  test('Openverse e Wikimedia: lê resultados e créditos', () {
+    final ov = OpenverseProvider.parse({
+      'results': [
+        {'url': 'https://x.org/a.gif', 'title': 'Sol', 'creator': 'Ana', 'license': 'by', 'license_version': '4.0', 'foreign_landing_url': 'https://x.org/a'},
+        {'url': 'https://x.org/b.jpg'},
+      ]
+    });
+    expect(ov.map((c) => c.url), ['https://x.org/a.gif']);
+    expect(ov.first.credit, contains('CC BY 4.0'));
+
+    final wm = WikimediaProvider.parse({
+      'query': {
+        'pages': {
+          '2': {'index': 2, 'title': 'File:B.gif', 'imageinfo': [{'url': 'https://u/B.gif', 'mime': 'image/gif', 'size': 100}]},
+          '1': {'index': 1, 'title': 'File:A.gif', 'imageinfo': [{'url': 'https://u/A.gif', 'mime': 'image/gif', 'size': 100}]},
+          '3': {'index': 3, 'title': 'File:C.png', 'imageinfo': [{'url': 'https://u/C.png', 'mime': 'image/png', 'size': 100}]},
+        }
+      }
+    });
+    expect(wm.map((c) => c.url), ['https://u/A.gif', 'https://u/B.gif']);
+  });
+
+  test('buscas: palavras extras, título+artista, artista, título, gênero', () {
+    final t = Track(path: '/m/x.mp3', title: '01 - Numb', artist: 'Linkin Park', album: 'Meteora', genre: 'Rock', addedAt: 0, modifiedAt: 0);
+    expect(GifFetcher.queriesFor(t, extras: ['rock lee vs gaara']),
+        ['rock lee vs gaara', 'Numb Linkin Park', 'Linkin Park', 'Numb', 'Rock']);
+  });
+
+  group('GifFetcher', () {
+    late Directory root;
+    late AppDb db;
+    late GifService gifs;
+    setUp(() async {
+      root = Directory.systemTemp.createTempSync('gif_test');
+      db = await AppDb.open(inMemoryDatabasePath, factory: databaseFactoryFfi);
+      gifs = GifService(db)..sourceRoot = root.path;
+    });
+    tearDown(() async {
+      await db.db.close();
+      root.deleteSync(recursive: true);
+    });
+
+    Future<Track> addTrack() async {
+      await db.upsertTrack(Track(path: p.join(root.path, 'Sonne.mp3'), title: 'Sonne', artist: 'Rammstein', album: 'Mutter', addedAt: 0, modifiedAt: 0));
+      return (await db.allTracks()).single;
+    }
+
+    test('baixa no máximo 9, salva em GIFs/Artista/Título e fixa na música', () async {
+      final t = await addTrack();
+      final queries = <String>[];
+      final client = MockClient((req) async {
+        if (req.url.host == 'api.openverse.org') {
+          queries.add(req.url.queryParameters['q']!);
+          return http.Response(jsonEncode({
+            'results': [for (var i = 0; i < 15; i++) {'url': 'https://img.test/${req.url.queryParameters['q']}$i.gif'}]
+          }), 200);
+        }
+        if (req.url.host == 'img.test') {
+          // um deles não é GIF de verdade
+          return req.url.path.contains('3') ? http.Response('<html>', 200) : http.Response.bytes(gifBytes, 200);
+        }
+        return http.Response('{}', 200);
+      });
+      final f = GifFetcher(gifs, client: client);
+      final n = await f.fetchFor(t);
+      expect(n, maxGifsPerTrack);
+      expect(queries.first, 'Sonne Rammstein');
+      final pinned = await db.pinnedGifs(t.id!);
+      expect(pinned.length, 9);
+      expect(pinned.every((g) => p.isWithin(p.join(root.path, 'GIFs', 'Rammstein', 'Sonne'), g)), isTrue);
+      expect(File(p.join(root.path, 'GIFs', 'Rammstein', 'Sonne', 'creditos.txt')).existsSync(), isTrue);
+      expect((await gifs.gifsFor(t)).length, 9);
+      // já tem 9: não baixa mais
+      expect(await f.fetchFor(t, force: true), 0);
+    });
+
+    test('sem internet não quebra e não repete a busca logo em seguida', () async {
+      final t = await addTrack();
+      var calls = 0;
+      final f = GifFetcher(gifs, client: MockClient((_) async {
+        calls++;
+        throw const SocketException('offline');
+      }));
+      expect(await f.fetchFor(t), 0);
+      final before = calls;
+      expect(await f.fetchFor(t), 0);
+      expect(calls, before);
+    });
+
+    test('palavras extras ficam salvas e entram na busca', () async {
+      await gifs.setSongExtras('Eminem', 'Till I Collapse', 'gigante de aço');
+      expect(gifs.extrasFor('Eminem', 'Till I Collapse'), ['gigante de aço']);
+      expect(gifs.extrasFor('Linkin Park', 'Numb'), ['rock lee vs gaara']);
+    });
+  });
+}

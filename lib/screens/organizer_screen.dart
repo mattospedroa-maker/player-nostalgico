@@ -211,7 +211,7 @@ class _OrganizerScreenState extends State<OrganizerScreen> {
                 onChanged: (v) => setState(() => i.selected = v ?? false),
                 title: Text(p.basename(i.sourcePath), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
                 subtitle: Text(
-                  '→ ${p.relative(p.dirname(i.targetPath!), from: root)}\n'
+                  '→ ${p.relative(i.targetPath!, from: root)}\n'
                   '${i.info!.source == 'musicbrainz' ? 'MusicBrainz (${i.info!.score}%)' : i.info!.source}',
                   style: TextStyle(fontSize: 11, color: (i.info!.score < 85) ? Xp.red : Xp.blueMuted),
                 ),

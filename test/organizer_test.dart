@@ -39,6 +39,19 @@ void main() {
       expect(r.artist, 'supercell');
       expect(r.title, 'World is Mine');
     });
+    test('nomes como os da pasta do usuário', () {
+      var r = parseFileName('00 - 002 - 【Hatsune Miku】 World is Mine 【Legenda PT-BR】');
+      expect(r.artist, 'Hatsune Miku');
+      expect(r.title, 'World is Mine');
+      r = parseFileName('00-20 ▓ Vocaloid ▓ Rolling Girl');
+      expect(r.artist, isNull);
+      expect(r.title, 'Rolling Girl');
+      r = parseFileName('017 - Rammstein - Sonne');
+      expect(r.artist, 'Rammstein');
+      expect(r.title, 'Sonne');
+      expect(cleanArtistName('▓ Vocaloid ▓'), isNull);
+      expect(cleanArtistName('【Hatsune Miku】'), 'Hatsune Miku');
+    });
     test('só título', () {
       final r = parseFileName('Hare_Hare_Yukai');
       expect(r.artist, isNull);
@@ -143,7 +156,7 @@ void main() {
       final byName = {for (final i in plan) p.basename(i.sourcePath): i};
       expect(byName['World is Mine.mp3']!.status, PlanStatus.move);
       expect(byName['World is Mine.mp3']!.targetPath, p.join(root.path, 'supercell', 'supercell', 'World is Mine.mp3'));
-      expect(byName['Ghost - Ritual.mp3']!.targetPath, p.join(root.path, 'Ghost', 'Opus Eponymous', 'Ghost - Ritual.mp3'));
+      expect(byName['Ghost - Ritual.mp3']!.targetPath, p.join(root.path, 'Ghost', 'Opus Eponymous', 'Ritual.mp3'));
       expect(byName['Elizabeth.mp3']!.status, PlanStatus.alreadyOrganized);
       expect(byName['musica estranha.mp3']!.status, PlanStatus.notFound);
 
@@ -151,7 +164,7 @@ void main() {
       final moved = await org.execute(plan, undoLogPath: undoLog);
       expect(moved.length, 2);
       expect(File(p.join(root.path, 'supercell', 'supercell', 'World is Mine.mp3')).existsSync(), isTrue);
-      expect(File(p.join(root.path, 'Ghost', 'Opus Eponymous', 'Ghost - Ritual.mp3')).existsSync(), isTrue);
+      expect(File(p.join(root.path, 'Ghost', 'Opus Eponymous', 'Ritual.mp3')).existsSync(), isTrue);
       expect(Directory(p.join(root.path, 'baixadas')).existsSync(), isFalse, reason: 'pasta vazia é removida');
       expect(File(p.join(root.path, 'musica estranha.mp3')).existsSync(), isTrue, reason: 'não identificada fica no lugar');
 

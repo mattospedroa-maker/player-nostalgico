@@ -36,10 +36,12 @@ class LibraryScanner {
       final tags = await metadata.read(f.path);
       final parsed = parseFileName(p.basenameWithoutExtension(f.path));
       final folderAlbum = p.basename(p.dirname(f.path));
+      final tagTitle = (tags?.title.isNotEmpty ?? false) ? parseFileName(tags!.title) : null;
+      final artist = cleanArtistName(tags?.artist ?? '') ?? tagTitle?.artist ?? parsed.artist ?? unknownArtist;
       await db.upsertTrack(Track(
         path: f.path,
-        title: (tags?.title.isNotEmpty ?? false) ? tags!.title : parsed.title,
-        artist: (tags?.artist.isNotEmpty ?? false) ? tags!.artist : (parsed.artist ?? unknownArtist),
+        title: tagTitle?.title ?? parsed.title,
+        artist: artist,
         album: (tags?.album.isNotEmpty ?? false)
             ? tags!.album
             : (p.equals(p.dirname(f.path), root) ? unknownAlbum : folderAlbum),

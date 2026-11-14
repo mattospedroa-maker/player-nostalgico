@@ -91,10 +91,10 @@ class AppDb {
   }
 
   /// Atualiza o caminho (e artista/álbum) depois que o organizador moveu o arquivo.
-  Future<void> moveTrack(String oldPath, String newPath, {String? artist, String? album}) async {
+  Future<void> moveTrack(String oldPath, String newPath, {String? artist, String? album, String? title}) async {
     await db.update(
       'tracks',
-      {'path': newPath, 'artist': ?artist, 'album': ?album},
+      {'path': newPath, 'artist': ?artist, 'album': ?album, 'title': ?title},
       where: 'path = ?',
       whereArgs: [oldPath],
     );
@@ -165,6 +165,8 @@ class AppDb {
 
   Future<void> pinGif(int trackId, String gifPath) =>
       db.insert('track_gifs', {'track_id': trackId, 'gif_path': gifPath}, conflictAlgorithm: ConflictAlgorithm.ignore);
+
+  Future<void> deleteGifEverywhere(String gifPath) => db.delete('track_gifs', where: 'gif_path = ?', whereArgs: [gifPath]);
 
   Future<void> unpinGif(int trackId, String gifPath) =>
       db.delete('track_gifs', where: 'track_id = ? AND gif_path = ?', whereArgs: [trackId, gifPath]);
