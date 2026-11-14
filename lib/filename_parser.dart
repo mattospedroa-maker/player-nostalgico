@@ -15,6 +15,14 @@ final _junkWords = RegExp(
     r'(official|oficial|video|vídeo|audio|áudio|lyrics?|letra|legenda|legendado|sub(s|bed|titulado)?|pt-?br|eng?|romaji|kara(oke)?|kbps|\bhd\b|\bhq\b|\bmv\b|\bpv\b|clipe|visualizer|full|completo|remaster(ed)?|\d{3,4}p)',
     caseSensitive: false);
 
+/// O que fica no título quando aparece entre colchetes.
+final _keepInTitle = RegExp(r'remix|mix\b|feat|ft\.|\blive\b|ao vivo|ver(sion|são)?\b|edit\b|cover|acoustic|ac[uú]stic|instrumental|remaster', caseSensitive: false);
+
+/// Lixo solto no fim do nome (fora de colchetes): "Legendado PT/BR", "Official Video", "1080p"...
+final _trailingJunk = RegExp(
+    r'([\s\-–—|:]+(legendad[oa]|legenda|sub(titulado|bed|s)?|pt[\s\-/]?br|br|official( music)? video|oficial|lyrics?|letra|hd|hq|mv|pv|\d{3,4}p|\d{2,3}\s?kbps))+\s*$',
+    caseSensitive: false);
+
 /// Nomes genéricos que não servem como artista.
 final _genericArtists = RegExp(r'^(vocaloid|various( artists)?|v\.?a\.?|unknown|desconhecido|artista desconhecido|music|musica|música|anime|ost)$',
     caseSensitive: false);
@@ -45,7 +53,8 @@ ParsedName parseFileName(String name) {
       bracketArtist ??= inner;
       return ' ';
     }
-    // (feat. X), (Remix) etc. ficam no título
+    // (feat. X), [Remix] etc. ficam no título; outros [...] (ex.: título romanizado) saem
+    if (open == '[' && !_keepInTitle.hasMatch(inner)) return ' ';
     return m.group(0)!;
   });
 
@@ -64,6 +73,7 @@ ParsedName parseFileName(String name) {
   }
   artist ??= bracketArtist;
   if (artist != null && _genericArtists.hasMatch(artist)) artist = null;
+  title = (' $title').replaceAll(_trailingJunk, '').trim();
   title = title.replaceAll(RegExp(r'^[\s\-–—.:]+|[\s\-–—.:]+$'), '').trim();
   if (title.isEmpty) title = name.trim();
   return ParsedName(artist, title);
@@ -72,7 +82,7 @@ ParsedName parseFileName(String name) {
 /// Limpa um artista vindo das tags (símbolos, 【】). Null se for genérico ("Vocaloid", "Unknown"...).
 String? cleanArtistName(String s) {
   var a = s.replaceAll(RegExp(r'[─-▟■-◿☀-➿⭐⭕]'), ' ').replaceAll(RegExp(r'[【】「」『』]'), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
-  if (a.isEmpty || _genericArtists.hasMatch(a)) return null;
+  if (a.isEmpty || _genericArtists.hasMatch(a) || RegExp(r'^[\d\s.\-_]+$').hasMatch(a)) return null;
   return a;
 }
 

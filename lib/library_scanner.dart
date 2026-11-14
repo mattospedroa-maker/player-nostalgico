@@ -13,7 +13,8 @@ class LibraryScanner {
   final MetadataReader metadata;
   LibraryScanner(this.db, this.metadata);
 
-  Future<int> scan(String root, {void Function(int done, int total)? onProgress}) async {
+  /// [force] relê todas (ex.: quando a limpeza de nomes melhora).
+  Future<int> scan(String root, {void Function(int done, int total)? onProgress, bool force = false}) async {
     final dir = Directory(root);
     if (!dir.existsSync()) return 0;
     final files = <File>[];
@@ -32,7 +33,7 @@ class LibraryScanner {
       onProgress?.call(i, files.length);
       final mtime = f.statSync().modified.millisecondsSinceEpoch;
       final old = known[f.path];
-      if (old != null && old.modifiedAt == mtime) continue;
+      if (!force && old != null && old.modifiedAt == mtime) continue;
       final tags = await metadata.read(f.path);
       final parsed = parseFileName(p.basenameWithoutExtension(f.path));
       final folderAlbum = p.basename(p.dirname(f.path));
@@ -53,8 +54,31 @@ class LibraryScanner {
       ));
       changed++;
     }
-    await db.deleteTracksNotIn(files.map((f) => f.path).toSet());
+    final present = files.map((f) => f.path).toSet();
+    final removed = known.keys.where((k) => !present.contains(k)).toList();
+    await db.deleteTracksNotIn(present);
+    removeEmptyParents(root, removed);
     onProgress?.call(files.length, files.length);
     return changed;
+  }
+}
+
+/// Depois que músicas somem, apaga as pastas de álbum/artista que ficaram vazias (nunca a pasta-fonte).
+void removeEmptyParents(String root, Iterable<String> files) {
+  for (final f in files) {
+    var d = Directory(p.dirname(f));
+    while (p.isWithin(root, d.path)) {
+      try {
+        if (!d.existsSync()) {
+          d = d.parent;
+          continue;
+        }
+        if (d.listSync().isNotEmpty) break;
+        d.deleteSync();
+      } catch (_) {
+        break;
+      }
+      d = d.parent;
+    }
   }
 }

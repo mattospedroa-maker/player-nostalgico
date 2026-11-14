@@ -49,6 +49,10 @@ void main() {
       r = parseFileName('017 - Rammstein - Sonne');
       expect(r.artist, 'Rammstein');
       expect(r.title, 'Sonne');
+      r = parseFileName('R. I. P. Mar de Fofoca [R I P Goshippu no Umi] Legendado PT/BR');
+      expect(r.title, 'R. I. P. Mar de Fofoca');
+      expect(parseFileName('Song [Remix]').title, 'Song [Remix]');
+      expect(cleanArtistName('024'), isNull);
       expect(cleanArtistName('▓ Vocaloid ▓'), isNull);
       expect(cleanArtistName('【Hatsune Miku】'), 'Hatsune Miku');
     });

@@ -19,6 +19,9 @@ import 'player_service.dart';
 import 'recommender.dart';
 
 /// Estado central do app: pasta-fonte, biblioteca, playlists e serviços.
+/// Suba quando a leitura de nomes/tags mudar, para reler a biblioteca toda.
+const scanVersion = 2;
+
 class AppState extends ChangeNotifier {
   final AppDb db;
   final SharedPreferences prefs;
@@ -95,10 +98,13 @@ class AppState extends ChangeNotifier {
     final before = {for (final t in tracks) t.id};
     notifyListeners();
     try {
-      await LibraryScanner(db, metadata).scan(root, onProgress: (d, t) {
+      // limpeza de nomes melhorou: relê tudo uma vez
+      final force = (prefs.getInt('scanVersion') ?? 1) < scanVersion;
+      await LibraryScanner(db, metadata).scan(root, force: force, onProgress: (d, t) {
         scanProgress = t == 0 ? 1 : d / t;
         notifyListeners();
       });
+      await prefs.setInt('scanVersion', scanVersion);
     } finally {
       scanning = false;
       await reload();
