@@ -12,7 +12,10 @@ class AppDb {
     final db = await f.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 1,
+        version: 2,
+        onUpgrade: (db, from, to) async {
+          if (from < 2) await db.execute('ALTER TABLE tracks ADD COLUMN edited INTEGER NOT NULL DEFAULT 0');
+        },
         onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
         onCreate: (db, _) async {
           await db.execute('''
@@ -27,7 +30,8 @@ class AppDb {
               duration_ms INTEGER NOT NULL DEFAULT 0,
               favorite INTEGER NOT NULL DEFAULT 0,
               added_at INTEGER NOT NULL,
-              modified_at INTEGER NOT NULL
+              modified_at INTEGER NOT NULL,
+              edited INTEGER NOT NULL DEFAULT 0
             )''');
           await db.execute('''
             CREATE TABLE playlists(
@@ -70,13 +74,22 @@ class AppDb {
   Future<Map<String, Track>> tracksByPath() async => {for (final t in await allTracks()) t.path: t};
 
   Future<int> upsertTrack(Track t) async {
-    final existing = await db.query('tracks', columns: ['id', 'favorite', 'added_at'], where: 'path = ?', whereArgs: [t.path]);
+    final existing = await db.query('tracks', where: 'path = ?', whereArgs: [t.path]);
     if (existing.isEmpty) return db.insert('tracks', t.toMap()..remove('id'));
-    final id = existing.first['id'] as int;
+    final old = existing.first;
+    final id = old['id'] as int;
     final m = t.toMap()
       ..remove('id')
-      ..['favorite'] = existing.first['favorite']
-      ..['added_at'] = existing.first['added_at'];
+      ..['favorite'] = old['favorite']
+      ..['added_at'] = old['added_at'];
+    if (old['edited'] == 1) {
+      // editada à mão: a releitura não desfaz a edição
+      for (final k in ['title', 'artist', 'album', 'genre', 'year']) {
+        m[k] = old[k];
+      }
+    } else if (t.genre.isEmpty && '${old['genre'] ?? ''}'.isNotEmpty) {
+      m['genre'] = old['genre']; // gênero preenchido pelo MusicBrainz continua
+    }
     await db.update('tracks', m, where: 'id = ?', whereArgs: [id]);
     return id;
   }
@@ -99,6 +112,17 @@ class AppDb {
       whereArgs: [oldPath],
     );
   }
+
+  /// Salva a edição feita na tela "Editar música".
+  Future<void> editTrack(int id, {required String title, required String artist, required String album, required String genre, int? year}) =>
+      db.update('tracks', {'title': title, 'artist': artist, 'album': album, 'genre': genre, 'year': year, 'edited': 1},
+          where: 'id = ?', whereArgs: [id]);
+
+  /// Gênero descoberto automaticamente (só onde estava vazio).
+  Future<void> fillGenre(int id, String genre) =>
+      db.update('tracks', {'genre': genre}, where: "id = ? AND genre = ''", whereArgs: [id]);
+
+  Future<void> deleteTrack(int id) => db.delete('tracks', where: 'id = ?', whereArgs: [id]);
 
   Future<void> setFavorite(int trackId, bool fav) =>
       db.update('tracks', {'favorite': fav ? 1 : 0}, where: 'id = ?', whereArgs: [trackId]);

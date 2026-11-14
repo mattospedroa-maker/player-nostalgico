@@ -1,11 +1,12 @@
 import 'dart:io';
 
 import 'package:material_ui/material_ui.dart';
-import 'package:just_audio_background/just_audio_background.dart';
+import 'package:audio_service/audio_service.dart';
 import 'package:provider/provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'app_state.dart';
+import 'audio_handler.dart';
 import 'screens/for_you_screen.dart';
 import 'screens/favorites_screen.dart';
 import 'screens/library_screen.dart';
@@ -19,12 +20,21 @@ Future<void> main() async {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
   }
-  await JustAudioBackground.init(
-    androidNotificationChannelId: 'dev.playernostalgico.audio',
-    androidNotificationChannelName: 'Reprodução',
-    androidNotificationOngoing: true,
-  );
-  final app = await AppState.create();
+  PlayerAudioHandler? handler;
+  try {
+    handler = await AudioService.init(
+      builder: PlayerAudioHandler.new,
+      config: const AudioServiceConfig(
+        androidNotificationChannelId: 'dev.playernostalgico.audio',
+        androidNotificationChannelName: 'Reprodução',
+        androidNotificationOngoing: true,
+        androidStopForegroundOnPause: true,
+      ),
+    );
+  } catch (_) {
+    // desktop/testes: sem notificação
+  }
+  final app = await AppState.create(handler: handler);
   runApp(
     MultiProvider(
       providers: [

@@ -12,6 +12,10 @@ Player de música offline para Android, com visual inspirado no Windows Media Pl
 - **Palavras extras** (em "GIFs desta"): associações para a busca, ex.: "rock lee vs gaara" para Numb. Ficam em `GIFs/palavras.json`.
 - **Buscar na web** (em "GIFs desta"): abre Google, Tenor, GIPHY ou Pinterest com a busca pronta; com o **Modo salvar** ligado, tocar num GIF guarda na música. É o caminho para GIFs de anime e filmes, que não existem nas fontes livres.
 - **Nomes limpos**: "00 - 002 - 【Hatsune Miku】 World is Mine 【Legenda PT-BR】" vira artista "Hatsune Miku", título "World is Mine". O organizador também renomeia o arquivo para o título limpo.
+- **Notificação e tela de bloqueio**: ♥ curtir, ⏮ ⏯ ⏭, e a arte é o GIF que está passando (um quadro parado, que troca junto com o GIF).
+- **Editar música** (segurar na lista ou "Editar" no Tocando agora): título, artista, álbum, gênero e ano; preenche pelo MusicBrainz, grava nas tags, move para a pasta nova e permite apagar a música. Pastas vazias são apagadas sozinhas.
+- **Gênero automático**: quando falta, vem das tags do artista no MusicBrainz (ex.: "Industrial Metal").
+- **Fila que se adapta** (aleatório e Mix do momento): pular manda as parecidas para o fim; curtir traz parecidas para perto, intercaladas.
 - **Favoritas**, **Playlists** (criar, renomear, reordenar arrastando, remover deslizando) e **Para você** (mix, rádio da música atual e "Redescobrir", tudo calculado no aparelho).
 
 ## Como testar

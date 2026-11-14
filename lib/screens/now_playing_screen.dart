@@ -15,6 +15,7 @@ import '../models.dart';
 import '../player_service.dart';
 import '../theme.dart';
 import '../widgets.dart';
+import 'edit_track_screen.dart';
 import 'gif_web_screen.dart';
 
 class NowPlayingScreen extends StatelessWidget {
@@ -94,6 +95,7 @@ class _Toolbar extends StatelessWidget {
         item(Icons.gif_box_outlined, 'GIFs desta', () => showGifManager(context, track)),
         item(Icons.playlist_add, 'Playlist', () => pickPlaylistAndAdd(context, track)),
         item(Icons.queue_music, 'Fila', () => _showQueue(context)),
+        item(Icons.edit_outlined, 'Editar', () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => EditTrackScreen(track: track)))),
       ]),
     );
   }
@@ -178,6 +180,7 @@ class _GifCarouselState extends State<GifCarousel> {
       _i = 0;
       _shownAt = DateTime.now();
     });
+    app.nowShowingGif(widget.track, gifs.isEmpty ? null : gifs.first);
     _timer?.cancel();
     if (gifs.length > 1) {
       _timer = Timer.periodic(const Duration(milliseconds: 250), (_) {
@@ -191,10 +194,13 @@ class _GifCarouselState extends State<GifCarousel> {
     }
   }
 
-  void _go(int i) => setState(() {
-        _i = i % _gifs.length;
-        _shownAt = DateTime.now();
-      });
+  void _go(int i) {
+    setState(() {
+      _i = i % _gifs.length;
+      _shownAt = DateTime.now();
+    });
+    context.read<AppState>().nowShowingGif(widget.track, _gifs[_i]);
+  }
 
   @override
   void dispose() {

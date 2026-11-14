@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
@@ -9,6 +10,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'db.dart';
+import 'audio_handler.dart';
 import 'gif_fetcher.dart';
 import 'gif_service.dart';
 import 'library_scanner.dart';
@@ -51,13 +53,17 @@ class AppState extends ChangeNotifier {
 
   AppState._(this.db, this.prefs, this.player, this.gifs, this.dataDir);
 
-  static Future<AppState> create() async {
+  static Future<AppState> create({PlayerAudioHandler? handler}) async {
     final dir = await getApplicationSupportDirectory();
     final db = await AppDb.open(p.join(dir.path, 'player.db'));
     final prefs = await SharedPreferences.getInstance();
-    final s = AppState._(db, prefs, PlayerService(db), GifService(db), dir.path);
+    final s = AppState._(db, prefs, PlayerService(db, handler: handler), GifService(db), dir.path);
     s.gifs.sourceRoot = s.sourceRoot;
     s.player.addListener(s._onPlayerChanged);
+    handler?.onFavorite = () async {
+      final t = s.player.current == null ? null : s.byId(s.player.current!.id);
+      if (t != null) await s.toggleFavorite(t);
+    };
     await s.reload();
     return s;
   }
@@ -111,7 +117,111 @@ class AppState extends ChangeNotifier {
     }
     // músicas novas na biblioteca: busca GIFs sozinho, em segundo plano
     final added = tracks.where((t) => !before.contains(t.id)).toList();
-    if (added.isNotEmpty && autoGifs) unawaited(fetchGifsForAll(only: added));
+    unawaited(_afterScan(added));
+  }
+
+  /// Primeiro descobre os gêneros que faltam (a regra dos GIFs usa o gênero), depois baixa os GIFs das novas.
+  Future<void> _afterScan(List<Track> added) async {
+    await fillMissingGenres().catchError((_) => 0);
+    if (added.isEmpty || !autoGifs) return;
+    final ids = added.map((t) => t.id).toSet();
+    await fetchGifsForAll(only: tracks.where((t) => ids.contains(t.id)).toList());
+  }
+
+  bool fillingGenres = false;
+
+  /// Gênero/subgênero automático: pergunta ao MusicBrainz uma vez por artista (só onde está vazio).
+  Future<int> fillMissingGenres() async {
+    if (fillingGenres) return 0;
+    final tried = (prefs.getStringList('genreTried') ?? const []).toSet();
+    final byArtist = <String, List<Track>>{};
+    for (final t in tracks) {
+      if (t.genre.isEmpty && t.artist != unknownArtist && t.artist.trim().isNotEmpty && !tried.contains(t.artist)) {
+        (byArtist[t.artist] ??= []).add(t);
+      }
+    }
+    if (byArtist.isEmpty) return 0;
+    fillingGenres = true;
+    notifyListeners();
+    var n = 0;
+    final mb = MusicBrainzClient();
+    try {
+      for (final e in byArtist.entries) {
+        String? genre;
+        try {
+          genre = await mb.artistGenre(e.key);
+        } catch (_) {
+          break; // sem internet: tenta na próxima leitura
+        }
+        tried.add(e.key);
+        if (genre == null) continue;
+        for (final t in e.value) {
+          await db.fillGenre(t.id!, genre);
+          n++;
+        }
+      }
+    } finally {
+      await prefs.setStringList('genreTried', tried.toList());
+      fillingGenres = false;
+      await reload();
+    }
+    return n;
+  }
+
+  /// Salva a tela "Editar música": banco, tags do arquivo (opcional) e pasta (opcional).
+  /// Retorna um aviso para mostrar, ou null se deu tudo certo.
+  Future<String?> editTrack(Track t,
+      {required String title, required String artist, required String album, required String genre, int? year, bool writeTags = true, bool move = true}) async {
+    String? warning;
+    var path = t.path;
+    if (writeTags) {
+      try {
+        updateMetadata(File(path), (m) {
+          m.setTitle(title);
+          m.setArtist(artist);
+          m.setAlbum(album);
+          m.setGenres(genre.isEmpty ? const [] : [genre]);
+          if (year != null) m.setYear(DateTime(year));
+        });
+      } catch (_) {
+        warning = 'Salvo no app, mas não deu para gravar nas tags deste arquivo.';
+      }
+    }
+    await db.editTrack(t.id!, title: title, artist: artist, album: album, genre: genre, year: year);
+    final root = sourceRoot;
+    if (move && root != null) {
+      final target = targetPathFor(root, path, artist, album, title: title);
+      if (!p.equals(target, path)) {
+        if (File(target).existsSync()) {
+          warning = 'Já existe um arquivo com esse nome em ${p.relative(p.dirname(target), from: root)}. Não movi.';
+        } else {
+          await Directory(p.dirname(target)).create(recursive: true);
+          await Organizer.moveFile(File(path), target);
+          await db.moveTrack(path, target);
+          removeEmptyParents(root, [path]);
+          path = target;
+        }
+      }
+    }
+    // a releitura não deve achar que mudou
+    try {
+      await db.db.update('tracks', {'modified_at': File(path).statSync().modified.millisecondsSinceEpoch}, where: 'id = ?', whereArgs: [t.id]);
+    } catch (_) {}
+    await reload();
+    final updated = byId(t.id);
+    if (updated != null) player.replaceTrack(updated);
+    return warning;
+  }
+
+  /// Apaga a música do celular (e as pastas de álbum/artista que ficarem vazias).
+  Future<void> deleteTrack(Track t) async {
+    if (player.current?.id == t.id) await player.next();
+    final f = File(t.path);
+    if (f.existsSync()) await f.delete();
+    await db.deleteTrack(t.id!);
+    final root = sourceRoot;
+    if (root != null) removeEmptyParents(root, [t.path]);
+    await reload();
   }
 
   Organizer organizer({bool cleanNames = true}) =>
@@ -134,12 +244,25 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  int? _lastTrackId;
+
   void _onPlayerChanged() {
     final t = player.current;
-    if (t == null || t.id == _lastAutoFetchId || !autoGifs) return;
-    _lastAutoFetchId = t.id;
+    if (t == null || t.id == _lastTrackId) return;
+    _lastTrackId = t.id;
     final fresh = byId(t.id) ?? t;
+    player.handler?.setFavorite(fresh.favorite);
+    // arte inicial = primeiro GIF da música (depois o carrossel avisa a cada troca)
+    gifs.gifsFor(fresh).then((g) => nowShowingGif(fresh, g.isEmpty ? null : g.first));
+    if (!autoGifs || t.id == _lastAutoFetchId) return;
+    _lastAutoFetchId = t.id;
     gifFetcher.fetchFor(fresh).catchError((_) => 0);
+  }
+
+  /// O carrossel avisa qual GIF está passando; ele vira a arte da notificação e da tela de bloqueio.
+  Future<void> nowShowingGif(Track t, String? gif) async {
+    if (player.current?.id != t.id) return;
+    await player.handler?.setArtwork(gif, cacheDir: dataDir);
   }
 
   /// Baixa GIFs para todas as músicas que ainda não têm 9.
@@ -178,6 +301,9 @@ class AppState extends ChangeNotifier {
   Future<void> toggleFavorite(Track t) async {
     await db.setFavorite(t.id!, !t.favorite);
     await reload();
+    if (player.current?.id == t.id) player.handler?.setFavorite(!t.favorite);
+    // curtiu: a fila (aleatório / mix) passa a trazer mais parecidas
+    if (!t.favorite && player.adaptive) await player.pullSimilarForward(t, tracks);
   }
 
   Track? byId(int? id) {

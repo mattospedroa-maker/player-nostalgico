@@ -27,10 +27,19 @@ class Recommender {
     final hourW = <int, double>{};
     final skips = <int, int>{};
     final recent = <int>{};
+    final skipArtist = <String, double>{};
+    final skipGenre = <String, double>{};
     for (final pl in plays) {
       final t = byId[pl.trackId];
       if (t == null) continue;
-      if (pl.skipped && pl.secondsListened < 30) skips[pl.trackId] = (skips[pl.trackId] ?? 0) + 1;
+      if (pl.skipped && pl.secondsListened < 30) {
+        skips[pl.trackId] = (skips[pl.trackId] ?? 0) + 1;
+        if (pl.playedAt >= since) {
+          // pulou: músicas do mesmo tipo também perdem pontos
+          skipArtist[t.artist] = (skipArtist[t.artist] ?? 0) + 1;
+          if (t.genre.isNotEmpty) skipGenre[t.genre] = (skipGenre[t.genre] ?? 0) + 1;
+        }
+      }
       if (pl.playedAt >= hourAgo) recent.add(pl.trackId);
       if (pl.playedAt < since || pl.skipped) continue;
       artistW[t.artist] = (artistW[t.artist] ?? 0) + 1;
@@ -39,7 +48,9 @@ class Recommender {
       hourW[pl.trackId] = (hourW[pl.trackId] ?? 0) + ((h - now.hour).abs() <= 2 ? 1 : 0);
     }
     for (final t in tracks.where((t) => t.favorite)) {
+      // curtiu: mais do mesmo artista e do mesmo gênero
       artistW[t.artist] = (artistW[t.artist] ?? 0) + 2;
+      if (t.genre.isNotEmpty) genreW[t.genre] = (genreW[t.genre] ?? 0) + 2;
     }
     final maxA = artistW.values.fold<double>(1, (a, b) => a > b ? a : b);
     final maxG = genreW.values.fold<double>(1, (a, b) => a > b ? a : b);
@@ -69,6 +80,7 @@ class Recommender {
         if (reason.isEmpty) reason = 'você ouve nesse horário';
       }
       s -= 1.5 * (skips[t.id] ?? 0);
+      s -= .4 * (skipArtist[t.artist] ?? 0).clamp(0, 5) + .25 * (skipGenre[t.genre] ?? 0).clamp(0, 5);
       if (s > 0) out.add(Recommendation(t, s, reason));
     }
     out.sort((x, y) => y.score.compareTo(x.score));

@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
 import 'app_state.dart';
+import 'screens/edit_track_screen.dart';
 import 'models.dart';
 import 'theme.dart';
 
@@ -106,6 +107,14 @@ Future<void> showTrackMenu(BuildContext context, Track t) async {
           onTap: () {
             Navigator.pop(ctx);
             pickPlaylistAndAdd(context, t);
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.edit_outlined, color: Xp.navy),
+          title: const Text('Editar informações'),
+          onTap: () {
+            Navigator.pop(ctx);
+            Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => EditTrackScreen(track: t)));
           },
         ),
       ]),

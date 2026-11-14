@@ -8,6 +8,7 @@ import 'package:player_nostalgico/gif_service.dart';
 import 'package:player_nostalgico/library_scanner.dart';
 import 'package:player_nostalgico/metadata.dart';
 import 'package:player_nostalgico/models.dart';
+import 'package:player_nostalgico/player_service.dart';
 import 'package:player_nostalgico/recommender.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -103,5 +104,30 @@ void main() {
 
     final radio = Recommender(tracks, plays, now: now).radio(tracks[0]);
     expect(radio.first.track.artist, 'Ghost');
+  });
+
+  test('releitura não desfaz edição nem apaga gênero automático; pastas vazias somem', () async {
+    final f = touch('Artista/Album/musica.mp3');
+    final scanner = LibraryScanner(db, FakeMeta());
+    await scanner.scan(root.path);
+    var t = (await db.allTracks()).single;
+    await db.fillGenre(t.id!, 'Industrial Metal');
+    await scanner.scan(root.path, force: true);
+    expect((await db.allTracks()).single.genre, 'Industrial Metal');
+    await db.editTrack(t.id!, title: 'Novo', artist: 'Eu', album: 'Meu', genre: 'Rock', year: 2001);
+    await scanner.scan(root.path, force: true);
+    t = (await db.allTracks()).single;
+    expect([t.title, t.artist, t.genre], ['Novo', 'Eu', 'Rock']);
+    f.deleteSync();
+    await scanner.scan(root.path);
+    expect(await db.allTracks(), isEmpty);
+    expect(Directory(p.join(root.path, 'Artista')).existsSync(), isFalse);
+    expect(root.existsSync(), isTrue);
+  });
+
+  test('parecença para a fila adaptativa', () {
+    Track tr(String a, String g) => Track(path: '/$a$g', title: 't', artist: a, album: '$a$g', genre: g, addedAt: 0, modifiedAt: 0);
+    expect(PlayerService.similarity(tr('A', 'Rock'), tr('A', 'Pop')), greaterThan(PlayerService.similarity(tr('B', 'Rock'), tr('C', 'Rock'))));
+    expect(PlayerService.similarity(tr('B', 'Pop'), tr('C', 'Rock')), 0);
   });
 }

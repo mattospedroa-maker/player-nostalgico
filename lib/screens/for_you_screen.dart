@@ -50,7 +50,7 @@ class _ForYouScreenState extends State<ForYouScreen> {
     }
     void playRecs(List<Recommendation> recs, [int i = 0]) {
       if (recs.isEmpty) return;
-      ps.playQueue([for (final r in recs) r.track], start: i);
+      ps.playQueue([for (final r in recs) r.track], start: i, mix: true);
       HomeShell.goTo(context, 0);
     }
 

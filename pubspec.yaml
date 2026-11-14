@@ -35,7 +35,7 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   just_audio: ^0.10.6
-  just_audio_background: ^0.0.1-beta.17
+  audio_service: ^0.18.19
   sqflite: ^2.4.6
   sqflite_common_ffi: ^2.4.7
   path: ^1.9.1

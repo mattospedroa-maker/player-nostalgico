@@ -63,6 +63,24 @@ void main() {
     });
   });
 
+  test('gênero do artista pelas tags do MusicBrainz', () {
+    final g = MusicBrainzClient.parseArtistGenre({
+      'artists': [
+        {
+          'name': 'Rammstein',
+          'score': 100,
+          'tags': [
+            {'name': 'german', 'count': 9},
+            {'name': 'industrial metal', 'count': 7},
+            {'name': 'neue deutsche härte', 'count': 3},
+          ]
+        }
+      ]
+    }, 'Rammstein');
+    expect(g, 'Industrial Metal');
+    expect(MusicBrainzClient.parseArtistGenre({'artists': []}, 'X'), isNull);
+  });
+
   test('safeFolderName remove caracteres proibidos', () {
     expect(safeFolderName('AC/DC'), 'AC_DC');
     expect(safeFolderName('What?: "Live" <2009>.'), 'What__ _Live_ _2009_');

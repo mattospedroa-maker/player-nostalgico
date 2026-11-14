@@ -63,6 +63,42 @@ class MusicBrainzClient {
     return parseRecordingSearch(jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>, title: title, artistHint: artist);
   }
 
+  /// Gênero/subgênero do artista pelas tags do MusicBrainz (ex.: "Industrial Metal"). Null se não achar.
+  Future<String?> artistGenre(String artist) async {
+    final wait = _last.add(minInterval).difference(DateTime.now());
+    if (wait > Duration.zero) await Future.delayed(wait);
+    final uri = Uri.https('musicbrainz.org', '/ws/2/artist', {'query': 'artist:"${_escape(artist)}"', 'fmt': 'json', 'limit': '3'});
+    var res = await _get(uri);
+    for (var attempt = 1; res.statusCode == 503 && attempt <= 3; attempt++) {
+      await Future.delayed(Duration(seconds: 2 * attempt));
+      res = await _get(uri);
+    }
+    if (res.statusCode != 200) return null;
+    return parseArtistGenre(jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>, artist);
+  }
+
+  static final _genreWords = RegExp(
+      r'rock|metal|pop|punk|rap|hip.?hop|trap|jazz|blues|soul|funk|disco|r&b|rnb|electr|techno|house|trance|dubstep|drum|edm|synth|ambient|'
+      r'classical|folk|country|reggae|ska|samba|bossa|mpb|sertanejo|forr|pagode|ax[eé]|gospel|indie|alternative|grunge|emo|core\b|'
+      r'industrial|gothic|wave|lo.?fi|chill|vocaloid|anime|j-?pop|k-?pop|j-?rock|soundtrack|latin|reggaeton|cumbia|swing|opera|instrumental|dance|idm|shoegaze|ballad',
+      caseSensitive: false);
+
+  static String? parseArtistGenre(Map<String, dynamic> json, String artist) {
+    String norm(String x) => x.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '');
+    final artists = (json['artists'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
+    for (final a in artists) {
+      if (((a['score'] as num?) ?? 0) < 85 && norm('${a['name']}') != norm(artist)) continue;
+      final tags = ((a['tags'] as List?)?.cast<Map<String, dynamic>>() ?? const [])
+          .where((t) => _genreWords.hasMatch('${t['name']}'))
+          .toList()
+        ..sort((x, y) => ((y['count'] as num?) ?? 0).compareTo((x['count'] as num?) ?? 0));
+      if (tags.isEmpty) continue;
+      final name = '${tags.first['name']}'.trim();
+      return name.split(' ').map((w) => w.isEmpty ? w : w[0].toUpperCase() + w.substring(1)).join(' ');
+    }
+    return null;
+  }
+
   Future<http.Response> _get(Uri uri) {
     _last = DateTime.now();
     return client.get(uri, headers: {'User-Agent': userAgent, 'Accept': 'application/json'}).timeout(const Duration(seconds: 20));
@@ -294,6 +330,8 @@ class Organizer {
     _removeEmptyDirs(Directory(sourceRoot));
     return undone;
   }
+
+  static Future<void> moveFile(File src, String target) => _move(src, target);
 
   static Future<void> _move(File src, String target) async {
     try {
