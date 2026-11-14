@@ -13,7 +13,7 @@ Player de música offline para Android, com visual inspirado no Windows Media Pl
 ## Como testar
 
 ### No celular (mais fácil)
-1. Gere o APK: com o Flutter instalado, rode `flutter build apk` nesta pasta. O arquivo sai em `build/app/outputs/flutter-apk/app-release.apk`. Copie esse arquivo para o celular e abra. O Android vai pedir para permitir "instalar apps desconhecidos".
+1. Baixe o APK mais recente: https://github.com/mattospedroa-maker/player-nostalgico/releases/latest/download/player-nostalgico.apk (cada mudança gera uma versão nova em *Releases*). Abra o arquivo no celular. O Android vai pedir para permitir "instalar apps desconhecidos".
 2. Na primeira abertura, toque em **Escolher pasta de músicas** e permita o **acesso a todos os arquivos** (necessário para ler e mover as músicas).
 
 ### No computador, durante o desenvolvimento
