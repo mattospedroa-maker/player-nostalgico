@@ -39,6 +39,17 @@ void main() {
     expect(wm.map((c) => c.url), ['https://u/A.gif', 'https://u/B.gif']);
   });
 
+  test('nekos.best: lê GIFs de anime e fica fora do download em massa', () {
+    final r = NekosBestProvider.parse({
+      'results': [
+        {'anime_name': 'Naruto', 'url': 'https://nekos.best/api/v2/hug/abc.gif', 'dimensions': {'width': 498, 'height': 280}}
+      ]
+    });
+    expect(r.single.url, 'https://nekos.best/api/v2/hug/abc.gif');
+    expect(r.single.credit, contains('Naruto'));
+    expect(NekosBestProvider(MockClient((_) async => http.Response('{}', 200))).allowBulk, isFalse);
+  });
+
   test('buscas: palavras extras, título+artista, artista, título, gênero', () {
     final t = Track(path: '/m/x.mp3', title: '01 - Numb', artist: 'Linkin Park', album: 'Meteora', genre: 'Rock', addedAt: 0, modifiedAt: 0);
     expect(GifFetcher.queriesFor(t, extras: ['rock lee vs gaara']),

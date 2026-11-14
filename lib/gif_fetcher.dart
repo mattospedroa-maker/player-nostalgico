@@ -29,7 +29,7 @@ class GifFetcher {
   final Set<int> _running = {};
 
   GifFetcher(this.gifs, {required this.client, List<GifProvider>? providers, this.maxBytes = 8 * 1024 * 1024, this.retryAfter = const Duration(days: 3)})
-      : providers = providers ?? [OpenverseProvider(client), WikimediaProvider(client)];
+      : providers = providers ?? [OpenverseProvider(client), WikimediaProvider(client), NekosBestProvider(client)];
 
   bool isFetching(Track t) => _running.contains(t.id);
 
@@ -88,7 +88,7 @@ class GifFetcher {
 
   /// Baixa GIFs até a música ter [maxGifsPerTrack] fixados. Retorna quantos baixou.
   /// Sem [force], não repete uma busca recente que não achou nada.
-  Future<int> fetchFor(Track t, {bool force = false}) async {
+  Future<int> fetchFor(Track t, {bool force = false, bool bulk = false}) async {
     final root = gifs.gifRoot;
     if (root == null || t.id == null || _running.contains(t.id)) return 0;
     final pinned = (await gifs.db.pinnedGifs(t.id!)).where((g) => File(g).existsSync()).toList();
@@ -106,7 +106,7 @@ class GifFetcher {
       final candidates = <GifCandidate>[];
       final seen = <String>{};
       for (final q in queriesFor(t, extras: gifs.extrasFor(t.artist, parseFileName(t.title).title))) {
-        for (final prov in providers) {
+        for (final prov in providers.where((pr) => !bulk || pr.allowBulk)) {
           try {
             for (final c in await prov.search(q, limit: 20)) {
               if (seen.add(c.url)) candidates.add(c);

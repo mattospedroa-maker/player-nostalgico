@@ -141,7 +141,7 @@ class AppState extends ChangeNotifier {
     try {
       for (var i = 0; i < list.length; i++) {
         if (_cancelBulk) break;
-        total += await gifFetcher.fetchFor(list[i]).catchError((_) => 0);
+        total += await gifFetcher.fetchFor(list[i], bulk: true).catchError((_) => 0);
         bulkGifProgress = (i + 1, list.length);
         notifyListeners();
       }

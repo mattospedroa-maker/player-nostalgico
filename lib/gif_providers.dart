@@ -12,13 +12,17 @@ class GifCandidate {
 
 abstract class GifProvider {
   String get name;
+
+  /// false = os termos da fonte proíbem download em massa; fica fora do "Baixar GIFs para todas".
+  bool get allowBulk => true;
+
   Future<List<GifCandidate>> search(String query, {int limit = 20});
 }
 
 const _ua = 'PlayerNostalgico/0.2 (app pessoal offline)';
 
 /// Openverse: acervo de imagens com licenças livres (permite baixar e guardar, com crédito).
-class OpenverseProvider implements GifProvider {
+class OpenverseProvider extends GifProvider {
   final http.Client client;
   OpenverseProvider(this.client);
 
@@ -55,7 +59,7 @@ class OpenverseProvider implements GifProvider {
 }
 
 /// Wikimedia Commons: arquivos livres; busca só GIFs.
-class WikimediaProvider implements GifProvider {
+class WikimediaProvider extends GifProvider {
   final http.Client client;
   WikimediaProvider(this.client);
 
@@ -98,4 +102,36 @@ class WikimediaProvider implements GifProvider {
     }
     return out;
   }
+}
+
+/// nekos.best: GIFs de anime (busca pelo nome do anime). Termos: só uso pessoal, sem download em massa,
+/// 7 buscas a cada 5 s. Por isso só é usada música a música, nunca no "Baixar para todas".
+class NekosBestProvider extends GifProvider {
+  final http.Client client;
+  final Duration minInterval;
+  DateTime _last = DateTime.fromMillisecondsSinceEpoch(0);
+  NekosBestProvider(this.client, {this.minInterval = const Duration(milliseconds: 800)});
+
+  @override
+  String get name => 'nekos.best';
+
+  @override
+  bool get allowBulk => false;
+
+  @override
+  Future<List<GifCandidate>> search(String query, {int limit = 20}) async {
+    final wait = minInterval - DateTime.now().difference(_last);
+    if (wait > Duration.zero) await Future<void>.delayed(wait);
+    _last = DateTime.now();
+    final uri = Uri.https('nekos.best', '/api/v2/search', {'query': query, 'type': '2', 'amount': '${limit.clamp(1, 20)}'});
+    final res = await client.get(uri, headers: {'User-Agent': 'PlayerNostalgico (app pessoal offline)'}).timeout(const Duration(seconds: 20));
+    if (res.statusCode != 200) return const [];
+    return parse(jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>);
+  }
+
+  static List<GifCandidate> parse(Map<String, dynamic> json) => [
+        for (final r in (json['results'] as List? ?? const []).cast<Map<String, dynamic>>())
+          if (r['url'] is String)
+            GifCandidate(url: r['url'] as String, source: 'nekos.best', credit: '${r['anime_name'] ?? 'anime'} · via nekos.best · ${r['url']}'),
+      ];
 }
