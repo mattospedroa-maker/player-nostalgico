@@ -1,6 +1,17 @@
 import 'gif_providers.dart';
 import 'visual_tags.dart';
 
+/// De onde vêm os GIFs da roda do Tocando agora.
+enum GifSource {
+  auto('Automático', 'Anime salvo intercalado com GIPHY (recomendado)'),
+  anime('Só anime', 'Só os GIFs de anime salvos; funciona sem internet'),
+  giphy('Preferir GIPHY', 'Mais GIFs do GIPHY; precisa de internet');
+
+  final String label;
+  final String hint;
+  const GifSource(this.label, this.hint);
+}
+
 /// Um GIF do GIPHY achado por um termo visual.
 class VisualResult {
   final GiphyGif gif;

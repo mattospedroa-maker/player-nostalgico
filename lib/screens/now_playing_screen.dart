@@ -16,8 +16,10 @@ import '../models.dart';
 import '../mood.dart';
 import '../player_service.dart';
 import '../theme.dart';
+import '../visual_search.dart';
 import '../widgets.dart';
 import 'edit_track_screen.dart';
+import 'gif_vibe_screen.dart';
 import 'gif_web_screen.dart';
 
 class NowPlayingScreen extends StatelessWidget {
@@ -225,12 +227,37 @@ class _GifCarouselState extends State<GifCarousel> {
   DateTime _shownAt = DateTime.now();
   late final GifService _gifService;
 
+  /// Miniatura leve de cada GIF do GIPHY (endereço do GIF -> endereço da miniatura).
+  final Map<String, String> _thumbOf = {};
+  int _epoch = 0;
+
   @override
   void initState() {
     super.initState();
-    _gifService = context.read<AppState>().gifs;
+    final app = context.read<AppState>();
+    _gifService = app.gifs;
+    _epoch = app.visualsEpoch;
     _gifService.addListener(_onGifsChanged);
     _load();
+  }
+
+  @override
+  void didUpdateWidget(GifCarousel old) {
+    super.didUpdateWidget(old);
+    // clima mudou: os GIFs do GIPHY mudam junto
+    if (old.track.mood != widget.track.mood) _load();
+  }
+
+  static bool _isWeb(String s) => s.startsWith('http');
+
+  /// Mostra um GIF salvo (arquivo) ou do GIPHY (internet).
+  Widget _image(String src, {Key? key, int? cacheWidth, bool thumb = false}) {
+    Widget err(BuildContext _, Object _, StackTrace? _) => const ColoredBox(color: Colors.black26);
+    if (_isWeb(src)) {
+      return Image.network(thumb ? (_thumbOf[src] ?? src) : src,
+          key: key, fit: BoxFit.cover, gaplessPlayback: true, cacheWidth: cacheWidth, errorBuilder: err);
+    }
+    return Image.file(File(src), key: key, fit: BoxFit.cover, gaplessPlayback: true, cacheWidth: cacheWidth, errorBuilder: err);
   }
 
   int _lastCount = -1;
@@ -257,8 +284,37 @@ class _GifCarouselState extends State<GifCarousel> {
       _shownAt = DateTime.now();
     });
     app.nowShowingGif(widget.track, gifs.isEmpty ? null : gifs.first);
+    _restartTimer();
+    _addWeb(gifs);
+  }
+
+  /// Junta os GIFs do GIPHY (em segundo plano) aos salvos, conforme a fonte escolhida.
+  Future<void> _addWeb(List<String> local) async {
+    final app = context.read<AppState>();
+    final track = widget.track;
+    final web = await app.playerVisualsFor(track);
+    if (!mounted || web.isEmpty || track.id != widget.track.id) return;
+    for (final r in web) {
+      _thumbOf[r.gif.url] = r.gif.previewUrl;
+    }
+    final urls = [for (final r in web) r.gif.url];
+    final merged = switch (app.gifSource) {
+      GifSource.anime => local,
+      GifSource.giphy => interleave([urls, local]),
+      GifSource.auto => interleave([local, urls]), // anime primeiro, depois alterna
+    };
+    final showing = _gifs.isEmpty ? null : _gifs[_i];
+    setState(() {
+      _gifs = merged;
+      final k = showing == null ? -1 : merged.indexOf(showing);
+      _i = k < 0 ? 0 : k;
+    });
+    _restartTimer();
+  }
+
+  void _restartTimer() {
     _timer?.cancel();
-    if (gifs.length > 1) {
+    if (_gifs.length > 1) {
       _timer = Timer.periodic(const Duration(milliseconds: 250), (_) {
         if (!mounted) return;
         if (DateTime.now().difference(_shownAt) >= interval) {
@@ -290,6 +346,12 @@ class _GifCarouselState extends State<GifCarousel> {
     final elapsed = DateTime.now().difference(_shownAt).inMilliseconds / interval.inMilliseconds;
     final remaining = (interval.inSeconds - DateTime.now().difference(_shownAt).inSeconds).clamp(0, interval.inSeconds);
     final app = context.read<AppState>();
+    final epoch = context.select<AppState, int>((a) => a.visualsEpoch);
+    if (epoch != _epoch) {
+      // chave ou fonte do GIPHY mudou
+      _epoch = epoch;
+      WidgetsBinding.instance.addPostFrameCallback((_) => mounted ? _load() : null);
+    }
     final fetching = app.gifFetcher.isFetching(widget.track);
     return Column(children: [
       GestureDetector(
@@ -305,7 +367,7 @@ class _GifCarouselState extends State<GifCarousel> {
             if (_gifs.isNotEmpty)
               AnimatedSwitcher(
                 duration: const Duration(milliseconds: 350),
-                child: Image.file(File(_gifs[_i]), key: ValueKey(_gifs[_i]), fit: BoxFit.cover, gaplessPlayback: true),
+                child: _image(_gifs[_i], key: ValueKey(_gifs[_i])),
               )
             else if (_cover != null)
               Image.memory(_cover!, fit: BoxFit.cover)
@@ -330,6 +392,16 @@ class _GifCarouselState extends State<GifCarousel> {
                   color: Colors.black54,
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   child: const Text('Baixando GIFs...', style: TextStyle(color: Colors.white, fontSize: 11)),
+                ),
+              ),
+            if (_gifs.isNotEmpty && _isWeb(_gifs[_i]))
+              Positioned(
+                left: 6,
+                bottom: 6,
+                child: Container(
+                  color: Colors.black54,
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  child: const Text('via GIPHY', style: TextStyle(color: Colors.white, fontSize: 10)),
                 ),
               ),
             if (_gifs.length > 1)
@@ -363,7 +435,7 @@ class _GifCarouselState extends State<GifCarousel> {
                   child: Container(
                     width: on ? 62 : 54,
                     decoration: BoxDecoration(border: Border.all(color: on ? Xp.navy : const Color(0xFF7A96C9), width: on ? 2 : 1)),
-                    child: Image.file(File(_gifs[k]), fit: BoxFit.cover, cacheWidth: 120, errorBuilder: (_, _, _) => const ColoredBox(color: Colors.black26)),
+                    child: _image(_gifs[k], cacheWidth: 120, thumb: true),
                   ),
                 ),
               );
@@ -463,6 +535,21 @@ Future<void> showGifManager(BuildContext context, Track t) async {
                       },
                     ),
                   ]),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 2, 10, 2),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: XpButton(
+                      label: 'GIFs pela vibe da música',
+                      icon: Icons.music_note,
+                      onTap: () async {
+                        await saveExtras();
+                        await nav.push(MaterialPageRoute<void>(builder: (_) => GifVibeScreen(track: t)));
+                        setSt(() {});
+                      },
+                    ),
+                  ),
                 ),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),

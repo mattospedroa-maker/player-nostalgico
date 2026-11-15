@@ -17,10 +17,12 @@ import 'gif_service.dart';
 import 'library_scanner.dart';
 import 'metadata.dart';
 import 'models.dart';
+import 'gif_providers.dart';
 import 'mood.dart';
 import 'organizer.dart';
 import 'player_service.dart';
 import 'recommender.dart';
+import 'visual_search.dart';
 
 /// Estado central do app: pasta-fonte, biblioteca, playlists e serviços.
 /// Suba quando a leitura de nomes/tags mudar, para reler a biblioteca toda.
@@ -52,6 +54,44 @@ class AppState extends ChangeNotifier {
     // a música que está tocando já ganha os GIFs pelas tags
     final t = player.current == null ? null : byId(player.current!.id);
     if (t != null && autoGifs) unawaited(gifFetcher.fetchFor(t).catchError((_) => 0));
+  }
+
+  /// Chave da API do GIPHY (só no celular). Vazia = sem GIPHY, só anime.
+  String get giphyKey => prefs.getString('giphyKey') ?? '';
+  Future<void> setGiphyKey(String v) async {
+    await prefs.setString('giphyKey', v.trim());
+    _playerVisuals.clear();
+    visualsEpoch++;
+    notifyListeners();
+  }
+
+  /// De onde vêm os GIFs da roda do Tocando agora. Padrão: automático (anime + GIPHY intercalados).
+  GifSource get gifSource => GifSource.values.asNameMap()[prefs.getString('gifSource')] ?? GifSource.auto;
+  Future<void> setGifSource(GifSource v) async {
+    await prefs.setString('gifSource', v.name);
+    visualsEpoch++;
+    notifyListeners();
+  }
+
+  /// Muda quando a chave/fonte muda, para a roda de GIFs recarregar.
+  int visualsEpoch = 0;
+
+  GiphyProvider get giphy => GiphyProvider(gifFetcher.client, giphyKey);
+
+  /// GIFs do GIPHY para a roda (passam da internet, não são salvos). Guardados só na memória, por música e clima.
+  final Map<String, List<VisualResult>> _playerVisuals = {};
+  Future<List<VisualResult>> playerVisualsFor(Track t) async {
+    if (gifSource == GifSource.anime || giphyKey.isEmpty || t.id == null) return const [];
+    final key = '${t.id}|${t.mood}';
+    final cached = _playerVisuals[key];
+    if (cached != null) return cached;
+    try {
+      final plan = await gifFetcher.visualPlanFor(t);
+      final picks = await PlayerVisuals(giphy).pick(plan, count: gifSource == GifSource.giphy ? 9 : 5);
+      return _playerVisuals[key] = picks;
+    } catch (_) {
+      return const []; // sem internet ou chave ruim: a roda fica só com os de anime
+    }
   }
 
   /// Download em massa ("Baixar GIFs para todas"): progresso feito/total, null = parado.
@@ -294,6 +334,7 @@ class AppState extends ChangeNotifier {
   /// O carrossel avisa qual GIF está passando; ele vira a arte da notificação e da tela de bloqueio.
   Future<void> nowShowingGif(Track t, String? gif) async {
     if (player.current?.id != t.id) return;
+    if (gif != null && gif.startsWith('http')) return; // GIF do GIPHY (não salvo): mantém a arte anterior
     // sem GIF: usa a capa do álbum
     await player.handler?.setArtwork(t.path, gif ?? covers.fileFor(t)?.path, cacheDir: dataDir);
   }
