@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'gif_providers.dart';
 import 'visual_tags.dart';
 
@@ -32,7 +34,11 @@ class TermPager {
   bool _animeDone = false, _generalDone = false;
   final Set<String> _seen = {};
 
-  TermPager(this.giphy, this.term);
+  /// [startOffset]: começa mais adiante nos resultados (cada música pega uma parte diferente da lista).
+  TermPager(this.giphy, this.term, {int startOffset = 0}) {
+    _animeOffset = startOffset;
+    _generalOffset = startOffset;
+  }
 
   bool get done => _animeDone && _generalDone;
 
@@ -77,14 +83,24 @@ class PlayerVisuals {
   final GiphyProvider giphy;
   PlayerVisuals(this.giphy);
 
-  Future<List<VisualResult>> pick(VisualPlan plan, {int count = 5, int terms = 3}) async {
-    final top = plan.top(terms);
-    if (top.isEmpty) return const [];
+  /// [rnd]: sorteio próprio da música (músicas do mesmo álbum têm tags parecidas; assim cada uma
+  /// pega termos e trechos diferentes dos resultados). [avoid]: GIFs já usados por músicas do mesmo álbum/artista.
+  Future<List<VisualResult>> pick(VisualPlan plan, {int count = 5, int terms = 3, Random? rnd, Set<String> avoid = const {}}) async {
+    final r = rnd ?? Random();
+    // o termo principal fica; os outros são sorteados entre os seguintes
+    final pool = plan.top(terms * 2);
+    if (pool.isEmpty) return const [];
+    final rest = pool.sublist(1)..shuffle(r);
+    final top = [pool.first, ...rest].take(terms).toList();
     final per = (count / top.length).ceil();
     final lists = <List<VisualResult>>[];
     for (final q in top) {
       try {
-        lists.add(await TermPager(giphy, q).next(count: per));
+        // começa num trecho sorteado dos resultados e pede o dobro, para pular os repetidos
+        final pager = TermPager(giphy, q, startOffset: r.nextInt(4) * per * 2);
+        var page = (await pager.next(count: per * 2)).where((x) => !avoid.contains(x.gif.id)).toList();
+        if (page.isEmpty) page = await TermPager(giphy, q).next(count: per); // trecho vazio: volta para o começo
+        lists.add(page.take(per).toList());
       } on GiphyException catch (e) {
         if (e.error == GiphyError.noKey || e.error == GiphyError.invalidKey) rethrow;
         lists.add(const []);
@@ -92,7 +108,7 @@ class PlayerVisuals {
     }
     // um de cada termo por vez, para variar
     final seen = <String>{};
-    return interleave(lists).where((r) => seen.add(r.gif.id)).take(count).toList();
+    return interleave(lists).where((x) => seen.add(x.gif.id)).take(count).toList();
   }
 }
 

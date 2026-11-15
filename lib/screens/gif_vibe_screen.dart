@@ -235,6 +235,7 @@ class _GifVibeScreenState extends State<GifVibeScreen> {
                         _info('Tags do Last.fm: ${tags.tags.take(6).map((x) => x.name).join(', ')}')
                       else if (tags != null)
                         _warn('${tags.status.message}: usando nome, artista e gênero da música.'),
+                      if (plan != null && plan.clipScenes.isNotEmpty) _info('Do clipe (Wikipédia): ${plan.clipScenes.take(5).join(', ')}'),
                       if (t.chosenMood != null) _info('Clima escolhido: ${t.chosenMood!.emoji} ${t.chosenMood!.label} (vale mais que as tags)'),
                       if (_errorText != null) _warn(_errorText!),
                       if (_groups.length > 1)

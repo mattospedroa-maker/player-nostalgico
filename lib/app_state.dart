@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 import 'package:flutter/foundation.dart';
@@ -90,7 +91,7 @@ class AppState extends ChangeNotifier {
 
   Future<List<VisualResult>> playerVisualsFor(Track t) {
     if (gifSource == GifSource.anime || giphyKey.isEmpty || t.id == null) return Future.value(const []);
-    final key = '${t.id}|${t.mood}|${gifSource.name}';
+    final key = '${t.id}|${t.mood}|${gifSource.name}|v2'; // v2: sorteio por música (menos repetição no álbum)
     final cached = _playerVisuals[key] ?? _readVisualsDisk(key);
     if (cached != null) return Future.value(_playerVisuals[key] = cached);
     // falhou há pouco (ex.: limite do GIPHY): espera um pouco antes de tentar de novo
@@ -100,7 +101,8 @@ class AppState extends ChangeNotifier {
     return _visualsInFlight[key] ??= () async {
       try {
         final plan = await gifFetcher.visualPlanFor(t);
-        final picks = await PlayerVisuals(giphy).pick(plan, count: gifSource == GifSource.giphy ? 9 : 5);
+        final picks = await PlayerVisuals(giphy).pick(plan,
+            count: gifSource == GifSource.giphy ? 9 : 5, rnd: Random(Object.hash(t.path, t.mood)), avoid: _visualsUsedNear(t));
         if (picks.isEmpty) {
           _visualsFailedAt[key] = DateTime.now();
         } else {
@@ -115,6 +117,23 @@ class AppState extends ChangeNotifier {
         unawaited(Future<void>(() => _visualsInFlight.remove(key)));
       }
     }();
+  }
+
+  /// GIFs do GIPHY que outras músicas do mesmo álbum (ou artista) já mostram, para não repetir.
+  Set<String> _visualsUsedNear(Track t) {
+    final out = <String>{};
+    final sameAlbum = t.album.isNotEmpty && t.album != unknownAlbum;
+    for (final MapEntry(key: k, value: e) in _visualsMap.entries) {
+      if (!k.endsWith('|v2')) continue;
+      final other = byId(int.tryParse(k.split('|').first));
+      if (other == null || other.id == t.id || e is! Map) continue;
+      final near = sameAlbum ? other.album == t.album && other.artist == t.artist : other.artist == t.artist;
+      if (!near) continue;
+      for (final m in (e['items'] as List? ?? const [])) {
+        if (m is Map) out.add('${m['id']}');
+      }
+    }
+    return out;
   }
 
   File get _visualsFile => File(p.join(dataDir, 'giphy_roda.json'));

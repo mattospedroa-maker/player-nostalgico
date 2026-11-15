@@ -11,7 +11,11 @@ class VisualTag {
   final List<String> queries;
   final List<String> anime;
   final double weight;
-  const VisualTag(this.key, this.label, {this.aliases = const [], required this.queries, this.anime = const [], this.weight = 1.0});
+
+  /// true = cena de videoclipe (procurada no texto do clipe na Wikipédia, não nas tags).
+  final bool scene;
+  const VisualTag(this.key, this.label,
+      {this.aliases = const [], required this.queries, this.anime = const [], this.weight = 1.0, this.scene = false});
 }
 
 /// Dicionário de correspondências. Para expandir, é só acrescentar uma entrada.
@@ -136,6 +140,31 @@ const visualTags = <VisualTag>[
       anime: ['sleep', 'think', 'smile'],
       weight: 0.7),
 
+  // ---------- cenas de videoclipe (lidas na seção "Music video" da Wikipédia) ----------
+  VisualTag('desert', 'Deserto', scene: true, aliases: ['deserts', 'dunes', 'sand'], queries: ['desert scenery', 'desert wind sand', 'desert sunset']),
+  VisualTag('rain', 'Chuva', scene: true, aliases: ['raining', 'rainy', 'storm', 'thunderstorm'], queries: ['rain scenery', 'rain window night', 'storm lightning'], anime: ['cry', 'stare']),
+  VisualTag('snow', 'Neve', scene: true, aliases: ['snowy', 'winter', 'ice', 'frozen', 'blizzard'], queries: ['snow falling scenery', 'winter night snow', 'frozen landscape']),
+  VisualTag('ocean', 'Mar', scene: true, aliases: ['sea', 'beach', 'waves', 'shore', 'underwater', 'island'], queries: ['ocean waves', 'beach sunset', 'underwater scenery']),
+  VisualTag('space', 'Espaço', scene: true, aliases: ['outer space', 'astronaut', 'astronauts', 'planet', 'stars', 'galaxy', 'spaceship', 'moon'], queries: ['space galaxy', 'astronaut floating', 'starry sky']),
+  VisualTag('war', 'Guerra', scene: true, aliases: ['soldier', 'soldiers', 'battle', 'battlefield', 'army', 'bombing', 'military', 'trenches'], queries: ['war battlefield', 'soldiers marching', 'battle explosion'], anime: ['shoot', 'punch', 'run']),
+  VisualTag('apocalypse', 'Apocalipse', scene: true, aliases: ['apocalyptic', 'post apocalyptic', 'ruins', 'ruined', 'wasteland', 'destroyed', 'destruction', 'end of the world'], queries: ['apocalyptic scenery', 'ruined city', 'wasteland']),
+  VisualTag('city', 'Cidade', scene: true, aliases: ['city', 'streets', 'street', 'downtown', 'skyscrapers', 'rooftop', 'urban'], queries: ['city night lights', 'city street rain night', 'rooftop city view']),
+  VisualTag('forest', 'Floresta', scene: true, aliases: ['forest', 'woods', 'jungle', 'trees'], queries: ['forest scenery', 'misty forest', 'forest sunlight']),
+  VisualTag('fire', 'Fogo', scene: true, aliases: ['fire', 'flames', 'burning', 'burns', 'pyrotechnics', 'explosion', 'explosions'], queries: ['fire flames', 'burning aesthetic', 'pyrotechnics concert'], anime: ['angry', 'punch']),
+  VisualTag('car', 'Estrada', scene: true, aliases: ['car', 'cars', 'driving', 'road', 'highway', 'motorcycle', 'race'], queries: ['night drive aesthetic', 'highway at night', 'car racing']),
+  VisualTag('time', 'Tempo', scene: true, aliases: ['clock', 'clocks', 'hourglass', 'slow motion', 'frozen in time', 'aging', 'old age', 'elderly'], queries: ['clock time passing', 'hourglass sand', 'time lapse sky'], anime: ['stare', 'think']),
+  VisualTag('school', 'Escola', scene: true, aliases: ['school', 'classroom', 'students', 'high school', 'college'], queries: ['school classroom', 'school hallway', 'students'], anime: ['laugh', 'wave', 'happy']),
+  VisualTag('church', 'Igreja', scene: true, aliases: ['church', 'cathedral', 'priest', 'nun', 'altar', 'religious'], queries: ['cathedral interior', 'church candles', 'gothic cathedral']),
+  VisualTag('grave', 'Funeral', scene: true, aliases: ['funeral', 'cemetery', 'graveyard', 'coffin', 'death', 'dead', 'dying'], queries: ['cemetery fog', 'funeral rain', 'graveyard night'], anime: ['cry', 'hug']),
+  VisualTag('horror', 'Terror', scene: true, aliases: ['zombie', 'zombies', 'vampire', 'vampires', 'ghost', 'ghosts', 'monster', 'monsters', 'demon', 'horror'], queries: ['horror aesthetic', 'zombie', 'creepy ghost'], anime: ['lurk', 'stare']),
+  VisualTag('robot', 'Robôs', scene: true, aliases: ['robot', 'robots', 'android', 'cyborg', 'mech', 'machine', 'machines', 'futuristic'], queries: ['robot', 'cyberpunk city', 'mecha']),
+  VisualTag('club', 'Balada', scene: true, aliases: ['nightclub', 'club', 'disco', 'dancers', 'dancing', 'dance floor', 'party'], queries: ['nightclub dancing', 'disco ball', 'dance floor lights'], anime: ['dance', 'clap']),
+  VisualTag('stage', 'Show', scene: true, aliases: ['concert', 'stage', 'performing', 'performance', 'performs', 'live footage', 'audience', 'crowd'], queries: ['concert crowd lights', 'band on stage', 'stage lights'], anime: ['thumbsup', 'highfive']),
+  VisualTag('mountain', 'Montanhas', scene: true, aliases: ['mountain', 'mountains', 'cliff', 'cliffs', 'valley'], queries: ['mountain scenery', 'cliff edge view', 'mountain clouds']),
+  VisualTag('wedding', 'Casamento', scene: true, aliases: ['wedding', 'bride', 'groom', 'marriage'], queries: ['wedding romantic', 'bride veil wind'], anime: ['kiss', 'handhold']),
+  VisualTag('prison', 'Prisão', scene: true, aliases: ['prison', 'jail', 'prisoner', 'prisoners', 'cell', 'chains', 'escape'], queries: ['prison escape', 'prison cell dark']),
+  VisualTag('sunset', 'Pôr do sol', scene: true, aliases: ['sunset', 'sunrise', 'dawn', 'dusk', 'golden hour'], queries: ['sunset sky', 'golden hour aesthetic']),
+
   // ---------- pouco visuais (só ajudam um pouco) ----------
   VisualTag('german', 'Alemão',
       aliases: ['german', 'deutsch', 'germany'],
@@ -181,7 +210,10 @@ class VisualPlan {
   /// true = veio do Last.fm; false = alternativa básica (nome, artista, gênero).
   final bool fromTags;
 
-  const VisualPlan({required this.all, required this.anime, required this.matchedTags, required this.fromTags});
+  /// Cenas do videoclipe que entraram nas pesquisas (rótulos, ex.: "Deserto").
+  final List<String> clipScenes;
+
+  const VisualPlan({required this.all, required this.anime, required this.matchedTags, required this.fromTags, this.clipScenes = const []});
 
   /// As primeiras [limit] pesquisas (para não fazer consultas demais).
   List<VisualQuery> top([int limit = VisualTagMapper.maxQueries]) => all.take(limit).toList();
@@ -206,8 +238,9 @@ class VisualTagMapper {
 
   final List<VisualTag> dictionary;
   late final Map<String, VisualTag> _exact = {
-    for (final e in dictionary) ...{for (final a in [e.key, ...e.aliases]) normalize(a): e},
+    for (final e in dictionary.where((e) => !e.scene)) ...{for (final a in [e.key, ...e.aliases]) normalize(a): e},
   };
+  late final Map<String, VisualTag> _scenes = {for (final e in dictionary.where((e) => e.scene)) e.key: e};
 
   VisualTagMapper([this.dictionary = visualTags]);
 
@@ -223,7 +256,8 @@ class VisualTagMapper {
   }
 
   /// Quanto cada entrada do dicionário vale para essas tags.
-  Map<VisualTag, double> scoreEntries(List<MusicTag> tags, {Mood? mood, List<String>? matched}) {
+  /// [scenes]: cenas do videoclipe (chave -> vezes citada no texto); valem como uma tag forte.
+  Map<VisualTag, double> scoreEntries(List<MusicTag> tags, {Mood? mood, List<String>? matched, Map<String, int> scenes = const {}}) {
     final scores = <VisualTag, double>{};
     void add(VisualTag e, double v) => scores[e] = (scores[e] ?? 0) + v;
     final maxCount = tags.fold<int>(1, (m, t) => t.count > m ? t.count : m);
@@ -247,6 +281,12 @@ class VisualTagMapper {
       }
       if (hit) matched?.add(tag.name);
     }
+    final maxScene = scenes.values.fold<int>(1, (m, n) => n > m ? n : m);
+    for (final MapEntry(key: k, value: n) in scenes.entries) {
+      final e = _scenes[k];
+      // o clipe é bem específico da música: pesa um pouco mais que uma tag
+      if (e != null) add(e, 1.1 * (0.5 + 0.5 * n / maxScene) * e.weight);
+    }
     final m = mood == null ? null : dictionary.where((e) => e.key == _moodEntry[mood]).firstOrNull;
     if (m != null) {
       // clima escolhido à mão: fica à frente de qualquer tag
@@ -257,10 +297,15 @@ class VisualTagMapper {
   }
 
   /// Tags -> plano. Sem tags (ou nenhuma conhecida), usa a alternativa básica.
-  VisualPlan convert(List<MusicTag> tags, {Mood? mood, String title = '', String artist = '', String genre = ''}) {
+  VisualPlan convert(List<MusicTag> tags,
+      {Mood? mood, String title = '', String artist = '', String genre = '', Map<String, int> scenes = const {}}) {
     final matched = <String>[];
-    final scores = scoreEntries(tags, mood: mood, matched: matched);
-    if (scores.isEmpty) return fallback(title: title, artist: artist, genre: genre, mood: mood);
+    final hasTagMatch = scoreEntries(tags, matched: []).isNotEmpty;
+    final scores = scoreEntries(tags, mood: mood, matched: matched, scenes: scenes);
+    // sem tags conhecidas: alternativa básica (que ainda usa o clipe e o clima)
+    if (!hasTagMatch && tags.isNotEmpty || scores.isEmpty) {
+      return fallback(title: title, artist: artist, genre: genre, mood: mood, scenes: scenes);
+    }
 
     final qScore = <String, double>{};
     final qGroup = <String, String>{};
@@ -285,15 +330,20 @@ class VisualTagMapper {
     }
     final all = [for (final k in qScore.keys) VisualQuery(k, qGroup[k]!, qScore[k]!)]..sort((a, b) => b.score.compareTo(a.score));
     final anime = (aScore.keys.toList()..sort((a, b) => aScore[b]!.compareTo(aScore[a]!))).take(maxAnime).toList();
-    return VisualPlan(all: all, anime: anime, matchedTags: matched, fromTags: tags.isNotEmpty);
+    return VisualPlan(all: all, anime: anime, matchedTags: matched, fromTags: tags.isNotEmpty, clipScenes: _labels(scenes));
+  }
+
+  List<String> _labels(Map<String, int> scenes) {
+    final keys = scenes.keys.where(_scenes.containsKey).toList()..sort((a, b) => scenes[b]!.compareTo(scenes[a]!));
+    return [for (final k in keys) _scenes[k]!.label];
   }
 
   /// Alternativa quando o Last.fm não ajuda: nome da música, artista e o que o app já sabe (gênero, clima).
-  VisualPlan fallback({String title = '', String artist = '', String genre = '', Mood? mood}) {
+  VisualPlan fallback({String title = '', String artist = '', String genre = '', Mood? mood, Map<String, int> scenes = const {}}) {
     final fromInfo = <MusicTag>[
       if (genre.trim().isNotEmpty && normalize(genre) != 'desconhecido') MusicTag(genre, 100),
     ];
-    final scored = fromInfo.isEmpty && mood == null ? null : convert(fromInfo, mood: mood);
+    final scored = fromInfo.isEmpty && mood == null && scenes.isEmpty ? null : _convertInfo(fromInfo, mood, scenes);
     final basic = <VisualQuery>[
       if (title.trim().isNotEmpty && artist.trim().isNotEmpty) VisualQuery('$title $artist', 'Música', 0.5),
       if (title.trim().isNotEmpty) VisualQuery('$title anime', 'Música', 0.4),
@@ -301,6 +351,13 @@ class VisualTagMapper {
     ];
     final seen = <String>{};
     final all = [...?scored?.all, ...basic].where((q) => seen.add(normalize(q.text))).toList();
-    return VisualPlan(all: all, anime: scored?.anime ?? const [], matchedTags: const [], fromTags: false);
+    return VisualPlan(all: all, anime: scored?.anime ?? const [], matchedTags: const [], fromTags: false, clipScenes: _labels(scenes));
+  }
+
+  /// Gênero do app + clipe + clima, sem cair de novo na alternativa (evita voltar para cá).
+  VisualPlan? _convertInfo(List<MusicTag> info, Mood? mood, Map<String, int> scenes) {
+    final scores = scoreEntries(info, mood: mood, scenes: scenes);
+    if (scores.isEmpty) return null;
+    return convert(info.where((t) => scoreEntries([t]).isNotEmpty).toList(), mood: mood, scenes: scenes);
   }
 }

@@ -7,6 +7,7 @@ import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 
+import 'clip_info.dart';
 import 'filename_parser.dart';
 import 'gif_providers.dart';
 import 'gif_service.dart';
@@ -42,6 +43,14 @@ class GifFetcher {
   final Map<int?, TagStatus> tagStatus = {};
   TagCache? _tagCache;
   String? _tagCacheRoot;
+  ClipCache? _clipCache;
+
+  /// Ler o clipe na Wikipédia (desligável nos testes).
+  bool useClipInfo = true;
+
+  /// Última situação do clipe por música (para mostrar "Do clipe: ...").
+  final Map<int?, ClipInfo?> clipInfo = {};
+  final Map<String, DateTime> _clipFailedAt = {};
 
   GifFetcher(this.gifs, {required this.client, List<GifProvider>? providers, this.maxBytes = 8 * 1024 * 1024, this.retryAfter = const Duration(days: 3)})
       : providers = providers ?? [NekosBestProvider(client)]; // só GIFs de anime (pedido do usuário)
@@ -150,12 +159,36 @@ class GifFetcher {
     return r;
   }
 
-  /// Pesquisas visuais da música: tags do Last.fm -> dicionário; sem tags, a alternativa básica.
-  /// O clima escolhido no selo pesa mais que as tags.
+  /// Cenas do videoclipe pela Wikipédia, com cache em `GIFs/.clipes.json`. Nunca lança erro.
+  Future<ClipInfo?> clipFor(Track t) async {
+    if (!useClipInfo) return null;
+    final (title, artist) = _names(t);
+    final root = gifs.gifRoot;
+    if (root != null) _clipCache ??= ClipCache(File(p.join(root, '.clipes.json')));
+    final (hit, cached) = _clipCache?.get(artist, title) ?? (false, null);
+    if (hit) return clipInfo[t.id] = cached;
+    // sem internet há pouco: não tenta de novo agora
+    final failed = _clipFailedAt[ClipCache.keyFor(artist, title)];
+    if (failed != null && DateTime.now().difference(failed) < const Duration(minutes: 10)) return null;
+    final c = ClipInfoClient(client);
+    ClipInfo? info;
+    try {
+      info = await c.lookup(artist, title);
+    } catch (_) {
+      return null;
+    }
+    _clipCache?.put(artist, title, info, reached: c.reached);
+    if (!c.reached) _clipFailedAt[ClipCache.keyFor(artist, title)] = DateTime.now();
+    return clipInfo[t.id] = info;
+  }
+
+  /// Pesquisas visuais da música: tags do Last.fm + cenas do clipe -> dicionário; sem nada, a alternativa básica.
+  /// O clima escolhido no selo pesa mais que tudo.
   Future<VisualPlan> visualPlanFor(Track t) async {
     final (title, artist) = _names(t);
     final r = await tagsFor(t);
-    return mapper.convert(r.tags, mood: t.chosenMood, title: title, artist: artist, genre: t.genre);
+    final clip = await clipFor(t);
+    return mapper.convert(r.tags, mood: t.chosenMood, title: title, artist: artist, genre: t.genre, scenes: clip?.scenes ?? const {});
   }
 
   /// Texto pronto para a busca na web (inclui as palavras extras).
@@ -206,7 +239,7 @@ class GifFetcher {
   }
 
   /// Versão da regra de escolha. Músicas buscadas com uma regra antiga são refeitas.
-  static const planVersion = 3;
+  static const planVersion = 4; // 4: varia os GIFs entre músicas do mesmo álbum
 
   /// Nomes dos arquivos baixados automaticamente (hash do conteúdo).
   static final _autoName = RegExp(r'^[0-9a-f]{12}\.gif$');
@@ -282,10 +315,19 @@ class GifFetcher {
       if (nekos != null && plan.moods.isNotEmpty) {
         final cats = List.of(plan.moods);
         // das tags já vêm em ordem de importância; do gênero/clima, sorteia
-        if (tagAnime.isEmpty || t.chosenMood != null) cats.shuffle(rnd);
+        if (tagAnime.isEmpty || t.chosenMood != null) {
+          cats.shuffle(rnd);
+        } else if (cats.length > 2) {
+          // mantém a categoria principal e sorteia as outras por música, para o álbum não ficar todo igual
+          final rest = cats.sublist(1)..shuffle(rnd);
+          cats
+            ..removeRange(1, cats.length)
+            ..addAll(rest);
+        }
         for (final cat in cats.take(4)) {
           try {
-            for (final c in await nekos.random(cat, amount: 3)) {
+            // pede mais do que precisa: sobra para pular os que outras músicas já usam
+            for (final c in await nekos.random(cat, amount: 5)) {
               if (seenUrls.add(c.url)) animeC.add(c);
             }
           } catch (_) {}
@@ -299,6 +341,8 @@ class GifFetcher {
       final index = _readIndex();
       final credits = <String>[];
       var slot = 0;
+      // GIFs que outras músicas já usam: ficam para o fim (só entram se faltar GIF novo)
+      final reuse = <String>[];
       while (saved < need && buckets.any((b) => b.isNotEmpty)) {
         final want = slotOrder[(pinned.length + slot) % slotOrder.length];
         slot++;
@@ -309,7 +353,12 @@ class GifFetcher {
           // 1) mesmo endereço já baixado para outra música: usa o mesmo arquivo, sem baixar
           final known = index[c.url] as String?;
           if (known != null && File(known).existsSync()) {
-            if (!have.add(p.basenameWithoutExtension(known))) continue;
+            if (have.contains(p.basenameWithoutExtension(known))) continue;
+            if (await gifs.db.gifUsers(known) > 0) {
+              reuse.add(known);
+              continue;
+            }
+            have.add(p.basenameWithoutExtension(known));
             await gifs.db.pinGif(t.id!, known);
             saved++;
             break;
@@ -320,6 +369,13 @@ class GifFetcher {
           if (!have.add(hash)) continue; // mesmo GIF vindo de outro endereço
           // 2) mesmo conteúdo já guardado (por outra música): aponta para ele, não grava de novo
           var target = gifs.findByName('$hash.gif');
+          if (target != null && await gifs.db.gifUsers(target) > 0) {
+            // outra música já tem esse GIF: guarda para o fim
+            have.remove(hash);
+            index[c.url] = target;
+            reuse.add(target);
+            continue;
+          }
           if (target == null) {
             target = p.join(dest.path, '$hash.gif');
             await dest.create(recursive: true);
@@ -332,6 +388,12 @@ class GifFetcher {
           saved++;
           break;
         }
+      }
+      for (final g in reuse) {
+        if (saved >= need) break;
+        if (!have.add(p.basenameWithoutExtension(g))) continue;
+        await gifs.db.pinGif(t.id!, g);
+        saved++;
       }
       if (credits.isNotEmpty) {
         await File(p.join(dest.path, 'creditos.txt')).writeAsString('${credits.join('\n')}\n', mode: FileMode.append);
