@@ -133,7 +133,7 @@ void main() {
 
   test('mix automático: mesmo artista ou mesma vibe, sem repetir a atual', () {
     var id = 0;
-    Track tr(String a, String g) => Track(id: ++id, path: '/${id}', title: 't$id', artist: a, album: 'x$id', genre: g, addedAt: 0, modifiedAt: 0);
+    Track tr(String a, String g) => Track(id: ++id, path: '/$id', title: 't$id', artist: a, album: 'x$id', genre: g, addedAt: 0, modifiedAt: 0);
     final seed = tr('Rammstein', 'Industrial Metal');
     final lib = [
       seed,

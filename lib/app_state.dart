@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'db.dart';
 import 'audio_handler.dart';
+import 'cover_service.dart';
 import 'gif_fetcher.dart';
 import 'gif_service.dart';
 import 'library_scanner.dart';
@@ -31,6 +32,7 @@ class AppState extends ChangeNotifier {
   final GifService gifs;
   final MetadataReader metadata = const FileMetadataReader();
   final String dataDir;
+  late final CoverService covers = CoverService(dataDir, metadata);
   late final GifFetcher gifFetcher = GifFetcher(gifs, client: http.Client());
   int? _lastAutoFetchId;
 
@@ -129,9 +131,22 @@ class AppState extends ChangeNotifier {
   /// Primeiro descobre os gêneros que faltam (a regra dos GIFs usa o gênero), depois baixa os GIFs das novas.
   Future<void> _afterScan(List<Track> added) async {
     await fillMissingGenres().catchError((_) => 0);
+    unawaited(fetchMissingCovers().catchError((_) => 0));
     if (added.isEmpty || !autoGifs) return;
     final ids = added.map((t) => t.id).toSet();
     await fetchGifsForAll(only: tracks.where((t) => ids.contains(t.id)).toList());
+  }
+
+  /// Capas de álbum que faltam (Cover Art Archive), uma vez por álbum.
+  Future<int> fetchMissingCovers() async {
+    while (fillingGenres) {
+      await Future<void>.delayed(const Duration(seconds: 2)); // o MusicBrainz aceita 1 pedido por segundo
+    }
+    final tried = (prefs.getStringList('coverTried') ?? const []).toSet();
+    final n = await covers.fetchMissing(tracks, tried, onEach: notifyListeners);
+    await prefs.setStringList('coverTried', tried.toList());
+    if (n > 0) notifyListeners();
+    return n;
   }
 
   bool fillingGenres = false;
@@ -268,7 +283,8 @@ class AppState extends ChangeNotifier {
   /// O carrossel avisa qual GIF está passando; ele vira a arte da notificação e da tela de bloqueio.
   Future<void> nowShowingGif(Track t, String? gif) async {
     if (player.current?.id != t.id) return;
-    await player.handler?.setArtwork(t.path, gif, cacheDir: dataDir);
+    // sem GIF: usa a capa do álbum
+    await player.handler?.setArtwork(t.path, gif ?? covers.fileFor(t)?.path, cacheDir: dataDir);
   }
 
   /// Baixa GIFs para todas as músicas que ainda não têm 9.

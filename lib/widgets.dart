@@ -26,6 +26,15 @@ class CoverSquare extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = colorFor('${track.artist}|${track.album}');
+    final cover = context.read<AppState>().covers.fileFor(track);
+    if (cover != null) {
+      return Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(border: Border.all(color: const Color(0xFF888899))),
+        child: Image.file(cover, fit: BoxFit.cover, cacheWidth: (size * 3).round(), errorBuilder: (_, _, _) => const SizedBox()),
+      );
+    }
     return Container(
       width: size,
       height: size,

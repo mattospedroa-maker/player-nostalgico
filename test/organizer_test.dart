@@ -81,6 +81,18 @@ void main() {
     expect(MusicBrainzClient.parseArtistGenre({'artists': []}, 'X'), isNull);
   });
 
+  test('capa: escolhe o álbum certo no MusicBrainz', () {
+    expect(
+        MusicBrainzClient.parseReleaseGroup({
+          'release-groups': [
+            {'id': 'a', 'score': 60},
+            {'id': 'b', 'score': 100},
+          ]
+        }),
+        'b');
+    expect(MusicBrainzClient.parseReleaseGroup({'release-groups': []}), isNull);
+  });
+
   test('safeFolderName remove caracteres proibidos', () {
     expect(safeFolderName('AC/DC'), 'AC_DC');
     expect(safeFolderName('What?: "Live" <2009>.'), 'What__ _Live_ _2009_');

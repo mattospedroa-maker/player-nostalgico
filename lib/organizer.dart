@@ -77,6 +77,29 @@ class MusicBrainzClient {
     return parseArtistGenre(jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>, artist);
   }
 
+  /// Id do álbum (release group) no MusicBrainz, para buscar a capa no Cover Art Archive.
+  Future<String?> releaseGroupId(String artist, String album) async {
+    final wait = _last.add(minInterval).difference(DateTime.now());
+    if (wait > Duration.zero) await Future.delayed(wait);
+    final uri = Uri.https('musicbrainz.org', '/ws/2/release-group',
+        {'query': 'releasegroup:"${_escape(album)}" AND artist:"${_escape(artist)}"', 'fmt': 'json', 'limit': '5'});
+    var res = await _get(uri);
+    for (var attempt = 1; res.statusCode == 503 && attempt <= 3; attempt++) {
+      await Future.delayed(Duration(seconds: 2 * attempt));
+      res = await _get(uri);
+    }
+    if (res.statusCode != 200) return null;
+    return parseReleaseGroup(jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>);
+  }
+
+  static String? parseReleaseGroup(Map<String, dynamic> json) {
+    final groups = (json['release-groups'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
+    for (final g in groups) {
+      if (((g['score'] as num?) ?? 0) >= 90 && g['id'] is String) return g['id'] as String;
+    }
+    return null;
+  }
+
   static final _genreWords = RegExp(
       r'rock|metal|pop|punk|rap|hip.?hop|trap|jazz|blues|soul|funk|disco|r&b|rnb|electr|techno|house|trance|dubstep|drum|edm|synth|ambient|'
       r'classical|folk|country|reggae|ska|samba|bossa|mpb|sertanejo|forr|pagode|ax[eé]|gospel|indie|alternative|grunge|emo|core\b|'
