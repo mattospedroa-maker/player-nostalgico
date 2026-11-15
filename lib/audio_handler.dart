@@ -51,21 +51,25 @@ class PlayerAudioHandler extends BaseAudioHandler with SeekHandler {
         name: 'favorite',
       );
 
+  /// Fechar o player: um X em vez do quadrado de "parar".
+  static const _closeControl = MediaControl(androidIcon: 'drawable/ic_close', label: 'Fechar', action: MediaAction.stop);
+
   /// Manda o estado atual (tocando, posição, botões) para o Android.
   void broadcast() {
     final pl = player;
     if (pl == null) return;
     final playing = pl.playing;
     playbackState.add(playbackState.value.copyWith(
+      // ordem pedida: ⏮ ⏯ ⏭ ♥ ✕
       controls: [
-        _favControl,
         MediaControl.skipToPrevious,
         playing ? MediaControl.pause : MediaControl.play,
         MediaControl.skipToNext,
-        MediaControl.stop,
+        _favControl,
+        _closeControl,
       ],
       systemActions: const {MediaAction.seek, MediaAction.seekForward, MediaAction.seekBackward},
-      androidCompactActionIndices: const [1, 2, 3],
+      androidCompactActionIndices: const [0, 1, 2],
       processingState: switch (pl.processingState) {
         ProcessingState.idle => AudioProcessingState.idle,
         ProcessingState.loading => AudioProcessingState.loading,
