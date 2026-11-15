@@ -34,7 +34,7 @@ class AppState extends ChangeNotifier {
   final MetadataReader metadata = const FileMetadataReader();
   final String dataDir;
   late final CoverService covers = CoverService(dataDir, metadata);
-  late final GifFetcher gifFetcher = GifFetcher(gifs, client: http.Client());
+  late final GifFetcher gifFetcher = GifFetcher(gifs, client: http.Client())..lastFmKey = (() => lastFmKey);
   int? _lastAutoFetchId;
 
   /// Baixar GIFs sozinho quando uma música começa a tocar.
@@ -42,6 +42,16 @@ class AppState extends ChangeNotifier {
   Future<void> setAutoGifs(bool v) async {
     await prefs.setBool('autoGifs', v);
     notifyListeners();
+  }
+
+  /// Chave da API do Last.fm (fica só no celular, nunca no código). Vazia = GIFs pelo gênero.
+  String get lastFmKey => prefs.getString('lastFmKey') ?? '';
+  Future<void> setLastFmKey(String v) async {
+    await prefs.setString('lastFmKey', v.trim());
+    notifyListeners();
+    // a música que está tocando já ganha os GIFs pelas tags
+    final t = player.current == null ? null : byId(player.current!.id);
+    if (t != null && autoGifs) unawaited(gifFetcher.fetchFor(t).catchError((_) => 0));
   }
 
   /// Download em massa ("Baixar GIFs para todas"): progresso feito/total, null = parado.

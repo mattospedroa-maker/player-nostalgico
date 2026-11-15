@@ -149,3 +149,89 @@ class NekosBestProvider extends GifProvider {
             GifCandidate(url: r['url'] as String, source: 'nekos.best', credit: '${r['anime_name'] ?? 'anime'} · via nekos.best · ${r['url']}'),
       ];
 }
+
+/// Um resultado do GIPHY: miniatura leve para a grade e o GIF inteiro para baixar.
+class GiphyGif {
+  final String id;
+  final String title;
+  final String previewUrl;
+  final String url;
+  final String pageUrl;
+  const GiphyGif({required this.id, required this.title, required this.previewUrl, required this.url, required this.pageUrl});
+}
+
+/// Erros do GIPHY que a tela explica para o usuário.
+enum GiphyError { noKey, invalidKey, network, badResponse }
+
+class GiphyException implements Exception {
+  final GiphyError error;
+  const GiphyException(this.error);
+  String get message => switch (error) {
+        GiphyError.noKey => 'Chave do GIPHY não configurada',
+        GiphyError.invalidKey => 'Chave do GIPHY inválida',
+        GiphyError.network => 'GIPHY fora do ar ou sem internet',
+        GiphyError.badResponse => 'Resposta estranha do GIPHY',
+      };
+  @override
+  String toString() => message;
+}
+
+/// GIPHY: aceita pesquisas por frase ("rain scenery"). Só para a tela de resultados,
+/// baixando um GIF por vez quando o usuário toca (os termos do GIPHY proíbem guardar em massa).
+class GiphyProvider {
+  final http.Client client;
+  final String? apiKey;
+  GiphyProvider(this.client, this.apiKey);
+
+  static const pageSize = 12;
+
+  Future<List<GiphyGif>> search(String query, {int offset = 0, int limit = pageSize}) async {
+    final key = apiKey?.trim() ?? '';
+    if (key.isEmpty) throw const GiphyException(GiphyError.noKey);
+    final uri = Uri.https('api.giphy.com', '/v1/gifs/search', {
+      'api_key': key,
+      'q': query,
+      'limit': '$limit',
+      'offset': '$offset',
+      'rating': 'pg-13',
+      'lang': 'en',
+    });
+    http.Response res;
+    try {
+      res = await client.get(uri, headers: {'User-Agent': _ua}).timeout(const Duration(seconds: 15));
+    } catch (_) {
+      throw const GiphyException(GiphyError.network);
+    }
+    return parse(res.statusCode, res.body);
+  }
+
+  static List<GiphyGif> parse(int status, String body) {
+    if (status == 401 || status == 403) throw const GiphyException(GiphyError.invalidKey);
+    if (status == 429 || status >= 500) throw const GiphyException(GiphyError.network);
+    Object? json;
+    try {
+      json = jsonDecode(body);
+    } catch (_) {
+      throw const GiphyException(GiphyError.badResponse);
+    }
+    if (json is! Map || json['data'] is! List) throw const GiphyException(GiphyError.badResponse);
+    final out = <GiphyGif>[];
+    for (final d in json['data'] as List) {
+      if (d is! Map || d['images'] is! Map) continue;
+      final img = d['images'] as Map;
+      String? pick(List<String> names) {
+        for (final n in names) {
+          final v = img[n];
+          if (v is Map && v['url'] is String && (v['url'] as String).isNotEmpty) return v['url'] as String;
+        }
+        return null;
+      }
+
+      final preview = pick(['fixed_width_small', 'fixed_width', 'preview_gif', 'downsized']);
+      final full = pick(['downsized_medium', 'downsized', 'original', 'fixed_width']);
+      if (preview == null || full == null) continue;
+      out.add(GiphyGif(id: '${d['id']}', title: '${d['title'] ?? ''}', previewUrl: preview, url: full, pageUrl: '${d['url'] ?? ''}'));
+    }
+    return out;
+  }
+}

@@ -10,9 +10,11 @@ import 'package:path/path.dart' as p;
 import 'filename_parser.dart';
 import 'gif_providers.dart';
 import 'gif_service.dart';
+import 'lastfm.dart';
 import 'models.dart';
 import 'mood.dart';
 import 'organizer.dart' show safeFolderName;
+import 'visual_tags.dart';
 
 /// Máximo de GIFs por música (para não ocupar espaço demais).
 const maxGifsPerTrack = 9;
@@ -29,6 +31,17 @@ class GifFetcher {
   final Duration retryAfter;
 
   final Set<int> _running = {};
+
+  /// Chave do Last.fm (fica nas configurações do app). Vazia = sem Last.fm, usa o gênero.
+  String? Function() lastFmKey = () => null;
+
+  /// Converte as tags do Last.fm em pesquisas visuais e categorias de anime.
+  final VisualTagMapper mapper = VisualTagMapper();
+
+  /// Última situação da consulta ao Last.fm por música (para avisar na tela).
+  final Map<int?, TagStatus> tagStatus = {};
+  TagCache? _tagCache;
+  String? _tagCacheRoot;
 
   GifFetcher(this.gifs, {required this.client, List<GifProvider>? providers, this.maxBytes = 8 * 1024 * 1024, this.retryAfter = const Duration(days: 3)})
       : providers = providers ?? [NekosBestProvider(client)]; // só GIFs de anime (pedido do usuário)
@@ -70,7 +83,8 @@ class GifFetcher {
 
   /// As buscas em três grupos, na ordem dos 9 GIFs:
   /// 2 pelo nome da música, 2 pelo artista, 2 pelo gênero, e o resto intercalando os três.
-  static GifPlan planFor(Track t, {List<String> extras = const []}) {
+  /// [tagAnime]: categorias de anime vindas das tags do Last.fm (valem mais que o gênero, menos que o clima escolhido).
+  static GifPlan planFor(Track t, {List<String> extras = const [], List<String> tagAnime = const []}) {
     final parsed = parseFileName(t.title);
     final title = parsed.title.trim();
     var artist = t.artist.trim();
@@ -90,7 +104,7 @@ class GifFetcher {
       genre: uniq([if (hasGenre) genre, if (hasGenre) '$mainGenre concert', if (hasGenre) '$mainGenre music']),
       animeQueries: uniq(extras),
       // clima escolhido no selo do GIF vale mais que o gênero
-      moods: t.chosenMood?.categories ?? (hasGenre ? moodCategories(genre) : neutralMoods),
+      moods: t.chosenMood?.categories ?? (tagAnime.isNotEmpty ? tagAnime : (hasGenre ? moodCategories(genre) : neutralMoods)),
     );
   }
 
@@ -105,6 +119,43 @@ class GifFetcher {
     final parsed = parseFileName(t.title);
     final artist = t.artist == unknownArtist || t.artist.trim().isEmpty ? (parsed.artist ?? 'Outros') : t.artist;
     return (safeFolderName(artist), safeFolderName(parsed.title));
+  }
+
+  /// Título e artista limpos, do jeito que o Last.fm conhece.
+  static (String, String) _names(Track t) {
+    final parsed = parseFileName(t.title);
+    var artist = t.artist.trim();
+    if (artist.isEmpty || artist == unknownArtist) artist = parsed.artist ?? '';
+    return (parsed.title.trim(), artist);
+  }
+
+  /// Tags do Last.fm da música, com cache em `GIFs/.lastfm.json`. Nunca lança erro.
+  Future<TagResult> tagsFor(Track t) async {
+    final (title, artist) = _names(t);
+    final root = gifs.gifRoot;
+    if (root != null && _tagCacheRoot != root) {
+      _tagCache = TagCache(File(p.join(root, '.lastfm.json')));
+      _tagCacheRoot = root;
+    }
+    var r = _tagCache?.get(artist, title);
+    if (r == null) {
+      try {
+        r = await LastFmClient(client, lastFmKey()).topTags(artist, title);
+      } catch (_) {
+        r = const TagResult(TagStatus.badResponse);
+      }
+      _tagCache?.put(artist, title, r);
+    }
+    tagStatus[t.id] = r.status;
+    return r;
+  }
+
+  /// Pesquisas visuais da música: tags do Last.fm -> dicionário; sem tags, a alternativa básica.
+  /// O clima escolhido no selo pesa mais que as tags.
+  Future<VisualPlan> visualPlanFor(Track t) async {
+    final (title, artist) = _names(t);
+    final r = await tagsFor(t);
+    return mapper.convert(r.tags, mood: t.chosenMood, title: title, artist: artist, genre: t.genre);
   }
 
   /// Texto pronto para a busca na web (inclui as palavras extras).
@@ -177,19 +228,24 @@ class GifFetcher {
     final dest = Directory(p.join(root, artistDir, titleDir));
 
     var pinned = (await gifs.db.pinnedGifs(t.id!)).where((g) => File(g).existsSync()).toList();
-    if (version < planVersion) {
+    // tags do Last.fm (do cache quando já consultou): escolhem as categorias de anime
+    final visual = await visualPlanFor(t);
+    final tagAnime = visual.fromTags ? visual.anime : const <String>[];
+    // a música foi buscada antes de ter as tags: refaz os automáticos uma vez com elas
+    final redoForTags = entry is Map && entry['lfm'] != true && tagAnime.isNotEmpty && t.chosenMood == null && !bulk;
+    if (version < planVersion || redoForTags) {
       await _clearAuto(t, pinned, root);
       pinned = (await gifs.db.pinnedGifs(t.id!)).where((g) => File(g).existsSync()).toList();
     }
     final animeDone = entry is Map && entry['anime'] == true;
-    final plan0 = planFor(t, extras: gifs.extrasFor(t.artist, parseFileName(t.title).title));
+    final plan0 = planFor(t, extras: gifs.extrasFor(t.artist, parseFileName(t.title).title), tagAnime: tagAnime);
     // em massa, deixa vagas para os GIFs de anime que vêm quando a música tocar
     final reserve = bulk && plan0.anime && providers.any((pr) => pr.animeOnly) ? animeSlots : 0;
     final need = maxGifsPerTrack - reserve - pinned.length;
     if (need <= 0) return 0;
     final recent = last != null && DateTime.now().difference(last) < retryAfter;
     final animePending = !bulk && plan0.anime && !animeDone;
-    if (version >= planVersion && !force && recent && !animePending) return 0;
+    if (version >= planVersion && !redoForTags && !force && recent && !animePending) return 0;
 
     _running.add(t.id!);
     gifs.changed();
@@ -224,7 +280,9 @@ class GifFetcher {
       final animeC = <GifCandidate>[];
       final nekos = usable.whereType<NekosBestProvider>().firstOrNull;
       if (nekos != null && plan.moods.isNotEmpty) {
-        final cats = List.of(plan.moods)..shuffle(rnd);
+        final cats = List.of(plan.moods);
+        // das tags já vêm em ordem de importância; do gênero/clima, sorteia
+        if (tagAnime.isEmpty || t.chosenMood != null) cats.shuffle(rnd);
         for (final cat in cats.take(4)) {
           try {
             for (final c in await nekos.random(cat, amount: 3)) {
@@ -279,7 +337,7 @@ class GifFetcher {
         await File(p.join(dest.path, 'creditos.txt')).writeAsString('${credits.join('\n')}\n', mode: FileMode.append);
       }
       _writeIndex(index);
-      log[key] = {'v': planVersion, 't': DateTime.now().toIso8601String(), 'anime': animeDone || !bulk};
+      log[key] = {'v': planVersion, 't': DateTime.now().toIso8601String(), 'anime': animeDone || !bulk, 'lfm': tagAnime.isNotEmpty};
       _writeLog(log);
     } finally {
       _running.remove(t.id);
