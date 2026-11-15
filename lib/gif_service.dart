@@ -32,11 +32,22 @@ class GifService extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    _cache = d
+    final files = d
         .listSync(recursive: true, followLinks: false)
         .whereType<File>()
         .where((f) => gifExtensions.contains(p.extension(f.path).toLowerCase()))
         .toList();
+    // limpa imagens vazias salvas da web por versões antigas
+    for (final f in files.where((f) => p.basename(f.path).startsWith('web_')).toList()) {
+      try {
+        if (f.lengthSync() < 2048) {
+          await db.deleteGifEverywhere(f.path);
+          f.deleteSync();
+          files.remove(f);
+        }
+      } catch (_) {}
+    }
+    _cache = files;
     notifyListeners();
   }
 
@@ -149,7 +160,7 @@ class GifService extends ChangeNotifier {
     final root = gifRoot;
     if (root == null || t.id == null) return null;
     final ext = imageExtensionFor(bytes);
-    if (ext == null) return null;
+    if (ext == null || isTinyImage(bytes)) return null; // ex.: 1 pixel que o Google usa enquanto carrega
     final dest = Directory(p.join(root, artistDir, titleDir));
     await dest.create(recursive: true);
     final target = p.join(dest.path, 'web_${DateTime.now().millisecondsSinceEpoch}$ext');
@@ -173,6 +184,17 @@ class GifService extends ChangeNotifier {
     if (f.existsSync()) await f.delete();
     await refresh();
   }
+}
+
+/// Imagem pequena demais para ser um GIF de verdade (marcadores de 1 px, ícones).
+bool isTinyImage(List<int> b) {
+  if (b.length < 2048) return true;
+  int le16(int i) => b[i] | (b[i + 1] << 8);
+  int be32(int i) => (b[i] << 24) | (b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3];
+  final ext = imageExtensionFor(b);
+  if (ext == '.gif') return le16(6) < 64 || le16(8) < 64;
+  if (ext == '.png' && b.length > 24) return be32(16) < 64 || be32(20) < 64;
+  return false;
 }
 
 /// Descobre o tipo da imagem pelos primeiros bytes. Null se não for imagem.

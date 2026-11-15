@@ -57,12 +57,16 @@ void main() {
     expect(plan.artist.first, 'Linkin Park');
     expect(plan.genre, ['Nu Metal', 'Metal concert', 'Metal music']);
     expect(plan.moods, contains('punch'));
-    expect(GifFetcher.slotOrder.take(6), [0, 0, 1, 1, 2, 2]);
+    expect(GifFetcher.slotOrder.where((s) => s == 3).length, greaterThanOrEqualTo(5)); // maioria anime
     expect(GifFetcher.moodCategories('Sertanejo'), contains('dance'));
     expect(GifFetcher.moodCategories('Lo-Fi'), contains('sleep'));
     expect(GifFetcher.moodCategories('Alternative Rock'), contains('run'));
     expect(GifFetcher.moodCategories('Polka'), isNotEmpty);
     expect(GifFetcher.moodCategories(''), isEmpty);
+    final noGenre = Track(path: '/m/y.mp3', title: 'X', artist: 'Y', album: 'Z', addedAt: 0, modifiedAt: 0);
+    expect(GifFetcher.planFor(noGenre).moods, GifFetcher.neutralMoods);
+    expect(isTinyImage([...ascii.encode('GIF89a'), 1, 0, 1, 0, ...List.filled(3000, 0)]), isTrue);
+    expect(isTinyImage([...ascii.encode('GIF89a'), 200, 0, 150, 0, ...List.filled(3000, 0)]), isFalse);
   });
 
   group('GifFetcher', () {
@@ -106,7 +110,7 @@ void main() {
         }
         return http.Response('{}', 200);
       });
-      final f = GifFetcher(gifs, client: client);
+      final f = GifFetcher(gifs, client: client, providers: [OpenverseProvider(client), WikimediaProvider(client)]);
       final n = await f.fetchFor(t);
       expect(n, maxGifsPerTrack);
       expect(queries.first, 'Sonne Rammstein');
@@ -137,7 +141,7 @@ void main() {
         }
         return http.Response('{}', 200);
       });
-      final f = GifFetcher(gifs, client: client);
+      final f = GifFetcher(gifs, client: client, providers: [OpenverseProvider(client), WikimediaProvider(client)]);
       expect(await f.fetchFor(all[0]), 9);
       expect(downloads, 9);
       expect(await f.fetchFor(all[1]), 9);
@@ -154,10 +158,11 @@ void main() {
     test('sem internet não quebra e não repete a busca logo em seguida', () async {
       final t = await addTrack();
       var calls = 0;
-      final f = GifFetcher(gifs, client: MockClient((_) async {
+      final offline = MockClient((_) async {
         calls++;
         throw const SocketException('offline');
-      }));
+      });
+      final f = GifFetcher(gifs, client: offline, providers: [OpenverseProvider(offline)]);
       expect(await f.fetchFor(t), 0);
       final before = calls;
       expect(await f.fetchFor(t), 0);

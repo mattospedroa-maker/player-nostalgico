@@ -4,7 +4,6 @@ import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
-import '../gif_fetcher.dart' show maxGifsPerTrack;
 import '../main.dart';
 import '../models.dart';
 import '../player_service.dart';
@@ -102,22 +101,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
         padding: const EdgeInsets.fromLTRB(14, 4, 14, 0),
         child: Text('Pasta: ${p.basename(root)} · organiza em Artista/Álbum',
             style: const TextStyle(fontSize: 11, color: Xp.blueMuted)),
-      ),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),
-        child: Builder(builder: (context) {
-          final prog = app.bulkGifProgress;
-          return XpButton(
-            label: prog == null ? 'Baixar GIFs para todas' : 'Baixando GIFs ${prog.$1} de ${prog.$2} · toque para parar',
-            icon: Icons.gif_box_outlined,
-            onTap: () async {
-              if (prog != null) return app.cancelBulkGifs();
-              final messenger = ScaffoldMessenger.of(context);
-              final n = await app.fetchGifsForAll();
-              messenger.showSnackBar(SnackBar(content: Text('$n GIFs novos baixados (até $maxGifsPerTrack por música).')));
-            },
-          );
-        }),
       ),
       IpodBox(title: 'Música', trailing: '${tracks.length} faixas', children: [
         IpodRow(label: 'Todas as músicas', selected: true, onTap: () => _open('Todas as músicas', tracks)),

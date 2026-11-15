@@ -30,7 +30,7 @@ class GifFetcher {
   final Set<int> _running = {};
 
   GifFetcher(this.gifs, {required this.client, List<GifProvider>? providers, this.maxBytes = 8 * 1024 * 1024, this.retryAfter = const Duration(days: 3)})
-      : providers = providers ?? [OpenverseProvider(client), WikimediaProvider(client), NekosBestProvider(client)];
+      : providers = providers ?? [NekosBestProvider(client)]; // só GIFs de anime (pedido do usuário)
 
   bool isFetching(Track t) => _running.contains(t.id);
 
@@ -64,6 +64,9 @@ class GifFetcher {
     return const ['happy', 'wave', 'smile', 'thumbsup', 'dance'];
   }
 
+  /// Sem gênero: mistura neutra (os GIFs de anime sempre vêm).
+  static const neutralMoods = ['happy', 'wave', 'smile', 'thumbsup', 'dance', 'laugh'];
+
   /// As buscas em três grupos, na ordem dos 9 GIFs:
   /// 2 pelo nome da música, 2 pelo artista, 2 pelo gênero, e o resto intercalando os três.
   static GifPlan planFor(Track t, {List<String> extras = const []}) {
@@ -85,12 +88,12 @@ class GifFetcher {
       artist: uniq([if (artist.isNotEmpty) artist, if (artist.isNotEmpty) '$artist band', if (artist.isNotEmpty) '$artist live']),
       genre: uniq([if (hasGenre) genre, if (hasGenre) '$mainGenre concert', if (hasGenre) '$mainGenre music']),
       animeQueries: uniq(extras),
-      moods: hasGenre ? moodCategories(genre) : const [],
+      moods: hasGenre ? moodCategories(genre) : neutralMoods,
     );
   }
 
   /// Ordem das vagas: 2 da música, 2 do artista, 2 do gênero, depois anime no clima da música intercalado com o gênero.
-  static const slotOrder = [0, 0, 1, 1, 2, 2, 3, 2, 3];
+  static const slotOrder = [0, 3, 3, 0, 3, 1, 3, 2, 3];
 
   /// Vagas guardadas para os GIFs de anime (só baixados música a música, nunca em massa).
   static const animeSlots = 2;
@@ -150,7 +153,7 @@ class GifFetcher {
   }
 
   /// Versão da regra de escolha. Músicas buscadas com uma regra antiga são refeitas.
-  static const planVersion = 2;
+  static const planVersion = 3;
 
   /// Nomes dos arquivos baixados automaticamente (hash do conteúdo).
   static final _autoName = RegExp(r'^[0-9a-f]{12}\.gif$');
@@ -161,6 +164,8 @@ class GifFetcher {
   Future<int> fetchFor(Track t, {bool force = false, bool bulk = false}) async {
     final root = gifs.gifRoot;
     if (root == null || t.id == null || _running.contains(t.id)) return 0;
+    // em massa só usa fontes que permitem; se nenhuma permite, espera a música tocar
+    if (!providers.any((pr) => !bulk || pr.allowBulk)) return 0;
     final key = t.path;
     final log = _readLog();
     final entry = log[key];
@@ -223,9 +228,9 @@ class GifFetcher {
       final nekos = usable.whereType<NekosBestProvider>().firstOrNull;
       if (nekos != null && plan.moods.isNotEmpty) {
         final cats = List.of(plan.moods)..shuffle(rnd);
-        for (final cat in cats.take(3)) {
+        for (final cat in cats.take(4)) {
           try {
-            for (final c in await nekos.random(cat, amount: 2)) {
+            for (final c in await nekos.random(cat, amount: 3)) {
               if (seenUrls.add(c.url)) animeC.add(c);
             }
           } catch (_) {}
