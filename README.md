@@ -15,6 +15,7 @@ Player de música offline para Android, com visual inspirado no Windows Media Pl
 - **Notificação e tela de bloqueio**: ♥ curtir, ⏮ ⏯ ⏭, e a arte é o GIF que está passando (um quadro parado, que troca junto com o GIF).
 - **Editar música** (segurar na lista ou "Editar" no Tocando agora): título, artista, álbum, gênero e ano; preenche pelo MusicBrainz, grava nas tags, move para a pasta nova e permite apagar a música. Pastas vazias são apagadas sozinhas.
 - **Gênero automático**: quando falta, vem das tags do artista no MusicBrainz (ex.: "Industrial Metal").
+- **Mix automático**: tocar uma música solta (ou chegar ao fim de uma lista) continua com um mix. No Tocando agora, "Depois desta, tocar:" alterna entre **Do mesmo artista** e **Da mesma vibe** a qualquer momento e mostra as 3 próximas.
 - **Fila que se adapta** (aleatório e Mix do momento): pular manda as parecidas para o fim; curtir traz parecidas para perto, intercaladas.
 - **Favoritas**, **Playlists** (criar, renomear, reordenar arrastando, remover deslizando) e **Para você** (mix, rádio da música atual e "Redescobrir", tudo calculado no aparelho).
 

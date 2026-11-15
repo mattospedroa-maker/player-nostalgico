@@ -61,11 +61,83 @@ class NowPlayingScreen extends StatelessWidget {
                     ),
                   ]),
                 ),
+                const _MixBox(),
                 _Toolbar(track: t),
                 const SizedBox(height: 16),
               ]),
       ),
     ]);
+  }
+}
+
+/// "Depois desta, tocar:" Do mesmo artista / Da mesma vibe, e as 3 próximas.
+class _MixBox extends StatelessWidget {
+  const _MixBox();
+
+  @override
+  Widget build(BuildContext context) {
+    final ps = context.watch<PlayerService>();
+    final next = ps.upcoming.take(3).toList();
+    Widget seg(String label, MixMode m) {
+      final on = ps.mixMode == m;
+      return Expanded(
+        child: GestureDetector(
+          onTap: () => ps.setMixMode(m),
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 9),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: on ? const [Color(0xFF5D9BFF), Color(0xFF1650D6)] : const [Colors.white, Color(0xFFD7E2F5)],
+              ),
+            ),
+            child: Text(label, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: on ? Colors.white : Xp.navy)),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(14, 12, 14, 0),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(color: Colors.white, border: Border.all(color: const Color(0xFF7A96C9)), borderRadius: BorderRadius.circular(6)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Depois desta, tocar:', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Xp.navy)),
+        const SizedBox(height: 8),
+        Container(
+          decoration: BoxDecoration(border: Border.all(color: const Color(0xFF2B4F9E)), borderRadius: BorderRadius.circular(5)),
+          clipBehavior: Clip.antiAlias,
+          child: Row(children: [seg('Do mesmo artista', MixMode.artist), seg('Da mesma vibe', MixMode.vibe)]),
+        ),
+        if (ps.loop != LoopMode.off)
+          const Padding(
+            padding: EdgeInsets.only(top: 6),
+            child: Text('Repetir está ligado: o mix volta quando você desligar.', style: TextStyle(fontSize: 11, color: Xp.blueMuted)),
+          ),
+        if (next.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          const Text('A seguir:', style: TextStyle(fontSize: 12, color: Xp.blueMuted)),
+          for (final t in next)
+            Container(
+              padding: const EdgeInsets.symmetric(vertical: 5),
+              decoration: const BoxDecoration(border: Border(top: BorderSide(color: Color(0xFFE3EAF6)))),
+              child: Row(children: [
+                Container(width: 26, height: 26, color: colorFor(t.artist)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, color: Xp.navy)),
+                    Text([t.artist, if (t.genre.isNotEmpty) t.genre].join(' · '),
+                        maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: Xp.blueMuted)),
+                  ]),
+                ),
+              ]),
+            ),
+        ],
+      ]),
+    );
   }
 }
 

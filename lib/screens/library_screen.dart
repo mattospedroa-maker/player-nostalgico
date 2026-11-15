@@ -118,6 +118,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
         for (final t in recent.take(8))
           TrackTile(track: t, onTap: () {
             ps.playQueue([t]);
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text('Tocando "${t.title}". Depois dela: mix ${ps.mixMode == MixMode.artist ? 'do mesmo artista' : 'da mesma vibe'} (troque no Tocando agora).')));
             HomeShell.goTo(context, 0);
           }),
       ] else if (!app.scanning)

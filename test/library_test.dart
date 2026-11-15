@@ -130,4 +130,28 @@ void main() {
     expect(PlayerService.similarity(tr('A', 'Rock'), tr('A', 'Pop')), greaterThan(PlayerService.similarity(tr('B', 'Rock'), tr('C', 'Rock'))));
     expect(PlayerService.similarity(tr('B', 'Pop'), tr('C', 'Rock')), 0);
   });
+
+  test('mix automático: mesmo artista ou mesma vibe, sem repetir a atual', () {
+    var id = 0;
+    Track tr(String a, String g) => Track(id: ++id, path: '/${id}', title: 't$id', artist: a, album: 'x$id', genre: g, addedAt: 0, modifiedAt: 0);
+    final seed = tr('Rammstein', 'Industrial Metal');
+    final lib = [
+      seed,
+      tr('Rammstein', 'Industrial Metal'),
+      tr('Rammstein', 'Industrial Metal'),
+      tr('Linkin Park', 'Nu Metal'),
+      tr('System of a Down', 'Metal'),
+      tr('Miku', 'Vocaloid'),
+      tr('Miku', 'J-Pop'),
+      tr('Chopin', 'Classical'),
+    ];
+    final byArtist = PlayerService.pickMix(seed, lib, mode: MixMode.artist, count: 2);
+    expect(byArtist.every((t) => t.artist == 'Rammstein'), isTrue);
+    expect(byArtist.contains(seed), isFalse);
+    final vibe = PlayerService.pickMix(seed, lib, mode: MixMode.vibe, count: 4);
+    // os metais vêm antes dos calmos/fofos
+    expect(vibe.take(4).where((t) => t.genre.contains('Metal')).length, 4);
+    // artista acabou: completa com a vibe
+    expect(PlayerService.pickMix(seed, lib, mode: MixMode.artist, count: 5).length, 5);
+  });
 }

@@ -6,8 +6,12 @@ import 'package:just_audio/just_audio.dart';
 import 'package:audio_service/audio_service.dart';
 
 import 'audio_handler.dart';
+import 'gif_fetcher.dart' show GifFetcher;
 import 'db.dart';
 import 'models.dart';
+
+/// O que tocar quando a fila acaba.
+enum MixMode { artist, vibe }
 
 /// Toca a fila de músicas e registra o histórico (usado pela recomendação).
 class PlayerService extends ChangeNotifier {
@@ -22,6 +26,17 @@ class PlayerService extends ChangeNotifier {
   bool _shuffle = false;
   bool _fromMix = false;
   final _rnd = Random();
+
+  /// Biblioteca inteira (o AppState preenche), para montar o mix automático.
+  List<Track> Function() library = () => const [];
+
+  /// Músicas que entraram sozinhas pelo mix (podem ser trocadas quando o modo muda).
+  final Set<Track> _autoAdded = Set.identity();
+  MixMode mixMode = MixMode.vibe;
+  void Function(MixMode)? onMixModeChanged;
+
+  /// Próximas músicas (para mostrar "A seguir").
+  List<Track> get upcoming => _index == null || _nextPos >= _queue.length ? const [] : _queue.sublist(_nextPos);
 
   final PlayerAudioHandler? handler;
 
@@ -39,6 +54,7 @@ class PlayerService extends ChangeNotifier {
       _startedTrackId = current?.id;
       _publishMediaItem();
       notifyListeners();
+      unawaited(_extendMix());
     }));
     _subs.add(player.playerStateStream.listen((_) => notifyListeners()));
     _subs.add(player.loopModeStream.listen((_) => notifyListeners()));
@@ -68,7 +84,9 @@ class PlayerService extends ChangeNotifier {
     final sources = [for (final t in _queue) _source(t)];
     await player.setAudioSources(sources, initialIndex: start.clamp(0, sources.length - 1));
     _index = player.currentIndex;
+    _autoAdded.clear();
     _publishMediaItem();
+    unawaited(_extendMix());
     unawaited(player.play());
     notifyListeners();
   }
@@ -101,6 +119,85 @@ class PlayerService extends ChangeNotifier {
     _startedTrackId = null;
     await player.seekToNext();
     if (skipped != null && adaptive) await pushSimilarBack(skipped);
+  }
+
+  /// Troca o tipo de mix na hora: as músicas que o mix colocou são refeitas; a atual continua.
+  Future<void> setMixMode(MixMode m) async {
+    if (m == mixMode) return;
+    mixMode = m;
+    onMixModeChanged?.call(m);
+    // tira as que vieram do mix (de trás para frente) e monta de novo
+    for (var i = _queue.length - 1; i >= _nextPos; i--) {
+      if (_autoAdded.contains(_queue[i])) {
+        _autoAdded.remove(_queue[i]);
+        _queue.removeAt(i);
+        await player.removeAudioSourceAt(i);
+      }
+    }
+    await _extendMix(force: true);
+    notifyListeners();
+  }
+
+  bool _extending = false;
+
+  /// Quando faltam poucas músicas, completa a fila com o mix (a música nunca para).
+  Future<void> _extendMix({bool force = false}) async {
+    final seed = current;
+    if (seed == null || _extending || player.loopMode != LoopMode.off) return;
+    if (!force && _queue.length - _nextPos >= 3) return;
+    _extending = true;
+    try {
+      final picks = pickMix(seed, library(), mode: mixMode, exclude: _queue.map((t) => t.id).toSet(), count: 10, rnd: _rnd);
+      if (picks.isEmpty) return;
+      await player.addAudioSources([for (final t in picks) _source(t)]);
+      _queue.addAll(picks);
+      _autoAdded.addAll(picks);
+      notifyListeners();
+    } catch (_) {
+      // fila mudou no meio: tenta na próxima troca de música
+    } finally {
+      _extending = false;
+    }
+  }
+
+  /// Escolhe músicas para o mix. "Do mesmo artista": só o artista (se acabar, completa com a vibe).
+  /// "Da mesma vibe": mesmo gênero / mesmo clima, misturando artistas (no máximo 2 de cada).
+  static List<Track> pickMix(Track seed, List<Track> library,
+      {required MixMode mode, Set<int?> exclude = const {}, int count = 10, Random? rnd}) {
+    final r = rnd ?? Random();
+    final pool = library.where((t) => t.id != seed.id && !exclude.contains(t.id)).toList()..shuffle(r);
+    final out = <Track>[];
+    if (mode == MixMode.artist && seed.artist != unknownArtist) {
+      out.addAll(pool.where((t) => t.artist == seed.artist).take(count));
+    }
+    if (out.length < count) {
+      final seedMood = GifFetcher.moodCategories(seed.genre).join();
+      final seedMain = seed.genre.toLowerCase().split(RegExp(r'[\s/,;-]+')).where((w) => w.length > 1).lastOrNull ?? '';
+      double vibe(Track t) {
+        var v = 0.0;
+        final g = t.genre.toLowerCase();
+        if (g.isNotEmpty && g == seed.genre.toLowerCase()) v += 3;
+        if (seedMain.isNotEmpty && g.contains(seedMain)) v += 1.5;
+        if (seedMood.isNotEmpty && GifFetcher.moodCategories(t.genre).join() == seedMood) v += 1;
+        if (t.artist == seed.artist && t.artist != unknownArtist) v += 1;
+        if (t.favorite) v += .5;
+        return v + r.nextDouble(); // um pouco de sorte para variar
+      }
+
+      final ranked = pool.where((t) => !out.contains(t)).toList()..sort((a, b) => vibe(b).compareTo(vibe(a)));
+      final perArtist = <String, int>{};
+      for (final t in out) {
+        perArtist[t.artist] = (perArtist[t.artist] ?? 0) + 1;
+      }
+      for (final t in ranked) {
+        if (out.length >= count) break;
+        final n = perArtist[t.artist] ?? 0;
+        if (mode == MixMode.vibe && n >= 2) continue;
+        perArtist[t.artist] = n + 1;
+        out.add(t);
+      }
+    }
+    return out;
   }
 
   /// Parecença entre duas músicas: mesmo artista pesa mais, depois gênero e álbum.

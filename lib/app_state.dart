@@ -60,6 +60,10 @@ class AppState extends ChangeNotifier {
     final s = AppState._(db, prefs, PlayerService(db, handler: handler), GifService(db), dir.path);
     s.gifs.sourceRoot = s.sourceRoot;
     s.player.addListener(s._onPlayerChanged);
+    s.player
+      ..library = (() => s.tracks)
+      ..mixMode = MixMode.values.asNameMap()[prefs.getString('mixMode')] ?? MixMode.vibe
+      ..onMixModeChanged = ((m) => prefs.setString('mixMode', m.name));
     handler?.onFavorite = () async {
       final t = s.player.current == null ? null : s.byId(s.player.current!.id);
       if (t != null) await s.toggleFavorite(t);
