@@ -53,7 +53,7 @@ class PlayerApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-        title: 'Player Nostálgico',
+        title: 'Nostalgic MPlayer',
         debugShowCheckedModeBanner: false,
         theme: Xp.theme(),
         home: const HomeShell(),
