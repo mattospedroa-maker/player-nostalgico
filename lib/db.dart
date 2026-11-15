@@ -12,9 +12,10 @@ class AppDb {
     final db = await f.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 2,
+        version: 3,
         onUpgrade: (db, from, to) async {
           if (from < 2) await db.execute('ALTER TABLE tracks ADD COLUMN edited INTEGER NOT NULL DEFAULT 0');
+          if (from < 3) await db.execute("ALTER TABLE tracks ADD COLUMN mood TEXT NOT NULL DEFAULT ''");
         },
         onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
         onCreate: (db, _) async {
@@ -31,7 +32,8 @@ class AppDb {
               favorite INTEGER NOT NULL DEFAULT 0,
               added_at INTEGER NOT NULL,
               modified_at INTEGER NOT NULL,
-              edited INTEGER NOT NULL DEFAULT 0
+              edited INTEGER NOT NULL DEFAULT 0,
+              mood TEXT NOT NULL DEFAULT ''
             )''');
           await db.execute('''
             CREATE TABLE playlists(
@@ -121,6 +123,11 @@ class AppDb {
   /// Gênero descoberto automaticamente (só onde estava vazio).
   Future<void> fillGenre(int id, String genre) =>
       db.update('tracks', {'genre': genre}, where: "id = ? AND genre = ''", whereArgs: [id]);
+
+  Future<void> setMood(int id, String mood) => db.update('tracks', {'mood': mood}, where: 'id = ?', whereArgs: [id]);
+
+  Future<void> removeFromPlaylist(int playlistId, int trackId) =>
+      db.delete('playlist_tracks', where: 'playlist_id = ? AND track_id = ?', whereArgs: [playlistId, trackId]);
 
   Future<void> deleteTrack(int id) => db.delete('tracks', where: 'id = ?', whereArgs: [id]);
 

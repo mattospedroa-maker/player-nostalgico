@@ -17,6 +17,7 @@ import 'gif_service.dart';
 import 'library_scanner.dart';
 import 'metadata.dart';
 import 'models.dart';
+import 'mood.dart';
 import 'organizer.dart';
 import 'player_service.dart';
 import 'recommender.dart';
@@ -326,6 +327,40 @@ class AppState extends ChangeNotifier {
     if (player.current?.id == t.id) player.handler?.setFavorite(!t.favorite);
     // curtiu: a fila (aleatório / mix) passa a trazer mais parecidas
     if (!t.favorite && player.adaptive) await player.pullSimilarForward(t, tracks);
+  }
+
+  /// Clima escolhido no selo do GIF. A música entra na playlist com o nome do clima (ex.: "Triste"),
+  /// sai da playlist do clima antigo, ganha GIFs novos e, se guia o mix, o mix é refeito.
+  /// [mood] null = automático (pelo gênero).
+  Future<void> setMood(Track t, Mood? mood) async {
+    final id = t.id;
+    if (id == null) return;
+    final old = (byId(id) ?? t).chosenMood;
+    if (old == mood) return;
+    await db.setMood(id, mood?.name ?? '');
+    if (old != null) {
+      final pl = _playlistNamed(old.label);
+      if (pl != null) await db.removeFromPlaylist(pl.id, id);
+    }
+    if (mood != null) {
+      final pl = _playlistNamed(mood.label);
+      final plId = pl?.id ?? await db.createPlaylist(mood.label);
+      final inside = await db.playlistTracks(plId);
+      if (!inside.any((x) => x.id == id)) await db.addToPlaylist(plId, id);
+    }
+    await reload();
+    final updated = byId(id);
+    if (updated == null) return;
+    player.replaceTrack(updated);
+    if (player.mixSeedId == id) unawaited(player.refreshMix());
+    unawaited(gifFetcher.refetchFor(updated).catchError((_) => 0));
+  }
+
+  Playlist? _playlistNamed(String name) {
+    for (final pl in playlists) {
+      if (pl.name.trim().toLowerCase() == name.toLowerCase()) return pl;
+    }
+    return null;
   }
 
   Track? byId(int? id) {

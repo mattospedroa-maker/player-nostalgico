@@ -6,9 +6,9 @@ import 'package:just_audio/just_audio.dart';
 import 'package:audio_service/audio_service.dart';
 
 import 'audio_handler.dart';
-import 'gif_fetcher.dart' show GifFetcher;
 import 'db.dart';
 import 'models.dart';
+import 'mood.dart';
 
 /// O que tocar quando a fila acaba.
 enum MixMode { artist, vibe }
@@ -37,6 +37,9 @@ class PlayerService extends ChangeNotifier {
 
   /// Músicas editadas/movidas enquanto estão na fila (para mostrar o nome novo).
   final Map<int?, Track> _overrides = {};
+
+  /// Música que o usuário escolheu primeiro: o mix "da mesma vibe" segue o clima dela.
+  int? mixSeedId;
 
   final PlayerAudioHandler? handler;
 
@@ -121,6 +124,7 @@ class PlayerService extends ChangeNotifier {
       }
       _autoAdded.clear();
       _overrides.clear();
+      mixSeedId = list[first].id;
       await player.setAudioSources([for (final t in list) _source(t)], initialIndex: first);
       _startedAt = DateTime.now();
       _startedTrackId = current?.id;
@@ -169,6 +173,11 @@ class PlayerService extends ChangeNotifier {
     mixMode = m;
     onMixModeChanged?.call(m);
     notifyListeners();
+    await refreshMix();
+  }
+
+  /// Refaz as próximas músicas que o mix colocou (ex.: mudou o tipo de mix ou o clima da primeira música).
+  Future<void> refreshMix() async {
     await _serial(() async {
       final q = queue;
       for (var i = q.length - 1; i >= _nextPos; i--) {
@@ -179,10 +188,21 @@ class PlayerService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// A música que guia o mix: a primeira escolhida (com o clima atual dela), senão a que está tocando.
+  Track? get mixSeed {
+    final id = mixSeedId;
+    if (id != null) {
+      for (final t in library()) {
+        if (t.id == id) return t;
+      }
+    }
+    return current;
+  }
+
   /// Quando faltam poucas músicas, completa a fila com o mix (a música nunca para).
   /// Só roda dentro de [_serial].
   Future<void> _extendMix({bool force = false}) async {
-    final seed = current;
+    final seed = mixSeed;
     if (seed == null || player.loopMode != LoopMode.off) return;
     final q = queue;
     if (!force && q.length - _nextPos >= 3) return;
@@ -206,14 +226,19 @@ class PlayerService extends ChangeNotifier {
       out.addAll(pool.where((t) => t.artist == seed.artist).take(count));
     }
     if (out.length < count) {
-      final seedMood = GifFetcher.moodCategories(seed.genre).join();
+      final seedMood = seed.effectiveMood;
+      final seedChose = seed.chosenMood != null;
       final seedMain = seed.genre.toLowerCase().split(RegExp(r'[\s/,;-]+')).where((w) => w.length > 1).lastOrNull ?? '';
       double vibe(Track t) {
         var v = 0.0;
         final g = t.genre.toLowerCase();
         if (g.isNotEmpty && g == seed.genre.toLowerCase()) v += 3;
         if (seedMain.isNotEmpty && g.contains(seedMain)) v += 1.5;
-        if (seedMood.isNotEmpty && GifFetcher.moodCategories(t.genre).join() == seedMood) v += 1;
+        // clima: se o usuário escolheu o clima da primeira música, ele manda mais que o gênero
+        if (seedMood != null) {
+          if (t.effectiveMood == seedMood) v += seedChose ? 6 : 1;
+          if (t.chosenMood != null && t.chosenMood != seedMood) v -= seedChose ? 3 : 1.5;
+        }
         if (t.artist == seed.artist && t.artist != unknownArtist) v += 1;
         if (t.favorite) v += .5;
         return v + r.nextDouble(); // um pouco de sorte para variar

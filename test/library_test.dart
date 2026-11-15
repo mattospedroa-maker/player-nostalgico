@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -7,7 +8,9 @@ import 'package:player_nostalgico/db.dart';
 import 'package:player_nostalgico/gif_service.dart';
 import 'package:player_nostalgico/library_scanner.dart';
 import 'package:player_nostalgico/metadata.dart';
+import 'package:player_nostalgico/gif_fetcher.dart';
 import 'package:player_nostalgico/models.dart';
+import 'package:player_nostalgico/mood.dart';
 import 'package:player_nostalgico/player_service.dart';
 import 'package:player_nostalgico/recommender.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -153,5 +156,32 @@ void main() {
     expect(vibe.take(4).where((t) => t.genre.contains('Metal')).length, 4);
     // artista acabou: completa com a vibe
     expect(PlayerService.pickMix(seed, lib, mode: MixMode.artist, count: 5).length, 5);
+  });
+
+  test('clima: fica salvo no banco e a releitura não apaga', () async {
+    final id = await db.upsertTrack(const Track(path: '/x/zeit.mp3', title: 'Zeit', artist: 'Rammstein', album: 'Zeit', genre: 'Industrial Metal', addedAt: 0, modifiedAt: 0));
+    expect((await db.allTracks()).single.effectiveMood, Mood.acao);
+    await db.setMood(id, Mood.triste.name);
+    await db.upsertTrack(const Track(path: '/x/zeit.mp3', title: 'Zeit', artist: 'Rammstein', album: 'Zeit', genre: 'Industrial Metal', addedAt: 0, modifiedAt: 1));
+    final t = (await db.allTracks()).single;
+    expect(t.chosenMood, Mood.triste);
+    expect(GifFetcher.planFor(t).moods, Mood.triste.categories);
+  });
+
+  test('mix da mesma vibe segue o clima escolhido na primeira música', () {
+    var id = 0;
+    Track tr(String a, String g, [Mood? m]) =>
+        Track(id: ++id, path: '/$id', title: 't$id', artist: a, album: 'x$id', genre: g, mood: m?.name ?? '', addedAt: 0, modifiedAt: 0);
+    final seed = tr('Rammstein', 'Industrial Metal', Mood.triste);
+    final lib = [
+      seed,
+      tr('A', 'Industrial Metal'),
+      tr('B', 'Industrial Metal', Mood.acao),
+      tr('C', 'Pop', Mood.triste),
+      tr('D', 'Rock', Mood.triste),
+      tr('E', 'Sad Ballad'),
+    ];
+    final picks = PlayerService.pickMix(seed, lib, mode: MixMode.vibe, count: 3, rnd: Random(1));
+    expect(picks.map((t) => t.artist).toSet(), {'C', 'D', 'E'});
   });
 }

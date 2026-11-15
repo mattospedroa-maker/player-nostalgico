@@ -11,6 +11,7 @@ import 'filename_parser.dart';
 import 'gif_providers.dart';
 import 'gif_service.dart';
 import 'models.dart';
+import 'mood.dart';
 import 'organizer.dart' show safeFolderName;
 
 /// Máximo de GIFs por música (para não ocupar espaço demais).
@@ -88,7 +89,8 @@ class GifFetcher {
       artist: uniq([if (artist.isNotEmpty) artist, if (artist.isNotEmpty) '$artist band', if (artist.isNotEmpty) '$artist live']),
       genre: uniq([if (hasGenre) genre, if (hasGenre) '$mainGenre concert', if (hasGenre) '$mainGenre music']),
       animeQueries: uniq(extras),
-      moods: hasGenre ? moodCategories(genre) : neutralMoods,
+      // clima escolhido no selo do GIF vale mais que o gênero
+      moods: t.chosenMood?.categories ?? (hasGenre ? moodCategories(genre) : neutralMoods),
     );
   }
 
@@ -176,13 +178,8 @@ class GifFetcher {
 
     var pinned = (await gifs.db.pinnedGifs(t.id!)).where((g) => File(g).existsSync()).toList();
     if (version < planVersion) {
-      // regra antiga: apaga só os GIFs que o app baixou sozinho (os escolhidos à mão ficam)
-      for (final g in pinned.where((g) => _autoName.hasMatch(p.basename(g)) && p.isWithin(root, g))) {
-        await gifs.db.unpinGif(t.id!, g);
-        // o arquivo só sai do celular se nenhuma outra música usa
-        if (await gifs.db.gifUsers(g) == 0) await File(g).delete().catchError((_) => File(g));
-      }
-      pinned = pinned.where((g) => File(g).existsSync()).toList();
+      await _clearAuto(t, pinned, root);
+      pinned = (await gifs.db.pinnedGifs(t.id!)).where((g) => File(g).existsSync()).toList();
     }
     final animeDone = entry is Map && entry['anime'] == true;
     final plan0 = planFor(t, extras: gifs.extrasFor(t.artist, parseFileName(t.title).title));
@@ -289,6 +286,25 @@ class GifFetcher {
       await gifs.refresh();
     }
     return saved;
+  }
+
+  /// Apaga só os GIFs que o app baixou sozinho (os escolhidos à mão ficam).
+  Future<void> _clearAuto(Track t, List<String> pinned, String root) async {
+    for (final g in pinned.where((g) => _autoName.hasMatch(p.basename(g)) && p.isWithin(root, g))) {
+      await gifs.db.unpinGif(t.id!, g);
+      // o arquivo só sai do celular se nenhuma outra música usa
+      if (await gifs.db.gifUsers(g) == 0) await File(g).delete().catchError((_) => File(g));
+    }
+  }
+
+  /// Troca os GIFs automáticos da música (ex.: o clima mudou). Os escolhidos à mão ficam.
+  Future<int> refetchFor(Track t) async {
+    final root = gifs.gifRoot;
+    if (root == null || t.id == null || _running.contains(t.id)) return 0;
+    final pinned = (await gifs.db.pinnedGifs(t.id!)).where((g) => File(g).existsSync()).toList();
+    await _clearAuto(t, pinned, root);
+    await gifs.refresh();
+    return fetchFor(t, force: true);
   }
 
   Future<Uint8List?> _download(String url) async {

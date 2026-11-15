@@ -11,6 +11,9 @@ class Track {
   final int addedAt;
   final int modifiedAt;
 
+  /// Clima escolhido no selo do GIF ('' = automático). Fica fora do toMap: a releitura não apaga.
+  final String mood;
+
   const Track({
     this.id,
     required this.path,
@@ -23,6 +26,7 @@ class Track {
     this.favorite = false,
     required this.addedAt,
     required this.modifiedAt,
+    this.mood = '',
   });
 
   Track copyWith({int? id, String? path, bool? favorite, String? artist, String? album}) => Track(
@@ -37,6 +41,7 @@ class Track {
         favorite: favorite ?? this.favorite,
         addedAt: addedAt,
         modifiedAt: modifiedAt,
+        mood: mood,
       );
 
   Map<String, Object?> toMap() => {
@@ -65,6 +70,7 @@ class Track {
         favorite: (m['favorite'] as int? ?? 0) == 1,
         addedAt: m['added_at'] as int,
         modifiedAt: m['modified_at'] as int,
+        mood: (m['mood'] as String?) ?? '',
       );
 }
 

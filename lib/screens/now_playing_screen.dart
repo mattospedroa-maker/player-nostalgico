@@ -13,6 +13,7 @@ import '../filename_parser.dart';
 import '../gif_fetcher.dart';
 import '../gif_service.dart';
 import '../models.dart';
+import '../mood.dart';
 import '../player_service.dart';
 import '../theme.dart';
 import '../widgets.dart';
@@ -320,10 +321,11 @@ class _GifCarouselState extends State<GifCarousel> {
                       style: const TextStyle(color: Color(0xFF99FFFF), fontSize: 13)),
                 ),
               ),
+            Positioned(left: 6, top: 6, child: MoodBadge(track: widget.track)),
             if (fetching && _gifs.isNotEmpty)
               Positioned(
                 left: 6,
-                top: 6,
+                top: 40,
                 child: Container(
                   color: Colors.black54,
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -581,4 +583,51 @@ class SeekBar extends StatelessWidget {
           );
         },
       );
+}
+
+/// Selo no canto do GIF: mostra o clima da música e abre a lista para trocar.
+/// Escolher um clima troca os GIFs de anime, põe a música na playlist do clima e guia o mix "da mesma vibe".
+class MoodBadge extends StatelessWidget {
+  final Track track;
+  const MoodBadge({super.key, required this.track});
+
+  @override
+  Widget build(BuildContext context) {
+    final chosen = track.chosenMood;
+    final auto = Mood.fromGenre(track.genre);
+    final label = chosen == null ? '✨ Auto' : '${chosen.emoji} ${chosen.label}';
+    return PopupMenuButton<String>(
+      tooltip: 'Clima dos GIFs',
+      position: PopupMenuPosition.under,
+      onSelected: (v) async {
+        final app = context.read<AppState>();
+        final messenger = ScaffoldMessenger.of(context);
+        final mood = Mood.byName(v);
+        await app.setMood(track, mood);
+        messenger.showSnackBar(SnackBar(
+          content: Text(mood == null
+              ? 'Clima automático (pelo gênero). Buscando GIFs novos...'
+              : 'Clima: ${mood.label}. A música foi para a playlist "${mood.label}". Buscando GIFs novos...'),
+        ));
+      },
+      itemBuilder: (_) => [
+        CheckedPopupMenuItem(
+          value: 'auto',
+          checked: chosen == null,
+          child: Text(auto == null ? '✨ Auto (gênero)' : '✨ Auto (gênero: ${auto.label})'),
+        ),
+        for (final m in Mood.values)
+          CheckedPopupMenuItem(value: m.name, checked: chosen == m, child: Text('${m.emoji} ${m.label}')),
+      ],
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: .62),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.white38),
+        ),
+        child: Text('$label ▾', style: const TextStyle(color: Colors.white, fontSize: 12.5, fontWeight: FontWeight.bold)),
+      ),
+    );
+  }
 }
