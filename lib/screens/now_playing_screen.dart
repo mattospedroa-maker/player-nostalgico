@@ -298,6 +298,8 @@ class _GifCarouselState extends State<GifCarousel> {
       _thumbOf[r.gif.url] = r.gif.previewUrl;
     }
     final urls = [for (final r in web) r.gif.url];
+    // usa os salvos que estão na roda agora (podem ter chegado GIFs novos enquanto o GIPHY respondia)
+    local = [for (final g in _gifs) if (!_isWeb(g)) g];
     final merged = switch (app.gifSource) {
       GifSource.anime => local,
       GifSource.giphy => interleave([urls, local]),

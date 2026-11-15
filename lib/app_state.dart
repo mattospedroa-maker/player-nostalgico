@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
@@ -61,6 +62,7 @@ class AppState extends ChangeNotifier {
   Future<void> setGiphyKey(String v) async {
     await prefs.setString('giphyKey', v.trim());
     _playerVisuals.clear();
+    _visualsFailedAt.clear();
     visualsEpoch++;
     notifyListeners();
   }
@@ -78,20 +80,84 @@ class AppState extends ChangeNotifier {
 
   GiphyProvider get giphy => GiphyProvider(gifFetcher.client, giphyKey);
 
-  /// GIFs do GIPHY para a roda (passam da internet, não são salvos). Guardados só na memória, por música e clima.
+  /// GIFs do GIPHY para a roda (passam da internet, não são salvos; só os endereços ficam guardados).
+  /// Guardados por música e clima: na memória e em `giphy_roda.json`, para não gastar o limite do GIPHY
+  /// (chave gratuita = ~100 consultas por hora). Resultado vazio (limite, sem internet) não é guardado.
   final Map<String, List<VisualResult>> _playerVisuals = {};
-  Future<List<VisualResult>> playerVisualsFor(Track t) async {
-    if (gifSource == GifSource.anime || giphyKey.isEmpty || t.id == null) return const [];
-    final key = '${t.id}|${t.mood}';
-    final cached = _playerVisuals[key];
-    if (cached != null) return cached;
+  final Map<String, Future<List<VisualResult>>> _visualsInFlight = {};
+  final Map<String, DateTime> _visualsFailedAt = {};
+  static const _visualsMaxAge = Duration(days: 3);
+
+  Future<List<VisualResult>> playerVisualsFor(Track t) {
+    if (gifSource == GifSource.anime || giphyKey.isEmpty || t.id == null) return Future.value(const []);
+    final key = '${t.id}|${t.mood}|${gifSource.name}';
+    final cached = _playerVisuals[key] ?? _readVisualsDisk(key);
+    if (cached != null) return Future.value(_playerVisuals[key] = cached);
+    // falhou há pouco (ex.: limite do GIPHY): espera um pouco antes de tentar de novo
+    final failed = _visualsFailedAt[key];
+    if (failed != null && DateTime.now().difference(failed) < const Duration(minutes: 10)) return Future.value(const []);
+    // a roda pode pedir duas vezes seguidas (troca de clima + GIFs novos chegando): uma consulta só
+    return _visualsInFlight[key] ??= () async {
+      try {
+        final plan = await gifFetcher.visualPlanFor(t);
+        final picks = await PlayerVisuals(giphy).pick(plan, count: gifSource == GifSource.giphy ? 9 : 5);
+        if (picks.isEmpty) {
+          _visualsFailedAt[key] = DateTime.now();
+        } else {
+          _playerVisuals[key] = picks;
+          _writeVisualsDisk(key, picks);
+        }
+        return picks;
+      } catch (_) {
+        _visualsFailedAt[key] = DateTime.now();
+        return const <VisualResult>[]; // sem internet ou chave ruim: a roda fica só com os de anime
+      } finally {
+        unawaited(Future<void>(() => _visualsInFlight.remove(key)));
+      }
+    }();
+  }
+
+  File get _visualsFile => File(p.join(dataDir, 'giphy_roda.json'));
+  Map<String, dynamic>? _visualsDisk;
+  Map<String, dynamic> get _visualsMap {
+    if (_visualsDisk != null) return _visualsDisk!;
     try {
-      final plan = await gifFetcher.visualPlanFor(t);
-      final picks = await PlayerVisuals(giphy).pick(plan, count: gifSource == GifSource.giphy ? 9 : 5);
-      return _playerVisuals[key] = picks;
+      _visualsDisk = _visualsFile.existsSync() ? (jsonDecode(_visualsFile.readAsStringSync()) as Map).cast<String, dynamic>() : {};
     } catch (_) {
-      return const []; // sem internet ou chave ruim: a roda fica só com os de anime
+      _visualsDisk = {};
     }
+    return _visualsDisk!;
+  }
+
+  List<VisualResult>? _readVisualsDisk(String key) {
+    final e = _visualsMap[key];
+    if (e is! Map) return null;
+    final at = DateTime.tryParse('${e['t']}');
+    if (at == null || DateTime.now().difference(at) > _visualsMaxAge) return null;
+    final list = [
+      for (final m in (e['items'] as List? ?? const []))
+        if (m is Map)
+          VisualResult(
+            GiphyGif(id: '${m['id']}', title: '${m['title'] ?? ''}', previewUrl: '${m['preview']}', url: '${m['url']}', pageUrl: '${m['page'] ?? ''}'),
+            '${m['q'] ?? ''}',
+            '${m['g'] ?? ''}',
+            anime: m['a'] == true,
+          ),
+    ];
+    return list.isEmpty ? null : list;
+  }
+
+  void _writeVisualsDisk(String key, List<VisualResult> items) {
+    _visualsMap[key] = {
+      't': DateTime.now().toIso8601String(),
+      'items': [
+        for (final r in items)
+          {'id': r.gif.id, 'title': r.gif.title, 'preview': r.gif.previewUrl, 'url': r.gif.url, 'page': r.gif.pageUrl, 'q': r.query, 'g': r.group, 'a': r.anime},
+      ],
+    };
+    try {
+      _visualsFile.writeAsStringSync(jsonEncode(_visualsMap));
+    } catch (_) {}
   }
 
   /// Download em massa ("Baixar GIFs para todas"): progresso feito/total, null = parado.
