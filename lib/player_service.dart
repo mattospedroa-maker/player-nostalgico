@@ -14,15 +14,15 @@ import 'models.dart';
 enum MixMode { artist, vibe }
 
 /// Toca a fila de músicas e registra o histórico (usado pela recomendação).
+/// A fila mostrada vem sempre da lista real do player, e toda mudança na fila passa por uma fila única
+/// de operações, para a tela nunca mostrar uma música diferente da que está tocando.
 class PlayerService extends ChangeNotifier {
   final AppDb db;
   final AudioPlayer player = AudioPlayer();
-  List<Track> _queue = const [];
-  int? _index;
   DateTime? _startedAt;
   int? _startedTrackId;
   final _subs = <StreamSubscription>[];
-  List<Track> _original = const [];
+  List<int?> _original = const [];
   bool _shuffle = false;
   bool _fromMix = false;
   final _rnd = Random();
@@ -30,13 +30,13 @@ class PlayerService extends ChangeNotifier {
   /// Biblioteca inteira (o AppState preenche), para montar o mix automático.
   List<Track> Function() library = () => const [];
 
-  /// Músicas que entraram sozinhas pelo mix (podem ser trocadas quando o modo muda).
-  final Set<Track> _autoAdded = Set.identity();
+  /// Ids das músicas que entraram sozinhas pelo mix (podem ser trocadas quando o modo muda).
+  final Set<int?> _autoAdded = {};
   MixMode mixMode = MixMode.vibe;
   void Function(MixMode)? onMixModeChanged;
 
-  /// Próximas músicas (para mostrar "A seguir").
-  List<Track> get upcoming => _index == null || _nextPos >= _queue.length ? const [] : _queue.sublist(_nextPos);
+  /// Músicas editadas/movidas enquanto estão na fila (para mostrar o nome novo).
+  final Map<int?, Track> _overrides = {};
 
   final PlayerAudioHandler? handler;
 
@@ -48,45 +48,85 @@ class PlayerService extends ChangeNotifier {
     _subs.add(player.playbackEventStream.listen((_) => handler?.broadcast(), onError: (_, _) {}));
     _subs.add(player.playingStream.listen((_) => handler?.broadcast()));
     _subs.add(player.currentIndexStream.listen((i) {
-      _logCurrent(skipped: false);
-      _index = i;
-      _startedAt = DateTime.now();
-      _startedTrackId = current?.id;
+      final now = current;
+      if (now?.id != _startedTrackId) {
+        _logCurrent(skipped: false);
+        _startedAt = DateTime.now();
+        _startedTrackId = now?.id;
+      }
       _publishMediaItem();
       notifyListeners();
-      unawaited(_extendMix());
+      unawaited(_serial(_extendMix));
+    }));
+    _subs.add(player.sequenceStream.listen((_) {
+      _publishMediaItem();
+      notifyListeners();
     }));
     _subs.add(player.playerStateStream.listen((_) => notifyListeners()));
     _subs.add(player.loopModeStream.listen((_) => notifyListeners()));
   }
 
-  List<Track> get queue => _queue;
-  Track? get current => (_index != null && _index! < _queue.length) ? _queue[_index!] : null;
+  // ---------- fila única de operações ----------
+  Future<void> _chain = Future.value();
+  Future<T> _serial<T>(Future<T> Function() op) {
+    final c = Completer<T>();
+    _chain = _chain.then((_) async {
+      try {
+        c.complete(await op());
+      } catch (e, st) {
+        c.completeError(e, st);
+      }
+    });
+    return c.future;
+  }
+
+  Track _display(Track t) => _overrides[t.id] ?? t;
+
+  /// A fila real do player.
+  List<Track> get queue => [for (final s in player.sequence) _display(s.tag as Track)];
+  int? get _index => player.currentIndex;
+  Track? get current {
+    final i = _index;
+    final seq = player.sequence;
+    return (i != null && i >= 0 && i < seq.length) ? _display(seq[i].tag as Track) : null;
+  }
+
+  /// Próximas músicas (para mostrar "A seguir").
+  List<Track> get upcoming {
+    final q = queue;
+    return _index == null || _nextPos >= q.length ? const [] : q.sublist(_nextPos);
+  }
+
   bool get playing => player.playing;
   bool get shuffle => _shuffle;
 
   /// Fila que se adapta: aleatório ou "Mix do momento". Pular afasta parecidas; favoritar aproxima.
   bool get adaptive => _shuffle || _fromMix;
   LoopMode get loop => player.loopMode;
+  int get _nextPos => (_index ?? -1) + 1;
 
   Future<void> playQueue(List<Track> tracks, {int start = 0, bool mix = false}) async {
     if (tracks.isEmpty) return;
     _logCurrent(skipped: true);
-    _fromMix = mix;
-    _original = List.of(tracks);
-    _queue = List.of(tracks);
-    if (_shuffle) {
-      final first = _queue.removeAt(start.clamp(0, _queue.length - 1));
-      _queue.shuffle(_rnd);
-      _queue.insert(0, first);
-      start = 0;
-    }
-    final sources = [for (final t in _queue) _source(t)];
-    await player.setAudioSources(sources, initialIndex: start.clamp(0, sources.length - 1));
-    _index = player.currentIndex;
-    _autoAdded.clear();
-    _publishMediaItem();
-    unawaited(_extendMix());
+    await _serial(() async {
+      _fromMix = mix;
+      _original = [for (final t in tracks) t.id];
+      final list = List.of(tracks);
+      var first = start.clamp(0, list.length - 1);
+      if (_shuffle) {
+        final t = list.removeAt(first);
+        list.shuffle(_rnd);
+        list.insert(0, t);
+        first = 0;
+      }
+      _autoAdded.clear();
+      _overrides.clear();
+      await player.setAudioSources([for (final t in list) _source(t)], initialIndex: first);
+      _startedAt = DateTime.now();
+      _startedTrackId = current?.id;
+      _publishMediaItem();
+      await _extendMix();
+    });
     unawaited(player.play());
     notifyListeners();
   }
@@ -98,8 +138,8 @@ class PlayerService extends ChangeNotifier {
     final t = current;
     final h = handler;
     if (t == null || h == null) return;
-    h.queue.add([for (final q in _queue) MediaItem(id: q.path, title: q.title, artist: q.artist)]);
-    h.mediaItem.add(MediaItem(
+    h.queue.add([for (final q in queue) MediaItem(id: q.path, title: q.title, artist: q.artist)]);
+    final item = MediaItem(
       id: t.path,
       title: t.title,
       artist: t.artist == unknownArtist ? null : t.artist,
@@ -107,7 +147,8 @@ class PlayerService extends ChangeNotifier {
       genre: t.genre.isEmpty ? null : t.genre,
       duration: t.durationMs > 0 ? Duration(milliseconds: t.durationMs) : null,
       artUri: h.art[t.path],
-    ));
+    );
+    if (h.mediaItem.value != item) h.mediaItem.add(item);
     h.broadcast();
   }
 
@@ -116,7 +157,8 @@ class PlayerService extends ChangeNotifier {
   Future<void> next() async {
     final skipped = current;
     _logCurrent(skipped: true);
-    _startedTrackId = null;
+    // garante que existe uma próxima (o mix completa a fila antes de avançar)
+    await _serial(_extendMix);
     await player.seekToNext();
     if (skipped != null && adaptive) await pushSimilarBack(skipped);
   }
@@ -126,38 +168,31 @@ class PlayerService extends ChangeNotifier {
     if (m == mixMode) return;
     mixMode = m;
     onMixModeChanged?.call(m);
-    // tira as que vieram do mix (de trás para frente) e monta de novo
-    for (var i = _queue.length - 1; i >= _nextPos; i--) {
-      if (_autoAdded.contains(_queue[i])) {
-        _autoAdded.remove(_queue[i]);
-        _queue.removeAt(i);
-        await player.removeAudioSourceAt(i);
+    notifyListeners();
+    await _serial(() async {
+      final q = queue;
+      for (var i = q.length - 1; i >= _nextPos; i--) {
+        if (_autoAdded.remove(q[i].id)) await player.removeAudioSourceAt(i);
       }
-    }
-    await _extendMix(force: true);
+      await _extendMix(force: true);
+    });
     notifyListeners();
   }
 
-  bool _extending = false;
-
   /// Quando faltam poucas músicas, completa a fila com o mix (a música nunca para).
+  /// Só roda dentro de [_serial].
   Future<void> _extendMix({bool force = false}) async {
     final seed = current;
-    if (seed == null || _extending || player.loopMode != LoopMode.off) return;
-    if (!force && _queue.length - _nextPos >= 3) return;
-    _extending = true;
+    if (seed == null || player.loopMode != LoopMode.off) return;
+    final q = queue;
+    if (!force && q.length - _nextPos >= 3) return;
+    final picks = pickMix(seed, library(), mode: mixMode, exclude: q.map((t) => t.id).toSet(), count: 10, rnd: _rnd);
+    if (picks.isEmpty) return;
     try {
-      final picks = pickMix(seed, library(), mode: mixMode, exclude: _queue.map((t) => t.id).toSet(), count: 10, rnd: _rnd);
-      if (picks.isEmpty) return;
       await player.addAudioSources([for (final t in picks) _source(t)]);
-      _queue.addAll(picks);
-      _autoAdded.addAll(picks);
-      notifyListeners();
-    } catch (_) {
-      // fila mudou no meio: tenta na próxima troca de música
-    } finally {
-      _extending = false;
-    }
+      _autoAdded.addAll(picks.map((t) => t.id));
+    } catch (_) {}
+    notifyListeners();
   }
 
   /// Escolhe músicas para o mix. "Do mesmo artista": só o artista (se acabar, completa com a vibe).
@@ -209,51 +244,48 @@ class PlayerService extends ChangeNotifier {
     return s;
   }
 
-  int get _nextPos => (_index ?? -1) + 1;
-
   /// Depois de pular: as parecidas com a pulada vão para o fim da fila (as mais parecidas por último).
-  Future<void> pushSimilarBack(Track skipped) async {
-    if (_nextPos >= _queue.length) return;
-    final upcoming = _queue.sublist(_nextPos);
-    final keep = upcoming.where((t) => similarity(t, skipped) == 0).toList();
-    final back = upcoming.where((t) => similarity(t, skipped) > 0).toList()
-      ..sort((a, b) => similarity(a, skipped).compareTo(similarity(b, skipped)));
-    await _applyUpcoming([...keep, ...back]);
-  }
+  Future<void> pushSimilarBack(Track skipped) => _serial(() async {
+        final up = upcoming;
+        if (up.isEmpty) return;
+        final keep = up.where((t) => similarity(t, skipped) == 0).toList();
+        final back = up.where((t) => similarity(t, skipped) > 0).toList()
+          ..sort((a, b) => similarity(a, skipped).compareTo(similarity(b, skipped)));
+        await _applyUpcoming([...keep, ...back]);
+      });
 
   /// Depois de favoritar: parecidas sobem para logo depois da atual, e entram até 3 parecidas da biblioteca.
-  Future<void> pullSimilarForward(Track fav, List<Track> library) async {
-    if (_index == null) return;
-    final upcoming = _queue.sublist(_nextPos);
-    final ids = _queue.map((t) => t.id).toSet();
-    final extra = (library.where((t) => !ids.contains(t.id) && similarity(t, fav) > 0).toList()..shuffle(_rnd)).take(3).toList();
-    if (extra.isNotEmpty) {
-      await player.insertAudioSources(_nextPos, [for (final t in extra) _source(t)]);
-      _queue.insertAll(_nextPos, extra);
-      upcoming.insertAll(0, extra);
-    }
-    final near = upcoming.where((t) => similarity(t, fav) > 0).toList()..shuffle(_rnd);
-    final rest = upcoming.where((t) => similarity(t, fav) == 0).toList();
-    // intercala: parecida, outra, parecida... para não virar só um tipo
-    final out = <Track>[];
-    while (near.isNotEmpty || rest.isNotEmpty) {
-      if (near.isNotEmpty) out.add(near.removeAt(0));
-      if (near.isNotEmpty && out.length < 4) out.add(near.removeAt(0));
-      if (rest.isNotEmpty) out.add(rest.removeAt(0));
-    }
-    await _applyUpcoming(out);
-    notifyListeners();
-  }
+  Future<void> pullSimilarForward(Track fav, List<Track> library) => _serial(() async {
+        if (_index == null) return;
+        final ids = queue.map((t) => t.id).toSet();
+        final extra = (library.where((t) => !ids.contains(t.id) && similarity(t, fav) > 0).toList()..shuffle(_rnd)).take(3).toList();
+        if (extra.isNotEmpty) {
+          await player.insertAudioSources(_nextPos, [for (final t in extra) _source(t)]);
+          _autoAdded.addAll(extra.map((t) => t.id));
+        }
+        final up = upcoming;
+        final near = up.where((t) => similarity(t, fav) > 0).toList()..shuffle(_rnd);
+        final rest = up.where((t) => similarity(t, fav) == 0).toList();
+        // intercala: parecida, outra, parecida... para não virar só um tipo
+        final out = <Track>[];
+        while (near.isNotEmpty || rest.isNotEmpty) {
+          if (near.isNotEmpty) out.add(near.removeAt(0));
+          if (near.isNotEmpty && out.length < 4) out.add(near.removeAt(0));
+          if (rest.isNotEmpty) out.add(rest.removeAt(0));
+        }
+        await _applyUpcoming(out);
+        notifyListeners();
+      });
 
-  /// Reordena as próximas músicas (a atual não é tocada).
+  /// Reordena as próximas músicas (a atual não é tocada). Só roda dentro de [_serial].
   Future<void> _applyUpcoming(List<Track> desired) async {
     final start = _nextPos;
     for (var i = 0; i < desired.length; i++) {
       final pos = start + i;
-      final j = _queue.indexWhere((t) => identical(t, desired[i]), pos);
+      final q = queue;
+      final j = q.indexWhere((t) => t.id == desired[i].id, pos);
       if (j < 0 || j == pos) continue;
       await player.moveAudioSource(j, pos);
-      _queue.insert(pos, _queue.removeAt(j));
     }
     notifyListeners();
   }
@@ -266,17 +298,18 @@ class PlayerService extends ChangeNotifier {
   /// Aleatório feito pelo app (para a fila poder se adaptar ao que você pula e curte).
   Future<void> toggleShuffle() async {
     _shuffle = !_shuffle;
-    if (_index != null && _nextPos < _queue.length) {
-      final upcoming = _queue.sublist(_nextPos);
+    notifyListeners();
+    await _serial(() async {
+      final up = upcoming;
+      if (up.isEmpty) return;
       if (_shuffle) {
-        upcoming.shuffle(_rnd);
+        up.shuffle(_rnd);
       } else {
         final order = {for (var i = 0; i < _original.length; i++) _original[i]: i};
-        upcoming.sort((a, b) => (order[a] ?? 1 << 30).compareTo(order[b] ?? 1 << 30));
+        up.sort((a, b) => (order[a.id] ?? 1 << 30).compareTo(order[b.id] ?? 1 << 30));
       }
-      await _applyUpcoming(upcoming);
-    }
-    notifyListeners();
+      await _applyUpcoming(up);
+    });
   }
 
   Future<void> cycleLoop() => player.setLoopMode(switch (player.loopMode) {
@@ -287,7 +320,8 @@ class PlayerService extends ChangeNotifier {
 
   /// Atualiza caminhos na fila depois que o organizador moveu arquivos.
   void replaceTrack(Track updated) {
-    _queue = [for (final t in _queue) t.id == updated.id ? updated : t];
+    if (!queue.any((t) => t.id == updated.id)) return;
+    _overrides[updated.id] = updated;
     if (current?.id == updated.id) _publishMediaItem();
     notifyListeners();
   }
