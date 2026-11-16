@@ -12,6 +12,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'db.dart';
+import 'download_service.dart';
 import 'audio_handler.dart';
 import 'cover_service.dart';
 import 'gif_fetcher.dart';
@@ -40,6 +41,7 @@ class AppState extends ChangeNotifier {
   late final CoverService covers = CoverService(dataDir, metadata);
   late final GifFetcher gifFetcher = GifFetcher(gifs, client: http.Client())..lastFmKey = (() => lastFmKey);
   int? _lastAutoFetchId;
+  late final DownloadService downloads = DownloadService(this);
 
   /// Baixar GIFs sozinho quando uma música começa a tocar.
   bool get autoGifs => prefs.getBool('autoGifs') ?? true;

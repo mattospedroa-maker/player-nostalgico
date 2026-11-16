@@ -42,6 +42,7 @@ Future<void> main() async {
         ChangeNotifierProvider.value(value: app),
         ChangeNotifierProvider.value(value: app.player),
         ChangeNotifierProvider.value(value: app.gifs),
+        ChangeNotifierProvider.value(value: app.downloads),
       ],
       child: const PlayerApp(),
     ),

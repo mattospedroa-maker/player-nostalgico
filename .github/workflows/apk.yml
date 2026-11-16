@@ -25,7 +25,11 @@ jobs:
       - run: flutter pub get
       - run: flutter analyze
       - run: flutter test
-      - run: flutter build apk --release
+      - run: flutter build apk --release --target-platform android-arm64
+      - name: Conferir arquiteturas e tamanho do APK
+        run: |
+          ls -la build/app/outputs/flutter-apk/app-release.apk
+          unzip -l build/app/outputs/flutter-apk/app-release.apk | grep ' lib/' | awk '{print $1, $4}'
       - uses: actions/upload-artifact@v4
         with:
           name: player-nostalgico-apk
