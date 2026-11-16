@@ -23,6 +23,7 @@ import 'xp_icons.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  runApp(const BootScreen());
   if (Platform.isWindows || Platform.isLinux) {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
@@ -54,6 +55,99 @@ Future<void> main() async {
       child: const PlayerApp(),
     ),
   );
+}
+
+/// Tela de abertura no estilo do boot do Windows XP, enquanto a biblioteca é lida.
+class BootScreen extends StatelessWidget {
+  const BootScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) => MaterialApp(
+        debugShowCheckedModeBanner: false,
+        theme: Xp.theme(),
+        home: const Scaffold(
+          backgroundColor: Colors.black,
+          body: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                XpIcon(XpIcons.cassette, size: 96),
+                SizedBox(height: 14),
+                Text.rich(
+                  TextSpan(
+                    children: [
+                      TextSpan(text: 'Nostalgic ', style: TextStyle(color: Colors.white)),
+                      TextSpan(text: 'MPlayer', style: TextStyle(color: Color(0xFFF39C2B), fontStyle: FontStyle.italic)),
+                    ],
+                  ),
+                  style: TextStyle(fontSize: 30, fontWeight: FontWeight.bold),
+                ),
+                Text('edição anos 2000', style: TextStyle(color: Color(0xFF9DB3E0), fontSize: 13)),
+                SizedBox(height: 46),
+                SizedBox(width: 150, child: _BootBar()),
+                SizedBox(height: 18),
+                Text('Lendo a biblioteca…', style: TextStyle(color: Color(0xFF8899AA), fontSize: 13)),
+              ],
+            ),
+          ),
+        ),
+      );
+}
+
+/// Barra do boot do XP: fundo preto com borda cinza arredondada e 3 bloquinhos azuis correndo.
+class _BootBar extends StatefulWidget {
+  const _BootBar();
+
+  @override
+  State<_BootBar> createState() => _BootBarState();
+}
+
+class _BootBarState extends State<_BootBar> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1600))..repeat();
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Container(
+        height: 18,
+        padding: const EdgeInsets.all(3),
+        decoration: BoxDecoration(border: Border.all(color: const Color(0xFFB0B0B0), width: 1.5), borderRadius: BorderRadius.circular(5)),
+        child: ClipRect(
+          child: AnimatedBuilder(
+            animation: _c,
+            builder: (_, _) => LayoutBuilder(
+              builder: (_, c) {
+                const w = 9.0, gap = 2.0, group = 3 * w + 2 * gap;
+                final x = -group + (c.maxWidth + group) * _c.value;
+                return Stack(
+                  children: [
+                    for (var i = 0; i < 3; i++)
+                      Positioned(
+                        left: x + i * (w + gap),
+                        top: 0,
+                        bottom: 0,
+                        width: w,
+                        child: const DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [Color(0xFF9FC0F7), Color(0xFF2A64E0), Color(0xFF1C4FC4), Color(0xFF7FA8F0)],
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
+          ),
+        ),
+      );
 }
 
 class PlayerApp extends StatelessWidget {

@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../app_state.dart';
 import '../download_service.dart';
 import '../theme.dart';
+import '../xp_icons.dart';
 
 /// "Baixar do YouTube (MP3)": aba de um vídeo e aba de playlist.
 class YoutubeScreen extends StatefulWidget {
@@ -84,56 +85,35 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
             XpTitleBar(title: 'Baixar do YouTube', actions: [
               XpTitleButton(icon: Icons.close, tooltip: 'Fechar (continua baixando)', onTap: () => Navigator.pop(context)),
             ]),
-            _tabs(),
-            Expanded(child: showQueue ? _queueView(ds) : (_tab == 0 ? _singleView(ds) : _playlistView(ds))),
+            if (!showQueue) XpTabs(labels: const ['Um vídeo', 'Playlist'], current: _tab, onTap: (i) => setState(() => _tab = i)),
+            Expanded(
+              child: Padding(
+                padding: EdgeInsets.only(top: showQueue ? 8 : 0),
+                child: XpTabPage(
+                  padding: EdgeInsets.zero,
+                  child: showQueue ? _queueView(ds) : (_tab == 0 ? _singleView(ds) : _playlistView(ds)),
+                ),
+              ),
+            ),
+            const SizedBox(height: 6),
+            XpStatusBar(showQueue
+                ? ['${ds.doneCount} prontas · ${ds.queue.length - ds.doneCount} na fila', 'MP3 192 kbps']
+                : [_tab == 0 ? 'Cole o link de um vídeo' : 'Cole o link de uma playlist', 'MP3 192 kbps']),
           ]),
         ),
       ),
     );
   }
 
-  Widget _tabs() => Container(
-        margin: const EdgeInsets.fromLTRB(10, 10, 10, 4),
-        decoration: BoxDecoration(border: Border.all(color: Xp.blue, width: 1.5), borderRadius: BorderRadius.circular(5)),
-        clipBehavior: Clip.antiAlias,
-        child: Row(children: [
-          for (final (i, label) in [(0, 'Um vídeo'), (1, 'Playlist')])
-            Expanded(
-              child: InkWell(
-                onTap: () => setState(() => _tab = i),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: i == _tab ? const [Color(0xFF5BA3F5), Color(0xFF1C5FD8)] : const [Colors.white, Color(0xFFDCE6F7)],
-                    ),
-                  ),
-                  child: Text(label,
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: i == _tab ? Colors.white : Xp.navy)),
-                ),
-              ),
-            ),
-        ]),
-      );
-
   // ---------- caixas e campos ----------
 
-  Widget _box({required List<Widget> children}) => Container(
-        margin: const EdgeInsets.fromLTRB(10, 8, 10, 4),
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: const Color(0xFFE5DCA0), width: 2),
-        ),
+  Widget _box({required List<Widget> children}) => Padding(
+        padding: const EdgeInsets.all(10),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children),
       );
 
   Widget _label(String s) =>
-      Padding(padding: const EdgeInsets.only(bottom: 6), child: Text(s, style: const TextStyle(fontWeight: FontWeight.bold, color: Xp.navy)));
+      Padding(padding: const EdgeInsets.only(bottom: 6), child: Text(s, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)));
 
   Widget _linkField(TextEditingController c, String hint, {required bool playlist}) => TextField(
         controller: c,
@@ -142,15 +122,11 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
         onSubmitted: (_) => _search(playlist: playlist),
         style: const TextStyle(fontSize: 14),
         decoration: InputDecoration(
-          isDense: true,
-          filled: true,
-          fillColor: const Color(0xFFF7FAFF),
           hintText: hint,
-          border: const OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF7F9DB9))),
-          suffixIcon: TextButton.icon(
-            onPressed: () => _paste(c, playlist: playlist),
-            icon: const Icon(Icons.content_paste, size: 16),
-            label: const Text('Colar'),
+          suffixIconConstraints: const BoxConstraints(minHeight: 30),
+          suffixIcon: Padding(
+            padding: const EdgeInsets.all(4),
+            child: XpButton(label: 'Colar', icon: Icons.content_paste, onTap: () => _paste(c, playlist: playlist)),
           ),
         ),
       );
@@ -158,17 +134,12 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
   Widget _nameField(String label, TextEditingController c, void Function(String) onChanged) => Padding(
         padding: const EdgeInsets.only(top: 6),
         child: Row(children: [
-          SizedBox(width: 56, child: Text(label, style: const TextStyle(color: Xp.blueMuted))),
+          SizedBox(width: 56, child: Text('$label:', style: const TextStyle(fontSize: 14))),
           Expanded(
             child: TextField(
               controller: c,
               onChanged: onChanged,
-              style: const TextStyle(fontWeight: FontWeight.bold, color: Xp.navy, fontSize: 14),
-              decoration: const InputDecoration(
-                isDense: true,
-                contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 9),
-                border: OutlineInputBorder(borderSide: BorderSide(color: Color(0xFF9FB3D9))),
-              ),
+              style: const TextStyle(fontSize: 14),
             ),
           ),
         ]),
@@ -179,32 +150,12 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
         child: Text(msg, style: const TextStyle(color: Xp.red)),
       );
 
-  Widget _bigButton(String label, IconData icon, VoidCallback? onTap, {bool primary = true}) => Padding(
-        padding: const EdgeInsets.fromLTRB(10, 10, 10, 4),
-        child: Opacity(
-          opacity: onTap == null ? .5 : 1,
-          child: InkWell(
-            onTap: onTap,
-            borderRadius: BorderRadius.circular(30),
-            child: Container(
-              padding: const EdgeInsets.symmetric(vertical: 13),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(30),
-                border: Border.all(color: primary ? const Color(0xFF0A3A99) : const Color(0xFF8A9BB8)),
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: primary ? const [Color(0xFF5B9BFF), Color(0xFF0F4FC4)] : const [Colors.white, Color(0xFFCFD6E2)],
-                ),
-              ),
-              child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                Icon(icon, color: primary ? Colors.white : Xp.navy, size: 20),
-                const SizedBox(width: 8),
-                Text(label, style: TextStyle(color: primary ? Colors.white : Xp.navy, fontWeight: FontWeight.bold, fontSize: 16)),
-              ]),
-            ),
-          ),
-        ),
+  Widget _bigButton(String label, IconData icon, VoidCallback? onTap, {bool primary = true, Widget? extra}) => Padding(
+        padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+        child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+          if (extra != null) ...[extra, const SizedBox(width: 7)],
+          XpButton(label: label, icon: icon, primary: primary, onTap: onTap),
+        ]),
       );
 
   static String _dur(int? s) => s == null ? '' : '${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}';
@@ -230,7 +181,7 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
       _box(children: [
         _label('Link do vídeo'),
         _linkField(_videoLink, 'youtu.be/… ou youtube.com/watch?v=…', playlist: false),
-        if (ds.loadingSingle) const Padding(padding: EdgeInsets.only(top: 10), child: LinearProgressIndicator(minHeight: 3)),
+        if (ds.loadingSingle) const Padding(padding: EdgeInsets.only(top: 10), child: XpProgress(height: 14)),
         if (ds.singleError != null) _error(ds.singleError!),
         if (e == null && !ds.loadingSingle)
           Padding(
@@ -298,22 +249,24 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
     return Container(
       margin: const EdgeInsets.only(top: 10),
       padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFF6D6),
-        border: Border.all(color: const Color(0xFFE0B84A), width: 1.5),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: Text.rich(TextSpan(children: [
-        const TextSpan(text: '⚠ Você já tem esta música\n', style: TextStyle(fontWeight: FontWeight.bold)),
-        TextSpan(text: rel.replaceAll(p.separator, ' / ')),
-      ]), style: const TextStyle(color: Color(0xFF6B4D00), fontSize: 13)),
+      decoration: BoxDecoration(color: const Color(0xFFFFFFE1), border: Border.all(color: Colors.black)),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const XpIcon(XpIcons.warning, size: 24),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text.rich(TextSpan(children: [
+            const TextSpan(text: 'Você já tem esta música\n', style: TextStyle(fontWeight: FontWeight.bold)),
+            TextSpan(text: rel.replaceAll(p.separator, '\\')),
+          ]), style: const TextStyle(color: Colors.black, fontSize: 13)),
+        ),
+      ]),
     );
   }
 
   Widget _haveBadge() => Container(
         margin: const EdgeInsets.only(top: 3),
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-        decoration: BoxDecoration(color: const Color(0xFFFFF6D6), borderRadius: BorderRadius.circular(4)),
+        decoration: BoxDecoration(color: const Color(0xFFFFFFE1), border: Border.all(color: const Color(0xFFB8A76A))),
         child: const Text('✔ Já está na Biblioteca', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF8A6200))),
       );
 
@@ -328,7 +281,7 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
           _box(children: [
             _label('Link da playlist'),
             _linkField(_playlistLink, 'youtube.com/playlist?list=…', playlist: true),
-            if (ds.loadingPlaylist) const Padding(padding: EdgeInsets.only(top: 10), child: LinearProgressIndicator(minHeight: 3)),
+            if (ds.loadingPlaylist) const Padding(padding: EdgeInsets.only(top: 10), child: XpProgress(height: 14)),
             if (ds.playlistError != null) _error(ds.playlistError!),
             if (items.isEmpty && !ds.loadingPlaylist)
               Padding(padding: const EdgeInsets.only(top: 8), child: XpButtonRow(onTap: () => _search(playlist: true))),
@@ -421,12 +374,16 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
     final al = TextEditingController(text: e.names.album);
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => XpAlertDialog(
+        icon: XpIcons.edit,
         title: const Text('Corrigir nome'),
         content: Column(mainAxisSize: MainAxisSize.min, children: [
           _old(e.originalTitle),
+          const SizedBox(height: 8),
           TextField(controller: a, decoration: const InputDecoration(labelText: 'Artista')),
+          const SizedBox(height: 8),
           TextField(controller: t, decoration: const InputDecoration(labelText: 'Título')),
+          const SizedBox(height: 8),
           TextField(controller: al, decoration: const InputDecoration(labelText: 'Álbum')),
         ]),
         actions: [
@@ -452,61 +409,73 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
     final done = ds.doneCount;
     final current = ds.running ? (done + 1).clamp(1, total) : done;
     return Column(children: [
+      Padding(
+        padding: const EdgeInsets.all(10),
+        child: Row(children: [
+          const XpIcon(XpIcons.youtube, size: 36),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Text(ds.running ? 'Baixando $current de $total' : 'Terminado', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14.5)),
+              const SizedBox(height: 5),
+              XpProgress(value: total == 0 ? 0 : done / total),
+            ]),
+          ),
+        ]),
+      ),
+      const XpColumnHeader('Nome', right: 'Situação'),
       Expanded(
-        child: ListView(padding: const EdgeInsets.only(bottom: 10), children: [
-          _box(children: [
-            _label(ds.running ? 'Baixando $current de $total' : 'Terminado'),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(6),
-              child: LinearProgressIndicator(value: total == 0 ? 0 : done / total, minHeight: 10, color: Xp.blue, backgroundColor: Colors.white),
-            ),
-            const SizedBox(height: 6),
-            for (final e in q) _queueRow(e),
-          ]),
+        child: ListView(padding: EdgeInsets.zero, children: [
+          for (final e in q) _queueRow(e),
           if (ds.lastSummary != null)
             Container(
-              margin: const EdgeInsets.fromLTRB(10, 8, 10, 0),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: Xp.navy, borderRadius: BorderRadius.circular(6)),
-              child: Text('✔ ${ds.lastSummary}', style: const TextStyle(color: Colors.white)),
+              margin: const EdgeInsets.all(10),
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(color: const Color(0xFFFFFFE1), border: Border.all(color: Colors.black)),
+              child: Row(children: [
+                const XpIcon(XpIcons.check, size: 22),
+                const SizedBox(width: 8),
+                Expanded(child: Text(ds.lastSummary!, style: const TextStyle(fontSize: 13.5))),
+              ]),
             ),
         ]),
       ),
       if (ds.running)
-        _bigButton('Cancelar', Icons.close, ds.cancelAll, primary: false)
+        _bigButton('Cancelar', Icons.close, ds.cancelAll, primary: true, extra: XpButton(label: 'Ocultar', onTap: () => Navigator.pop(context)))
       else
         _bigButton('Baixar mais', Icons.add, () {
           ds.queue.clear();
           setState(() {});
         }),
-      const SizedBox(height: 8),
     ]);
   }
 
   Widget _queueRow(YtEntry e) {
-    final (text, color) = switch (e.status) {
-      YtStatus.queued => ('Na fila', Xp.blueMuted),
-      YtStatus.downloading => ('Baixando… ${(e.progress * 100).round()}%', Xp.blueText),
-      YtStatus.converting => ('Convertendo para MP3…', Xp.blueText),
-      YtStatus.done => ('✔ Pronto (MP3${e.sizeBytes == null ? '' : ', ${(e.sizeBytes! / 1048576).toStringAsFixed(1).replaceAll('.', ',')} MB'})', const Color(0xFF2A7A2A)),
-      YtStatus.failed => ('✖ ${e.error ?? 'Erro'}', Xp.red),
-      YtStatus.canceled => ('Cancelado', Xp.blueMuted),
-      YtStatus.ready => ('', Xp.blueMuted),
-    };
     final active = e.status == YtStatus.downloading || e.status == YtStatus.converting;
+    final (text, color) = switch (e.status) {
+      YtStatus.queued => ('Na fila', const Color(0xFF888888)),
+      YtStatus.downloading => ('Baixando… ${(e.progress * 100).round()}%', Colors.white),
+      YtStatus.converting => ('Convertendo para MP3…', Colors.white),
+      YtStatus.done => ('Pronto · MP3${e.sizeBytes == null ? '' : ', ${(e.sizeBytes! / 1048576).toStringAsFixed(1).replaceAll('.', ',')} MB'}', const Color(0xFF1D7A2A)),
+      YtStatus.failed => ('✖ ${e.error ?? 'Erro'}', Xp.red),
+      YtStatus.canceled => ('Cancelado', const Color(0xFF888888)),
+      YtStatus.ready => ('', const Color(0xFF888888)),
+    };
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Xp.listBorder))),
+      padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 8),
+      decoration: BoxDecoration(color: active ? Xp.select : null, border: const Border(bottom: BorderSide(color: Color(0xFFEEEEEE)))),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Text(e.names.title, style: const TextStyle(fontWeight: FontWeight.bold, color: Xp.navy, fontSize: 15)),
-        Text('${e.names.artist} · ${e.names.album}', style: const TextStyle(fontSize: 12, color: Xp.blueMuted)),
-        const SizedBox(height: 2),
-        Text(text, style: TextStyle(fontSize: 12, color: color, fontWeight: e.status == YtStatus.done ? FontWeight.bold : FontWeight.normal)),
+        Text(e.names.title, style: TextStyle(fontWeight: FontWeight.bold, color: active ? Colors.white : Colors.black, fontSize: 14.5)),
+        Text('${e.names.artist} · ${e.names.album}', style: TextStyle(fontSize: 12, color: active ? const Color(0xFFDFE8FF) : const Color(0xFF666666))),
+        const SizedBox(height: 3),
+        Row(children: [
+          if (e.status == YtStatus.done) ...[const XpIcon(XpIcons.note, size: 14), const SizedBox(width: 4)],
+          Expanded(child: Text(text, style: TextStyle(fontSize: 12, color: color))),
+        ]),
         if (active)
           Padding(
             padding: const EdgeInsets.only(top: 4),
-            child: LinearProgressIndicator(
-                value: e.status == YtStatus.converting ? null : e.progress, minHeight: 6, color: Xp.blue, backgroundColor: const Color(0xFFE3EAF6)),
+            child: XpProgress(value: e.status == YtStatus.converting ? null : e.progress, height: 14),
           ),
       ]),
     );

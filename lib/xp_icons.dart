@@ -24,6 +24,12 @@ enum XpIcons {
   refresh,
   edit,
   computer,
+  warning,
+  question,
+  info,
+  bin,
+  doc,
+  check,
 }
 
 const _svg = <XpIcons, String>{
@@ -50,6 +56,17 @@ const _svg = <XpIcons, String>{
   XpIcons.refresh: '<path d="M26 16a10 10 0 1 1-3-7" fill="none" stroke="#2a8a2a" stroke-width="4"/><path d="M19 3l7 6-8 3z" fill="#2a8a2a"/>',
   XpIcons.edit: '<rect x="4" y="3" width="20" height="26" fill="#fff" stroke="#555"/><path d="M8 9h12M8 14h12M8 19h6" stroke="#99a"/><path d="M27 9l-12 12-4 1 1-4 12-12z" fill="#ffd34a" stroke="#6b4b1d"/>',
   XpIcons.computer: '<rect x="4" y="4" width="24" height="17" fill="#ece9d8" stroke="#555"/><rect x="7" y="7" width="18" height="11" fill="#3a6ea5"/><path d="M9 25h14l2 3H7z" fill="#ccc" stroke="#555"/><path d="M14 21h4v4h-4z" fill="#bbb"/>',
+  XpIcons.warning:
+      '<path d="M16 2L31 29H1z" fill="#ffd34a" stroke="#8a6410" stroke-width="1.5"/><rect x="14.5" y="10" width="3" height="11" fill="#000"/><rect x="14.5" y="23" width="3" height="3" fill="#000"/>',
+  XpIcons.question:
+      '<circle cx="16" cy="16" r="14" fill="#3b8cf5" stroke="#0a246a"/><path d="M11.5 12a4.5 4.5 0 1 1 6.5 4c-1.4.8-2 1.6-2 3.2" fill="none" stroke="#fff" stroke-width="3"/><rect x="14.5" y="21.5" width="3" height="3" fill="#fff"/>',
+  XpIcons.info:
+      '<circle cx="16" cy="16" r="14" fill="#fff" stroke="#1d3c78" stroke-width="2"/><rect x="14.5" y="13" width="3.5" height="11" fill="#1d3c78"/><rect x="14.5" y="7.5" width="3.5" height="3.5" fill="#1d3c78"/>',
+  XpIcons.bin:
+      '<path d="M7 9h18l-2 20H9z" fill="#c9d6e8" stroke="#3d5577"/><rect x="5" y="6" width="22" height="4" fill="#e5edf7" stroke="#3d5577"/><path d="M12 13v13M16 13v13M20 13v13" stroke="#3d5577"/>',
+  XpIcons.doc:
+      '<path d="M7 3h13l6 6v20H7z" fill="#fff" stroke="#555"/><path d="M20 3v6h6" fill="#ddd" stroke="#555"/><path d="M11 20h10M11 24h10" stroke="#3b8cf5" stroke-width="2"/><circle cx="13" cy="13" r="3" fill="#3b8cf5"/>',
+  XpIcons.check: '<circle cx="16" cy="16" r="14" fill="#3aa83a" stroke="#1b5e1b"/><path d="M9 16l5 5 9-10" fill="none" stroke="#fff" stroke-width="3.5"/>',
 };
 
 class XpIcon extends StatelessWidget {

@@ -302,6 +302,21 @@ class PlayerService extends ChangeNotifier {
         notifyListeners();
       });
 
+  /// Tira uma música da fila (a que está tocando não sai).
+  Future<void> removeAt(int index) => _serial(() async {
+        if (index == _index || index < 0 || index >= player.sequence.length) return;
+        await player.removeAudioSourceAt(index);
+        notifyListeners();
+      });
+
+  /// Embaralha só as próximas músicas (a atual continua tocando).
+  Future<void> shuffleUpcoming() => _serial(() async {
+        final up = [...upcoming];
+        if (up.length < 2) return;
+        up.shuffle(_rnd);
+        await _applyUpcoming(up);
+      });
+
   /// Reordena as próximas músicas (a atual não é tocada). Só roda dentro de [_serial].
   Future<void> _applyUpcoming(List<Track> desired) async {
     final start = _nextPos;

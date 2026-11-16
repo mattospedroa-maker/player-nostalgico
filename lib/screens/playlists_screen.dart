@@ -153,7 +153,8 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                   final nav = Navigator.of(context);
                   final ok = await showDialog<bool>(
                     context: context,
-                    builder: (ctx) => AlertDialog(
+                    builder: (ctx) => XpAlertDialog(
+                      icon: XpIcons.warning,
                       title: const Text('Apagar playlist?'),
                       content: const Text('As músicas continuam na biblioteca.'),
                       actions: [
