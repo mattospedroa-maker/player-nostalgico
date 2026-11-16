@@ -26,11 +26,21 @@ class CoverService {
   /// Nome do arquivo da capa: por álbum; sem álbum, pela própria música.
   static String fileKey(Track t) => hasAlbum(t) ? keyFor(t.artist, t.album) : 'f_${sha1.convert(utf8.encode(t.path)).toString().substring(0, 16)}';
 
+  /// Resposta guardada de [fileFor] por álbum (ou música sem álbum). As capas só são gravadas por esta
+  /// classe, que atualiza a lista ao gravar; assim cada linha da lista não consulta o disco a cada redesenho.
+  final Map<String, File?> _known = {};
+
   /// Capa guardada para esta música (do álbum ou tirada do próprio arquivo), ou null.
   File? fileFor(Track t) {
+    final id = hasAlbum(t) ? 'a\u0000${t.artist}\u0000${t.album}' : 'f\u0000${t.path}';
+    if (_known.containsKey(id)) return _known[id];
+    if (_known.length > 20000) _known.clear();
     final f = File(p.join(dir, '${fileKey(t)}.jpg'));
-    return f.existsSync() ? f : null;
+    return _known[id] = f.existsSync() ? f : null;
   }
+
+  /// Uma capa nova foi gravada: as próximas consultas já enxergam.
+  void _saved() => _known.clear();
 
   /// Busca as capas que faltam (uma vez por álbum). [tried] guarda os álbuns já resolvidos.
   /// Ordem: Cover Art Archive (capa oficial do álbum) > capa gravada no arquivo/pasta (ex.: miniatura do YouTube).
@@ -63,6 +73,7 @@ class CoverService {
       if (embedded != null && embedded.length > 1024) {
         await Directory(dir).create(recursive: true);
         await File(p.join(dir, '${e.key}.jpg')).writeAsBytes(embedded, flush: true);
+        _saved();
         tried.add(e.key);
         n++;
         onEach?.call();
@@ -81,6 +92,7 @@ class CoverService {
       if (res.statusCode != 200 || res.bodyBytes.length < 1024) return false;
       await Directory(dir).create(recursive: true);
       await File(p.join(dir, '$key.jpg')).writeAsBytes(res.bodyBytes, flush: true);
+      _saved();
       return true;
     } catch (_) {
       return false;

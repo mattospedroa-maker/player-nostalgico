@@ -22,31 +22,53 @@ class GifService extends ChangeNotifier {
 
   String? get gifRoot => sourceRoot == null ? null : p.join(sourceRoot!, 'GIFs');
 
-  Future<void> refresh() async {
+  Future<void>? _refreshing;
+  bool _refreshAgain = false;
+
+  /// Relê a pasta de GIFs. A leitura é assíncrona (não trava a tela com acervos grandes), e pedidos que
+  /// chegam enquanto uma leitura está em andamento viram uma leitura só, logo depois dela.
+  Future<void> refresh() {
+    if (_refreshing != null) {
+      _refreshAgain = true;
+      return _refreshing!;
+    }
+    return _refreshing = () async {
+      try {
+        do {
+          _refreshAgain = false;
+          await _readFolder();
+        } while (_refreshAgain);
+      } finally {
+        _refreshing = null;
+      }
+    }();
+  }
+
+  Future<void> _readFolder() async {
     final root = gifRoot;
     if (root == null) return;
     final d = Directory(root);
-    if (!d.existsSync()) {
+    if (!await d.exists()) {
       await d.create(recursive: true);
       _cache = const [];
       notifyListeners();
       return;
     }
-    final files = d
-        .listSync(recursive: true, followLinks: false)
-        .whereType<File>()
-        .where((f) => gifExtensions.contains(p.extension(f.path).toLowerCase()))
-        .toList();
+    final files = <File>[];
+    await for (final e in d.list(recursive: true, followLinks: false).handleError((_) {})) {
+      if (e is File && gifExtensions.contains(p.extension(e.path).toLowerCase())) files.add(e);
+    }
     // limpa imagens vazias salvas da web por versões antigas
     for (final f in files.where((f) => p.basename(f.path).startsWith('web_')).toList()) {
       try {
-        if (f.lengthSync() < 2048) {
+        if (await f.length() < 2048) {
           await db.deleteGifEverywhere(f.path);
-          f.deleteSync();
+          await f.delete();
           files.remove(f);
         }
       } catch (_) {}
     }
+    if (gifRoot != root) return; // trocou de pasta no meio da leitura
     _cache = files;
     notifyListeners();
   }
@@ -129,10 +151,11 @@ class GifService extends ChangeNotifier {
     final keys = [t.artist, t.album, t.title, t.genre].map(_norm).where((k) => k.length >= 2).toList();
     final matching = <String>[];
     final general = <String>[];
+    final pinnedSet = pinned.toSet();
     for (final f in _cache) {
-      if (pinned.contains(f.path) || !f.existsSync()) continue;
-      // GIF automático de outra música (ex.: do mesmo álbum) não entra: era isso que deixava o álbum todo igual
-      if (isAuto(f.path)) continue;
+      // GIF automático de outra música (ex.: do mesmo álbum) não entra: era isso que deixava o álbum todo igual.
+      // As conferências baratas vêm antes da consulta ao disco (a maioria do acervo é automática).
+      if (isAuto(f.path) || pinnedSet.contains(f.path) || !f.existsSync()) continue;
       final tags = p.split(p.relative(p.dirname(f.path), from: gifRoot!)).where((s) => s != '.').map(_norm).toList()
         ..add(_norm(p.basenameWithoutExtension(f.path)));
       final hit = tags.any((tag) => tag.length >= 2 && keys.any((k) => k.contains(tag) || tag.contains(k)));

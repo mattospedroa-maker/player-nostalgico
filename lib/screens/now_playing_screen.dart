@@ -488,6 +488,10 @@ class _GifCarouselState extends State<GifCarousel> {
     _restartTimer();
   }
 
+  /// Anda a cada 250 ms: só a barrinha de tempo e o "troca em X s" se redesenham com ela
+  /// (antes a roda inteira, com o GIF grande e as miniaturas, era refeita 4 vezes por segundo).
+  final ValueNotifier<int> _tick = ValueNotifier(0);
+
   void _restartTimer() {
     _timer?.cancel();
     if (_gifs.length > 1) {
@@ -496,7 +500,7 @@ class _GifCarouselState extends State<GifCarousel> {
         if (DateTime.now().difference(_shownAt) >= interval) {
           _go(_i + 1);
         } else {
-          setState(() {});
+          _tick.value++;
         }
       });
     }
@@ -514,13 +518,18 @@ class _GifCarouselState extends State<GifCarousel> {
   void dispose() {
     _gifService.removeListener(_onGifsChanged);
     _timer?.cancel();
+    _tick.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final elapsed = DateTime.now().difference(_shownAt).inMilliseconds / interval.inMilliseconds;
-    final remaining = (interval.inSeconds - DateTime.now().difference(_shownAt).inSeconds).clamp(0, interval.inSeconds);
+    double elapsed() => DateTime.now().difference(_shownAt).inMilliseconds / interval.inMilliseconds;
+    int remaining() => (interval.inSeconds - DateTime.now().difference(_shownAt).inSeconds).clamp(0, interval.inSeconds);
+    // limite de decodificação do GIF grande: 2x a largura da tela em pixels. Fotos enormes escolhidas do
+    // celular (4000 px) deixam de ocupar dezenas de MB; GIFs normais, e até os bem largos que a moldura
+    // corta dos lados, ficam do tamanho original (sem perder nitidez)
+    final fullWidth = (MediaQuery.sizeOf(context).width * MediaQuery.devicePixelRatioOf(context) * 2).round();
     final app = context.read<AppState>();
     final epoch = context.select<AppState, int>((a) => a.visualsEpoch);
     if (epoch != _epoch) {
@@ -551,10 +560,10 @@ class _GifCarouselState extends State<GifCarousel> {
             if (_gifs.isNotEmpty)
               AnimatedSwitcher(
                 duration: const Duration(milliseconds: 350),
-                child: _image(_gifs[_i], key: ValueKey(_gifs[_i])),
+                child: _image(_gifs[_i], key: ValueKey(_gifs[_i]), cacheWidth: fullWidth),
               )
             else if (_cover != null)
-              Image.memory(_cover!, fit: BoxFit.cover)
+              Image.memory(_cover!, fit: BoxFit.cover, cacheWidth: fullWidth)
             else
               Center(
                 child: Padding(
@@ -595,8 +604,11 @@ class _GifCarouselState extends State<GifCarousel> {
                 child: Container(
                   color: Colors.black54,
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  child: Text('GIF ${_i + 1} de ${_gifs.length} · troca em $remaining s',
-                      style: const TextStyle(color: Colors.white, fontSize: 11)),
+                  child: ValueListenableBuilder<int>(
+                    valueListenable: _tick,
+                    builder: (_, _, _) => Text('GIF ${_i + 1} de ${_gifs.length} · troca em ${remaining()} s',
+                        style: const TextStyle(color: Colors.white, fontSize: 11)),
+                  ),
                 ),
               ),
           ]),
@@ -631,7 +643,10 @@ class _GifCarouselState extends State<GifCarousel> {
           height: 3,
           color: const Color(0xFFB9C9E6),
           alignment: Alignment.centerLeft,
-          child: FractionallySizedBox(widthFactor: elapsed.clamp(0.0, 1.0), child: Container(color: Xp.navy)),
+          child: ValueListenableBuilder<int>(
+            valueListenable: _tick,
+            builder: (_, _, _) => FractionallySizedBox(widthFactor: elapsed().clamp(0.0, 1.0), child: Container(color: Xp.navy)),
+          ),
         ),
       ],
     ]);
