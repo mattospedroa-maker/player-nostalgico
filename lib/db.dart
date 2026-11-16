@@ -1,6 +1,7 @@
 import 'package:sqflite/sqflite.dart';
 
 import 'models.dart';
+import 'play_stats.dart';
 
 /// Banco local (SQLite). Guarda faixas, playlists, histórico e GIFs fixados.
 class AppDb {
@@ -210,6 +211,20 @@ class AppDb {
               skipped: (r['skipped'] as int) == 1,
             ))
         .toList();
+  }
+
+  /// Contagem por música numa consulta só (para ordenar e montar as coleções automáticas).
+  Future<PlayStats> playStats() async {
+    final rows = await db.rawQuery(
+        'SELECT track_id, SUM(1 - skipped) AS n, SUM(skipped) AS s, MAX(played_at) AS last FROM plays GROUP BY track_id');
+    final plays = <int, int>{}, last = <int, int>{}, skips = <int, int>{};
+    for (final r in rows) {
+      final id = r['track_id'] as int;
+      plays[id] = (r['n'] as int?) ?? 0;
+      skips[id] = (r['s'] as int?) ?? 0;
+      last[id] = (r['last'] as int?) ?? 0;
+    }
+    return PlayStats(plays: plays, lastPlayed: last, skips: skips);
   }
 
   // ---------- GIFs fixados ----------

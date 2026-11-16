@@ -6,9 +6,11 @@ import 'package:just_audio/just_audio.dart';
 import 'package:audio_service/audio_service.dart';
 
 import 'audio_handler.dart';
+import 'crossfade.dart';
 import 'db.dart';
 import 'models.dart';
 import 'mood.dart';
+import 'recommender.dart';
 
 /// O que tocar quando a fila acaba.
 enum MixMode { artist, vibe }
@@ -43,11 +45,20 @@ class PlayerService extends ChangeNotifier {
 
   final PlayerAudioHandler? handler;
 
-  PlayerService(this.db, {this.handler}) {
+  /// Transição suave entre músicas (só no fim natural de cada uma).
+  late final Crossfader crossfader;
+  void Function(bool)? onCrossfadeChanged;
+
+  /// Avisado depois que uma música entra no histórico.
+  void Function()? onPlayLogged;
+
+  PlayerService(this.db, {this.handler, TailDeck Function()? tail}) {
+    crossfader = Crossfader(JustAudioDeck(player), tail ?? JustAudioTail.new);
     handler
       ?..player = player
       ..onNext = next
-      ..onPrevious = previous;
+      ..onPrevious = previous
+      ..onSeek = seek;
     _subs.add(player.playbackEventStream.listen((_) => handler?.broadcast(), onError: (_, _) {}));
     _subs.add(player.playingStream.listen((_) => handler?.broadcast()));
     _subs.add(player.currentIndexStream.listen((i) {
@@ -101,6 +112,16 @@ class PlayerService extends ChangeNotifier {
   }
 
   bool get playing => player.playing;
+
+  bool get crossfade => crossfader.enabled;
+
+  /// Liga/desliga o crossfade na hora (desligar no meio de uma transição termina ela na hora).
+  void setCrossfade(bool on) {
+    if (on == crossfader.enabled) return;
+    crossfader.enabled = on;
+    onCrossfadeChanged?.call(on);
+    notifyListeners();
+  }
   bool get shuffle => _shuffle;
 
   /// Fila que se adapta: aleatório ou "Mix do momento". Pular afasta parecidas; favoritar aproxima.
@@ -110,6 +131,7 @@ class PlayerService extends ChangeNotifier {
 
   Future<void> playQueue(List<Track> tracks, {int start = 0, bool mix = false}) async {
     if (tracks.isEmpty) return;
+    crossfader.cancel(); // escolheu outra música: troca na hora, sem transição
     _logCurrent(skipped: true);
     await _serial(() async {
       _fromMix = mix;
@@ -156,9 +178,30 @@ class PlayerService extends ChangeNotifier {
     h.broadcast();
   }
 
-  Future<void> togglePlay() => player.playing ? player.pause() : player.play();
+  Future<void> togglePlay() async {
+    if (player.playing) {
+      crossfader.cancel();
+      await player.pause();
+    } else {
+      unawaited(player.play());
+    }
+  }
+
+  /// Seek feito pelo usuário (barra, notificação): interrompe uma transição em andamento.
+  Future<void> seek(Duration position) async {
+    crossfader.cancel();
+    await player.seek(position);
+  }
+
+  /// Tocar uma música da fila direto (sem transição).
+  Future<void> jumpTo(int index) async {
+    if (index < 0 || index >= player.sequence.length) return;
+    crossfader.cancel();
+    await player.seek(Duration.zero, index: index);
+  }
 
   Future<void> next() async {
+    crossfader.cancel(); // avanço manual: nunca com transição
     final skipped = current;
     _logCurrent(skipped: true);
     // garante que existe uma próxima (o mix completa a fila antes de avançar)
@@ -228,18 +271,14 @@ class PlayerService extends ChangeNotifier {
     if (out.length < count) {
       final seedMood = seed.effectiveMood;
       final seedChose = seed.chosenMood != null;
-      final seedMain = seed.genre.toLowerCase().split(RegExp(r'[\s/,;-]+')).where((w) => w.length > 1).lastOrNull ?? '';
+      // mesma pontuação da recomendação (artista, álbum, gênero, clima, época) + a regra do clima escolhido
       double vibe(Track t) {
-        var v = 0.0;
-        final g = t.genre.toLowerCase();
-        if (g.isNotEmpty && g == seed.genre.toLowerCase()) v += 3;
-        if (seedMain.isNotEmpty && g.contains(seedMain)) v += 1.5;
+        var v = Recommender.affinity(seed, t);
         // clima: se o usuário escolheu o clima da primeira música, ele manda mais que o gênero
         if (seedMood != null) {
-          if (t.effectiveMood == seedMood) v += seedChose ? 6 : 1;
+          if (seedChose && t.effectiveMood == seedMood) v += 5;
           if (t.chosenMood != null && t.chosenMood != seedMood) v -= seedChose ? 3 : 1.5;
         }
-        if (t.artist == seed.artist && t.artist != unknownArtist) v += 1;
         if (t.favorite) v += .5;
         return v + r.nextDouble(); // um pouco de sorte para variar
       }
@@ -331,6 +370,7 @@ class PlayerService extends ChangeNotifier {
   }
 
   Future<void> previous() async {
+    crossfader.cancel();
     if (player.position > const Duration(seconds: 3)) return player.seek(Duration.zero);
     await player.seekToPrevious();
   }
@@ -373,7 +413,7 @@ class PlayerService extends ChangeNotifier {
     final secs = DateTime.now().difference(start).inSeconds;
     _startedTrackId = null;
     if (secs < 5) return;
-    unawaited(db.logPlay(id, secs, skipped && secs < 30));
+    unawaited(db.logPlay(id, secs, skipped && secs < 30).then((_) => onPlayLogged?.call()));
   }
 
   @override
@@ -382,6 +422,7 @@ class PlayerService extends ChangeNotifier {
     for (final s in _subs) {
       s.cancel();
     }
+    unawaited(crossfader.dispose());
     player.dispose();
     super.dispose();
   }

@@ -17,6 +17,7 @@ class PlayerAudioHandler extends BaseAudioHandler with SeekHandler {
   Future<void> Function()? onNext;
   Future<void> Function()? onPrevious;
   Future<void> Function()? onFavorite;
+  Future<void> Function(Duration)? onSeek;
   bool favorite = false;
 
   @override
@@ -26,7 +27,7 @@ class PlayerAudioHandler extends BaseAudioHandler with SeekHandler {
   Future<void> pause() async => player?.pause();
 
   @override
-  Future<void> seek(Duration position) async => player?.seek(position);
+  Future<void> seek(Duration position) async => onSeek != null ? onSeek!(position) : player?.seek(position);
 
   @override
   Future<void> skipToNext() async => onNext?.call();
