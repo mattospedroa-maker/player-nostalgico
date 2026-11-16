@@ -156,7 +156,13 @@ class YtDlp {
       return 'Sem internet ou o YouTube não respondeu.';
     }
     if (l.contains('is not a valid url') || l.contains('unsupported url')) return 'Esse link não é de um vídeo ou playlist.';
+    if (l.contains('ytdlpexception') && (l.contains('init') || l.contains('python') || l.contains('extract'))) {
+      return 'Não consegui preparar o yt-dlp no celular. Feche e abra o app e tente de novo. (Detalhe: $s)';
+    }
     final lines = s.split('\n').where((x) => x.contains('ERROR')).toList();
-    return (lines.isNotEmpty ? lines.last : s).replaceFirst(RegExp(r'^ERROR:\s*'), '');
+    final msg = (lines.isNotEmpty ? lines.last : s).replaceFirst(RegExp(r'^ERROR:\s*'), '').trim();
+    // nunca mostrar só um código curto sem explicação
+    if (msg.length < 12) return 'O yt-dlp falhou (detalhe técnico: ${msg.isEmpty ? 'sem mensagem' : msg}). Tente de novo; se continuar, me mande este texto.';
+    return msg;
   }
 }

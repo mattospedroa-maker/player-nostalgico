@@ -30,6 +30,11 @@ jobs:
         run: |
           ls -la build/app/outputs/flutter-apk/app-release.apk
           unzip -l build/app/outputs/flutter-apk/app-release.apk | grep ' lib/' | awk '{print $1, $4}'
+      - name: Conferir que o R8 não renomeou o yt-dlp
+        run: |
+          M=build/app/outputs/mapping/release/mapping.txt
+          grep -E '^com\.yausername\.youtubedl_android\.YoutubeDL -> com\.yausername\.youtubedl_android\.YoutubeDL:' $M
+          grep -E '^com\.fasterxml\.jackson\.databind\.ObjectMapper -> com\.fasterxml\.jackson\.databind\.ObjectMapper:' $M
       - uses: actions/upload-artifact@v4
         with:
           name: player-nostalgico-apk
