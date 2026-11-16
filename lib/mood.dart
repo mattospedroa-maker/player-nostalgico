@@ -15,7 +15,8 @@ enum Mood {
   final List<String> categories;
   const Mood(this.label, this.emoji, this.categories);
 
-  static Mood? byName(String? name) => name == null || name.isEmpty ? null : Mood.values.asNameMap()[name];
+  static Mood? byName(String? name) => name == null || name.isEmpty ? null : _byName[name];
+  static final Map<String, Mood> _byName = Mood.values.asNameMap();
 
   /// Clima que o gênero sugere (usado quando o usuário não escolheu).
   static Mood? fromGenre(String genre) {

@@ -107,8 +107,20 @@ class GifFetcher {
   static List<String> moodCategories(String genre) {
     final g = genre.toLowerCase().trim();
     if (g.isEmpty || g == 'desconhecido') return const [];
-    for (final (re, cats) in _moods) {
-      if (RegExp(re).hasMatch(g)) return cats;
+    // a biblioteca tem poucos gêneros diferentes: guarda a resposta de cada um
+    // (antes compilava as expressões da tabela a cada chamada, e isso roda para cada música na busca, no mix e nas coleções)
+    final known = _moodCache[g];
+    if (known != null) return known;
+    if (_moodCache.length > 4000) _moodCache.clear();
+    return _moodCache[g] = _moodFor(g);
+  }
+
+  static final Map<String, List<String>> _moodCache = {};
+  static final List<(RegExp, List<String>)> _moodRes = [for (final (re, cats) in _moods) (RegExp(re), cats)];
+
+  static List<String> _moodFor(String g) {
+    for (final (re, cats) in _moodRes) {
+      if (re.hasMatch(g)) return cats;
     }
     return const ['happy', 'wave', 'smile', 'thumbsup', 'dance'];
   }

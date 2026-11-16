@@ -22,8 +22,16 @@ class Recommender {
 
   // ---------- parecença entre duas músicas ----------
 
-  static String _mainGenreWord(String genre) =>
-      genre.toLowerCase().split(RegExp(r'[\s/,;-]+')).where((w) => w.length > 1).lastOrNull ?? '';
+  static String _mainGenreWord(String genre) {
+    final known = _mainWords[genre];
+    if (known != null) return known;
+    if (_mainWords.length > 4000) _mainWords.clear();
+    return _mainWords[genre] = genre.toLowerCase().split(_genreSplit).where((w) => w.length > 1).lastOrNull ?? '';
+  }
+
+  // poucos gêneros diferentes na biblioteca: guarda a palavra principal de cada um
+  static final Map<String, String> _mainWords = {};
+  static final _genreSplit = RegExp(r'[\s/,;-]+');
 
   static bool _known(String v, String unknown) => v.trim().isNotEmpty && v != unknown;
 
