@@ -8,6 +8,7 @@ import '../app_state.dart';
 import '../duplicates.dart';
 import '../models.dart';
 import '../theme.dart';
+import '../xp_icons.dart';
 
 /// "Músicas repetidas": escolhe a cópia que fica e apaga as outras.
 class DuplicatesScreen extends StatefulWidget {
@@ -57,7 +58,8 @@ class _DuplicatesScreenState extends State<DuplicatesScreen> {
     final messenger = ScaffoldMessenger.of(context);
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => XpAlertDialog(
+        icon: XpIcons.warning,
         title: const Text('Apagar cópias repetidas?'),
         content: Text('Vou apagar $_extra ${_extra == 1 ? 'arquivo' : 'arquivos'} do celular. '
             'Favoritas, playlists e histórico passam para a cópia que fica. Não dá para desfazer.'),
@@ -97,7 +99,7 @@ class _DuplicatesScreenState extends State<DuplicatesScreen> {
             XpTitleBar(title: 'Músicas repetidas', actions: [
               if (!_working) XpTitleButton(icon: Icons.close, tooltip: 'Fechar', onTap: () => Navigator.pop(context)),
             ]),
-            if (_working) const LinearProgressIndicator(minHeight: 3),
+            if (_working) const Padding(padding: EdgeInsets.fromLTRB(8, 6, 8, 2), child: XpProgress(height: 14)),
             Expanded(
               child: _groups.isEmpty
                   ? const Center(

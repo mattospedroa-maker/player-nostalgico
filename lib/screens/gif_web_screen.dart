@@ -150,13 +150,15 @@ class _GifWebScreenState extends State<GifWebScreen> {
                   for (var i = 0; i < _sites.length; i++)
                     Padding(
                       padding: const EdgeInsets.only(right: 6),
-                      child: ChoiceChip(
-                        label: Text(_sites[i].name),
-                        selected: _site == i,
-                        onSelected: (_) {
-                          setState(() => _site = i);
-                          _open();
-                        },
+                      child: Center(
+                        child: XpToggle(
+                          label: _sites[i].name,
+                          on: _site == i,
+                          onTap: () {
+                            setState(() => _site = i);
+                            _open();
+                          },
+                        ),
                       ),
                     ),
                 ],
@@ -164,11 +166,12 @@ class _GifWebScreenState extends State<GifWebScreen> {
             ),
             Material(
               color: _saveMode ? const Color(0xFFFFE680) : const Color(0xFFDDE7F7),
-              child: SwitchListTile(
+              child: CheckboxListTile(
                 dense: true,
+                controlAffinity: ListTileControlAffinity.leading,
                 value: _saveMode,
                 onChanged: (v) {
-                  setState(() => _saveMode = v);
+                  setState(() => _saveMode = v ?? false);
                   _inject();
                 },
                 title: Text(_saveMode ? 'Modo salvar LIGADO: toque num GIF para guardar' : 'Modo salvar desligado: navegue à vontade'),

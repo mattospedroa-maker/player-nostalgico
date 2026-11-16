@@ -234,33 +234,141 @@ class _Toolbar extends StatelessWidget {
   }
 
   static void showQueue(BuildContext context) {
-    final ps = context.read<PlayerService>();
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Xp.bgTop,
-      builder: (ctx) => DraggableScrollableSheet(
-        expand: false,
-        initialChildSize: .6,
-        builder: (ctx, sc) => Column(children: [
-          const XpTitleBar(title: 'Fila'),
-          Expanded(
-            child: ListView.builder(
-              controller: sc,
-              itemCount: ps.queue.length,
-              itemBuilder: (ctx, i) => TrackTile(
-                track: ps.queue[i],
-                onTap: () {
-                  ps.player.seek(Duration.zero, index: i);
-                  Navigator.pop(ctx);
-                },
-                trailing: Text('${i + 1}', style: const TextStyle(color: Xp.blueMuted)),
+      backgroundColor: Xp.beige,
+      builder: (ctx) => DraggableScrollableSheet(expand: false, initialChildSize: .75, maxChildSize: .95, builder: (ctx, sc) => _QueueWindow(scroll: sc)),
+    );
+  }
+}
+
+/// A fila como a "Lista de reprodução" do WMP 9: visor, lista numerada e botões em relevo.
+class _QueueWindow extends StatefulWidget {
+  final ScrollController scroll;
+  const _QueueWindow({required this.scroll});
+
+  @override
+  State<_QueueWindow> createState() => _QueueWindowState();
+}
+
+class _QueueWindowState extends State<_QueueWindow> {
+  int? _sel;
+
+  Future<void> _save(List<Track> q) async {
+    final app = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+    final name = await askText(context, 'Salvar como playlist', 'Nome da playlist');
+    if (name == null || name.isEmpty) return;
+    final id = await app.db.createPlaylist(name);
+    await app.db.setPlaylistOrder(id, [for (final t in q) if (t.id != null) t.id!]);
+    await app.reload();
+    messenger.showSnackBar(SnackBar(content: Text('Playlist "$name" criada com ${q.length} músicas.')));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ps = context.watch<PlayerService>();
+    final q = ps.queue;
+    final cur = ps.player.currentIndex;
+    final sel = (_sel != null && _sel! < q.length) ? _sel : null;
+    Widget lcd(String k, String v) => Row(children: [
+          SizedBox(width: 70, child: Text(k, style: Xp.lcdStyle.copyWith(color: Xp.lcdDim, shadows: const []))),
+          Expanded(child: Text(v.toUpperCase(), maxLines: 1, overflow: TextOverflow.ellipsis, style: Xp.lcdStyle)),
+        ]);
+    Widget act(XpIcons i, String label, VoidCallback? onTap) => Expanded(
+          child: Padding(padding: const EdgeInsets.symmetric(horizontal: 2), child: Opacity(opacity: onTap == null ? .45 : 1, child: BevelButton(icon: i, label: label, onTap: onTap))),
+        );
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      XpTitleBar(title: 'Lista de reprodução', icon: XpIcons.list, actions: [XpTitleButton(icon: Icons.close, tooltip: 'Fechar', onTap: () => Navigator.pop(context))]),
+      Padding(
+        padding: const EdgeInsets.all(8),
+        child: Bevel(
+          sunken: true,
+          color: const Color(0xFF020A1C),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          child: Column(children: [
+            lcd('FILA', ps.shuffle ? 'Aleatória' : (ps.mixMode == MixMode.artist ? 'Mix do mesmo artista' : 'Mix da mesma vibe')),
+            const SizedBox(height: 2),
+            lcd('TOTAL', '${q.length} faixas · ${fmtTotal(q)}'),
+          ]),
+        ),
+      ),
+      Expanded(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Bevel(
+            sunken: true,
+            child: Column(children: [
+              Row(children: const [
+                SizedBox(width: 40, child: XpColumnHeader('#')),
+                Expanded(child: XpColumnHeader('Título', right: 'Tempo')),
+              ]),
+              Expanded(
+                child: ListView.builder(
+                  controller: widget.scroll,
+                  itemCount: q.length,
+                  itemExtent: 40,
+                  itemBuilder: (ctx, i) {
+                    final t = q[i];
+                    final on = i == cur;
+                    final picked = i == sel;
+                    return InkWell(
+                      onTap: () => setState(() => _sel = i),
+                      onDoubleTap: () {
+                        ps.player.seek(Duration.zero, index: i);
+                        Navigator.pop(context);
+                      },
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: on ? Xp.select : (picked ? const Color(0xFFDCE7FB) : Colors.white),
+                          border: Border(bottom: const BorderSide(color: Color(0xFFF0F0F0)), left: BorderSide(color: picked ? Xp.select : Colors.transparent, width: 3)),
+                        ),
+                        padding: const EdgeInsets.only(right: 8),
+                        child: Row(children: [
+                          SizedBox(width: 34, child: Text('${i + 1}', textAlign: TextAlign.right, style: TextStyle(fontSize: 13, color: on ? const Color(0xFFCCEEFF) : const Color(0xFF888888)))),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text.rich(
+                              TextSpan(children: [
+                                TextSpan(text: t.title, style: TextStyle(fontWeight: on ? FontWeight.bold : FontWeight.normal)),
+                                TextSpan(text: '  ${t.artist}', style: TextStyle(fontSize: 12, color: on ? const Color(0xFFDFE8FF) : const Color(0xFF888888))),
+                              ]),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(fontSize: 14, color: on ? Colors.white : Colors.black),
+                            ),
+                          ),
+                          Text(fmtDuration(Duration(milliseconds: t.durationMs)), style: TextStyle(fontSize: 12.5, color: on ? const Color(0xFFDFE8FF) : const Color(0xFF888888))),
+                        ]),
+                      ),
+                    );
+                  },
+                ),
               ),
-            ),
+            ]),
           ),
+        ),
+      ),
+      Padding(
+        padding: const EdgeInsets.all(8),
+        child: Row(children: [
+          act(XpIcons.play, 'Tocar', sel == null
+              ? null
+              : () {
+                  ps.player.seek(Duration.zero, index: sel);
+                  Navigator.pop(context);
+                }),
+          act(XpIcons.bin, 'Tirar', sel == null || sel == cur ? null : () => ps.removeAt(sel).then((_) => mounted ? setState(() => _sel = null) : null)),
+          act(XpIcons.shuffle, 'Embaralhar', ps.upcoming.length < 2 ? null : ps.shuffleUpcoming),
+          act(XpIcons.plus, 'Salvar', q.isEmpty ? null : () => _save(q)),
         ]),
       ),
-    );
+      XpStatusBar([
+        sel == null ? 'Toque numa música para escolher; dois toques para tocar' : 'Escolhida: ${q[sel].title}',
+        cur == null ? '' : 'Tocando ${cur + 1} de ${q.length}',
+      ]),
+    ]);
   }
 }
 

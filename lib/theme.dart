@@ -56,25 +56,67 @@ class Xp {
       scaffoldBackgroundColor: beige,
       fontFamily: 'XpSans',
     );
+    final xpButton = ButtonStyle(
+      backgroundColor: WidgetStateProperty.resolveWith((st) => st.contains(WidgetState.pressed) ? const Color(0xFFE3E1D4) : const Color(0xFFF4F3EE)),
+      foregroundColor: WidgetStateProperty.resolveWith((st) => st.contains(WidgetState.disabled) ? Colors.black38 : Colors.black),
+      overlayColor: const WidgetStatePropertyAll(Color(0x113B8CF5)),
+      side: const WidgetStatePropertyAll(BorderSide(color: Color(0xFF003C74))),
+      shape: WidgetStatePropertyAll(RoundedRectangleBorder(borderRadius: BorderRadius.circular(3))),
+      padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 16, vertical: 8)),
+      minimumSize: const WidgetStatePropertyAll(Size(84, 34)),
+      textStyle: const WidgetStatePropertyAll(TextStyle(fontFamily: 'XpSans', fontSize: 14)),
+      elevation: const WidgetStatePropertyAll(0),
+    );
     return base.copyWith(
       textTheme: base.textTheme.apply(bodyColor: const Color(0xFF111111), displayColor: navy),
-      snackBarTheme: const SnackBarThemeData(backgroundColor: navy, behavior: SnackBarBehavior.floating),
+      // avisos rápidos = balão amarelo que sai do relógio da barra de tarefas
+      snackBarTheme: const SnackBarThemeData(
+        backgroundColor: Color(0xFFFFFFE1),
+        contentTextStyle: TextStyle(fontFamily: 'XpSans', fontSize: 14, color: Colors.black),
+        behavior: SnackBarBehavior.floating,
+        shape: BalloonBorder(),
+        elevation: 3,
+        insetPadding: EdgeInsets.fromLTRB(40, 0, 8, 6),
+        showCloseIcon: true,
+        closeIconColor: Color(0xFF555555),
+        actionTextColor: linkBlue,
+      ),
       dialogTheme: const DialogThemeData(
         backgroundColor: beige,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.zero,
-          side: BorderSide(color: Color(0xFF0831D9), width: 3),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero, side: BorderSide(color: Color(0xFF0831D9), width: 3)),
       ),
       popupMenuTheme: const PopupMenuThemeData(
         color: Colors.white,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.zero,
-          side: BorderSide(color: Color(0xFFACA899)),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero, side: BorderSide(color: Color(0xFFACA899))),
         textStyle: TextStyle(fontFamily: 'XpSans', fontSize: 14, color: Colors.black),
       ),
-      bottomSheetTheme: const BottomSheetThemeData(shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero)),
+      bottomSheetTheme: const BottomSheetThemeData(shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero), backgroundColor: beige),
+      // caixinhas de marcar e bolinhas do XP
+      checkboxTheme: CheckboxThemeData(
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+        // vale também para a caixa marcada (BorderSide simples só vale para a desmarcada)
+        side: WidgetStateBorderSide.resolveWith((_) => const BorderSide(color: Color(0xFF1C5180))),
+        fillColor: const WidgetStatePropertyAll(Colors.white),
+        checkColor: const WidgetStatePropertyAll(Color(0xFF21A121)),
+        visualDensity: VisualDensity.compact,
+      ),
+      radioTheme: const RadioThemeData(fillColor: WidgetStatePropertyAll(Color(0xFF1C5180)), visualDensity: VisualDensity.compact),
+      // campos afundados com borda azul-acinzentada
+      inputDecorationTheme: const InputDecorationTheme(
+        isDense: true,
+        filled: true,
+        fillColor: Colors.white,
+        contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+        border: OutlineInputBorder(borderRadius: BorderRadius.zero, borderSide: BorderSide(color: Color(0xFF7F9DB9))),
+        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.zero, borderSide: BorderSide(color: Color(0xFF7F9DB9))),
+        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.zero, borderSide: BorderSide(color: Color(0xFF3B8CF5), width: 1.5)),
+        labelStyle: TextStyle(color: Color(0xFF333333)),
+      ),
+      filledButtonTheme: FilledButtonThemeData(style: xpButton.copyWith(textStyle: const WidgetStatePropertyAll(TextStyle(fontFamily: 'XpSans', fontSize: 14, fontWeight: FontWeight.bold)))),
+      textButtonTheme: TextButtonThemeData(style: xpButton),
+      outlinedButtonTheme: OutlinedButtonThemeData(style: xpButton),
+      progressIndicatorTheme: const ProgressIndicatorThemeData(color: Color(0xFF2A64E0), linearTrackColor: Colors.white, circularTrackColor: Color(0xFFDDE6F7)),
+      listTileTheme: const ListTileThemeData(textColor: Colors.black, iconColor: navy),
     );
   }
 }
@@ -795,4 +837,282 @@ class _ScanLines extends CustomPainter {
 Color colorFor(String seed) {
   final h = seed.codeUnits.fold<int>(7, (a, c) => (a * 31 + c) & 0x7fffffff);
   return HSLColor.fromAHSL(1, (h % 360).toDouble(), .55, .45).toColor();
+}
+
+
+/// Contorno do balão amarelo do XP, com o biquinho apontando para o relógio (canto de baixo à direita).
+class BalloonBorder extends ShapeBorder {
+  const BalloonBorder();
+  static const _tail = 10.0;
+
+  @override
+  EdgeInsetsGeometry get dimensions => const EdgeInsets.only(bottom: _tail);
+
+  Path _path(Rect r) {
+    final body = Rect.fromLTRB(r.left, r.top, r.right, r.bottom - _tail);
+    final tx = body.right - 34;
+    return Path()
+      ..addRRect(RRect.fromRectAndRadius(body, const Radius.circular(8)))
+      ..moveTo(tx - 12, body.bottom - 1)
+      ..lineTo(tx + 6, r.bottom)
+      ..lineTo(tx, body.bottom - 1)
+      ..close();
+  }
+
+  @override
+  Path getInnerPath(Rect rect, {TextDirection? textDirection}) => _path(rect);
+  @override
+  Path getOuterPath(Rect rect, {TextDirection? textDirection}) => _path(rect);
+
+  @override
+  void paint(Canvas canvas, Rect rect, {TextDirection? textDirection}) {
+    final body = Rect.fromLTRB(rect.left, rect.top, rect.right, rect.bottom - _tail);
+    final tx = body.right - 34;
+    final outline = Path()
+      ..moveTo(body.left + 8, body.top)
+      ..lineTo(body.right - 8, body.top)
+      ..arcToPoint(Offset(body.right, body.top + 8), radius: const Radius.circular(8))
+      ..lineTo(body.right, body.bottom - 8)
+      ..arcToPoint(Offset(body.right - 8, body.bottom), radius: const Radius.circular(8))
+      ..lineTo(tx, body.bottom)
+      ..lineTo(tx + 6, rect.bottom)
+      ..lineTo(tx - 12, body.bottom)
+      ..lineTo(body.left + 8, body.bottom)
+      ..arcToPoint(Offset(body.left, body.bottom - 8), radius: const Radius.circular(8))
+      ..lineTo(body.left, body.top + 8)
+      ..arcToPoint(Offset(body.left + 8, body.top), radius: const Radius.circular(8));
+    canvas.drawPath(outline, Paint()
+      ..color = Colors.black
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1);
+  }
+
+  @override
+  ShapeBorder scale(double t) => this;
+}
+
+/// Barra de progresso do XP: bloquinhos azuis. Sem [value], três bloquinhos correm de um lado ao outro.
+class XpProgress extends StatefulWidget {
+  final double? value;
+  final double height;
+  const XpProgress({super.key, this.value, this.height = 18});
+
+  @override
+  State<XpProgress> createState() => _XpProgressState();
+}
+
+class _XpProgressState extends State<XpProgress> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1800));
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.value == null) _c.repeat();
+  }
+
+  @override
+  void didUpdateWidget(XpProgress old) {
+    super.didUpdateWidget(old);
+    if (widget.value == null && !_c.isAnimating) _c.repeat();
+    if (widget.value != null && _c.isAnimating) _c.stop();
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Container(
+        height: widget.height,
+        padding: const EdgeInsets.all(2),
+        decoration: BoxDecoration(color: Colors.white, border: Border.all(color: const Color(0xFF686868)), borderRadius: BorderRadius.circular(3)),
+        child: ClipRect(
+          child: AnimatedBuilder(
+            animation: _c,
+            builder: (_, _) => CustomPaint(painter: _BlocksPainter(widget.value, _c.value), size: Size.infinite),
+          ),
+        ),
+      );
+}
+
+class _BlocksPainter extends CustomPainter {
+  final double? value;
+  final double t;
+  _BlocksPainter(this.value, this.t);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const w = 8.0, gap = 2.0;
+    final paint = Paint()
+      ..shader = const LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [Color(0xFFACC8F5), Color(0xFF2A64E0), Color(0xFF1C4FC4), Color(0xFF9FC0F7)],
+        stops: [0, .45, .55, 1],
+      ).createShader(Offset.zero & size);
+    void block(double x) => canvas.drawRect(Rect.fromLTWH(x, 0, w, size.height), paint);
+    if (value != null) {
+      final end = size.width * value!.clamp(0, 1);
+      for (var x = 0.0; x + w <= end + .5; x += w + gap) {
+        block(x);
+      }
+    } else {
+      final start = -3 * (w + gap) + t * (size.width + 3 * (w + gap));
+      for (var i = 0; i < 3; i++) {
+        block(start + i * (w + gap));
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_BlocksPainter old) => old.value != value || old.t != t;
+}
+
+/// Abas das janelas de propriedades do XP (a ativa fica mais alta, com a faixa laranja).
+class XpTabs extends StatelessWidget {
+  final List<String> labels;
+  final int current;
+  final ValueChanged<int> onTap;
+  const XpTabs({super.key, required this.labels, required this.current, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+          for (var i = 0; i < labels.length; i++)
+            GestureDetector(
+              onTap: () => onTap(i),
+              child: Container(
+                margin: const EdgeInsets.only(right: 2),
+                padding: EdgeInsets.fromLTRB(16, i == current ? 8 : 6, 16, i == current ? 10 : 7),
+                decoration: BoxDecoration(
+                  gradient: i == current ? null : const LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.white, Color(0xFFECEBE5)]),
+                  color: i == current ? const Color(0xFFFCFCFE) : null,
+                  border: Border(
+                    top: BorderSide(color: i == current ? const Color(0xFFE68B2C) : const Color(0xFF919B9C), width: i == current ? 3 : 1),
+                    left: const BorderSide(color: Color(0xFF919B9C)),
+                    right: const BorderSide(color: Color(0xFF919B9C)),
+                  ),
+                ),
+                child: Text(labels[i], style: TextStyle(fontSize: 14, fontWeight: i == current ? FontWeight.bold : FontWeight.normal)),
+              ),
+            ),
+        ]),
+      );
+}
+
+/// Página branca debaixo das abas.
+class XpTabPage extends StatelessWidget {
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+  const XpTabPage({super.key, required this.child, this.padding = const EdgeInsets.all(10)});
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        // Material (e não Container) para as caixinhas de marcar mostrarem o toque
+        child: Material(
+          color: const Color(0xFFFCFCFE),
+          shape: Border.all(color: const Color(0xFF919B9C)),
+          child: Padding(padding: padding, child: child),
+        ),
+      );
+}
+
+/// Moldura com título no canto ("Ao salvar"), como os grupos das janelas do XP.
+class XpGroupBox extends StatelessWidget {
+  final String title;
+  final Widget child;
+
+  /// Cor atrás do título (a mesma do fundo onde a moldura está).
+  final Color background;
+  const XpGroupBox({super.key, required this.title, required this.child, this.background = const Color(0xFFFCFCFE)});
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(top: 9),
+        child: Stack(clipBehavior: Clip.none, children: [
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.fromLTRB(8, 14, 8, 8),
+            decoration: BoxDecoration(border: Border.all(color: const Color(0xFFD0D0BF)), borderRadius: BorderRadius.circular(4)),
+            child: child,
+          ),
+          Positioned(
+            left: 8,
+            top: -9,
+            child: Container(
+              color: background,
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Text(title, style: const TextStyle(fontSize: 13.5, color: Color(0xFF0046D5))),
+            ),
+          ),
+        ]),
+      );
+}
+
+/// Botão de alternar em relevo (afunda quando ligado). Substitui os "chips".
+class XpToggle extends StatelessWidget {
+  final String label;
+  final bool on;
+  final VoidCallback? onTap;
+  const XpToggle({super.key, required this.label, required this.on, this.onTap});
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        child: Bevel(
+          sunken: on,
+          color: on ? const Color(0xFFE3E1D4) : Xp.beige,
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          child: Text(label, style: TextStyle(fontSize: 13, fontWeight: on ? FontWeight.bold : FontWeight.normal)),
+        ),
+      );
+}
+
+/// Caixa de mensagem do XP: barra de título azul, ícone grande e botões alinhados à direita.
+/// Aceita os mesmos campos principais do AlertDialog para trocar um pelo outro.
+class XpAlertDialog extends StatelessWidget {
+  final Widget? title;
+  final Widget? content;
+  final List<Widget>? actions;
+  final XpIcons? icon;
+  const XpAlertDialog({super.key, this.title, this.content, this.actions, this.icon});
+
+  @override
+  Widget build(BuildContext context) => Dialog(
+        backgroundColor: Xp.beige,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 22, vertical: 24),
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(8))),
+        clipBehavior: Clip.antiAlias,
+        child: Container(
+          decoration: const BoxDecoration(
+            border: Border(left: BorderSide(color: Color(0xFF0831D9), width: 3), right: BorderSide(color: Color(0xFF0831D9), width: 3), bottom: BorderSide(color: Color(0xFF0831D9), width: 3)),
+          ),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            XpTitleBar(
+              title: title is Text ? ((title as Text).data ?? '') : '',
+              icon: icon ?? XpIcons.info,
+              actions: [XpTitleButton(icon: Icons.close, tooltip: 'Fechar', onTap: () => Navigator.of(context).maybePop())],
+            ),
+            if (title != null && title is! Text) Padding(padding: const EdgeInsets.fromLTRB(14, 10, 14, 0), child: title),
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  if (icon != null) ...[XpIcon(icon!, size: 36), const SizedBox(width: 12)],
+                  Expanded(child: DefaultTextStyle.merge(style: const TextStyle(fontSize: 14.5, height: 1.4, color: Colors.black), child: content ?? const SizedBox())),
+                ]),
+              ),
+            ),
+            if (actions != null && actions!.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(10, 0, 10, 12),
+                child: Wrap(alignment: WrapAlignment.end, spacing: 7, runSpacing: 6, children: actions!),
+              ),
+          ]),
+        ),
+      );
 }

@@ -8,6 +8,8 @@ import 'app_state.dart';
 import 'main.dart';
 import 'player_service.dart';
 import 'screens/edit_track_screen.dart';
+import 'screens/now_playing_screen.dart' show showGifManager;
+import 'xp_icons.dart';
 import 'models.dart';
 import 'theme.dart';
 
@@ -69,9 +71,10 @@ class TrackTile extends StatelessWidget {
     final sub = playing ? const Color(0xFFDFE8FF) : const Color(0xFF666666);
     return Material(
       color: playing ? Xp.select : Colors.white,
-      child: InkWell(
+      child: GestureDetector(
+        onLongPressStart: (d) => showTrackMenu(context, track, at: d.globalPosition),
+        child: InkWell(
         onTap: onTap,
-        onLongPress: () => showTrackMenu(context, track),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
           decoration: const BoxDecoration(
@@ -112,62 +115,128 @@ class TrackTile extends StatelessWidget {
             ],
           ),
         ),
-      ),
+      )),
     );
   }
 }
 
-Future<void> showTrackMenu(BuildContext context, Track t) async {
-  final app = context.read<AppState>();
-  await showModalBottomSheet<void>(
+/// Item do menu de contexto (null = separador).
+class XpMenuEntry {
+  final XpIcons? icon;
+  final String label;
+  final VoidCallback? onTap;
+  final bool submenu;
+  const XpMenuEntry(this.label, this.onTap, {this.icon, this.submenu = false});
+}
+
+/// Menu de contexto do XP (branco, ícones à esquerda), aberto onde o dedo segurou.
+Future<void> showXpContextMenu(BuildContext context, {required String header, required List<XpMenuEntry?> items, Offset? at}) {
+  return showGeneralDialog<void>(
     context: context,
-    backgroundColor: Xp.beige,
-    builder: (ctx) => SafeArea(
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        ListTile(title: Text(t.title, style: const TextStyle(fontWeight: FontWeight.bold)), subtitle: Text('${t.artist} · ${t.album}')),
-        ListTile(
-          leading: Icon(t.favorite ? Icons.favorite : Icons.favorite_border, color: Xp.red),
-          title: Text(t.favorite ? 'Tirar das favoritas' : 'Adicionar às favoritas'),
-          onTap: () {
-            Navigator.pop(ctx);
-            app.toggleFavorite(t);
-          },
+    barrierDismissible: true,
+    barrierLabel: 'Fechar menu',
+    barrierColor: Colors.transparent,
+    transitionDuration: const Duration(milliseconds: 90),
+    pageBuilder: (ctx, _, _) {
+      final size = MediaQuery.sizeOf(ctx);
+      const w = 280.0;
+      final h = 46.0 + items.fold<double>(0, (a, e) => a + (e == null ? 7 : 42));
+      final p = at ?? Offset(size.width / 2 - w / 2, size.height / 3);
+      final left = p.dx.clamp(8.0, size.width - w - 8);
+      final top = p.dy.clamp(30.0, (size.height - h - 70).clamp(30.0, double.infinity));
+      return Stack(children: [
+        Positioned(
+          left: left,
+          top: top,
+          width: w,
+          child: Material(
+            color: Colors.white,
+            elevation: 0,
+            child: Container(
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                border: Border.fromBorderSide(BorderSide(color: Color(0xFFACA899))),
+                boxShadow: [BoxShadow(color: Color(0x59000000), offset: Offset(3, 3), blurRadius: 3)],
+              ),
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                Container(
+                  padding: const EdgeInsets.fromLTRB(42, 8, 10, 8),
+                  decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0xFFD4D0C8)))),
+                  child: Text(header, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                ),
+                for (final e in items)
+                  if (e == null)
+                    Container(height: 1, margin: const EdgeInsets.symmetric(vertical: 3, horizontal: 2), color: const Color(0xFFD4D0C8))
+                  else
+                    InkWell(
+                      onTap: e.onTap == null
+                          ? null
+                          : () {
+                              Navigator.pop(ctx);
+                              e.onTap!();
+                            },
+                      hoverColor: Xp.select,
+                      highlightColor: Xp.select,
+                      child: SizedBox(
+                        height: 42,
+                        child: Row(children: [
+                          SizedBox(width: 42, child: e.icon == null ? null : Center(child: XpIcon(e.icon!, size: 20))),
+                          Expanded(child: Text(e.label, style: TextStyle(fontSize: 14.5, color: e.onTap == null ? Colors.black38 : Colors.black))),
+                          if (e.submenu) const Padding(padding: EdgeInsets.only(right: 4), child: Icon(Icons.arrow_right, size: 22, color: Colors.black)),
+                        ]),
+                      ),
+                    ),
+              ]),
+            ),
+          ),
         ),
-        ListTile(
-          leading: const Icon(Icons.playlist_add, color: Xp.navy),
-          title: const Text('Adicionar a uma playlist'),
-          onTap: () {
-            Navigator.pop(ctx);
-            pickPlaylistAndAdd(context, t);
-          },
-        ),
-        ListTile(
-          leading: const Icon(Icons.edit_outlined, color: Xp.navy),
-          title: const Text('Editar informações'),
-          onTap: () {
-            Navigator.pop(ctx);
-            Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => EditTrackScreen(track: t)));
-          },
-        ),
-      ]),
-    ),
+      ]);
+    },
   );
+}
+
+Future<void> showTrackMenu(BuildContext context, Track t, {Offset? at}) {
+  final app = context.read<AppState>();
+  final fav = (app.byId(t.id) ?? t).favorite;
+  return showXpContextMenu(context, header: '${t.title} — ${t.artist}', at: at, items: [
+    XpMenuEntry('Tocar agora', () => playTracks(context, [t]), icon: XpIcons.play),
+    null,
+    XpMenuEntry(fav ? 'Tirar das favoritas' : 'Adicionar às favoritas', () => app.toggleFavorite(t), icon: XpIcons.heart),
+    XpMenuEntry('Adicionar a uma playlist', () => pickPlaylistAndAdd(context, t), icon: XpIcons.plus, submenu: true),
+    XpMenuEntry('GIFs desta música', () => showGifManager(context, t), icon: XpIcons.film),
+    null,
+    XpMenuEntry('Propriedades…', () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => EditTrackScreen(track: t))), icon: XpIcons.doc),
+  ]);
 }
 
 Future<void> pickPlaylistAndAdd(BuildContext context, Track t) async {
   final app = context.read<AppState>();
   final messenger = ScaffoldMessenger.of(context);
+  Widget row(BuildContext ctx, XpIcons icon, String label, int value, {bool bold = false}) => InkWell(
+        onTap: () => Navigator.pop(ctx, value),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 6),
+          child: Row(children: [
+            XpIcon(icon, size: 22),
+            const SizedBox(width: 9),
+            Expanded(child: Text(label, style: TextStyle(fontSize: 15, fontWeight: bold ? FontWeight.bold : FontWeight.normal))),
+          ]),
+        ),
+      );
   final choice = await showDialog<int>(
     context: context,
-    builder: (ctx) => SimpleDialog(
-      title: const Text('Adicionar a…'),
-      children: [
-        for (final pl in app.playlists) SimpleDialogOption(onPressed: () => Navigator.pop(ctx, pl.id), child: Text(pl.name)),
-        SimpleDialogOption(
-          onPressed: () => Navigator.pop(ctx, -1),
-          child: const Text('＋ Nova playlist', style: TextStyle(color: Xp.blue, fontWeight: FontWeight.bold)),
-        ),
-      ],
+    builder: (ctx) => XpAlertDialog(
+      title: const Text('Adicionar a uma playlist'),
+      icon: XpIcons.plus,
+      content: Bevel(
+        sunken: true,
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          for (final pl in app.playlists) row(ctx, XpIcons.cassette, pl.name, pl.id),
+          row(ctx, XpIcons.plus, 'Nova playlist…', -1, bold: true),
+        ]),
+      ),
+      actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar'))],
     ),
   );
   if (choice == null || !context.mounted) return;
@@ -185,7 +254,8 @@ Future<String?> askText(BuildContext context, String title, String label, {Strin
   final c = TextEditingController(text: initial);
   return showDialog<String>(
     context: context,
-    builder: (ctx) => AlertDialog(
+    builder: (ctx) => XpAlertDialog(
+      icon: XpIcons.edit,
       title: Text(title),
       content: TextField(controller: c, autofocus: true, decoration: InputDecoration(labelText: label)),
       actions: [
@@ -229,7 +299,8 @@ void showGifLibraryInfo(BuildContext context) {
   final app = context.read<AppState>();
   showDialog<void>(
     context: context,
-    builder: (ctx) => AlertDialog(
+    builder: (ctx) => XpAlertDialog(
+      icon: XpIcons.film,
       title: const Text('Acervo de GIFs'),
       content: Text(
         '${app.gifs.count} GIFs em\n${app.gifs.gifRoot}\n\n'

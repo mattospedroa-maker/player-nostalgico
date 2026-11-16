@@ -53,7 +53,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
           ),
         ]),
         XpAddressBar(_query.isEmpty ? 'Música' : 'Música\\Busca: "$_query"'),
-        if (app.scanning) LinearProgressIndicator(value: app.scanProgress, minHeight: 3, color: Xp.navy),
+        if (app.scanning) Padding(padding: const EdgeInsets.fromLTRB(8, 4, 8, 4), child: XpProgress(value: app.scanProgress, height: 14)),
         Expanded(
           child: ColoredBox(color: Colors.white, child: root == null ? _welcome() : _library(app, root)),
         ),

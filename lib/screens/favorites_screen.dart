@@ -246,9 +246,10 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
 
   Widget _buddy(Track t, XpIcons icon, String detail, VoidCallback onTap) {
     final playing = context.select<AppState, int?>((s) => s.player.current?.id) == t.id;
-    return InkWell(
+    return GestureDetector(
+      onLongPressStart: (d) => showTrackMenu(context, t, at: d.globalPosition),
+      child: InkWell(
       onTap: onTap,
-      onLongPress: () => showTrackMenu(context, t),
       child: Container(
         color: playing ? const Color(0xFFDCE7FB) : null,
         padding: const EdgeInsets.fromLTRB(28, 6, 10, 6),
@@ -278,7 +279,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
           ],
         ),
       ),
-    );
+    ));
   }
 
   Widget _hint(String text) => Padding(

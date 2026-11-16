@@ -67,6 +67,8 @@ class YtEntry {
 
 /// Baixa vídeos/playlists do YouTube em .mp3, corrige os nomes e guarda em Fonte/Artista/Álbum/Título.mp3.
 /// Fica fora da tela: dá para sair e continuar usando o app enquanto baixa.
+enum LinkKind { video, playlist, both, unknown }
+
 class DownloadService extends ChangeNotifier {
   final AppState app;
   final YtDlp ytdlp;
@@ -118,7 +120,23 @@ class DownloadService extends ChangeNotifier {
     return s;
   }
 
-  static bool looksLikePlaylist(String url) => url.contains('list=') && !url.contains('watch?v=') || url.contains('/playlist');
+  static bool looksLikePlaylist(String url) => linkKind(url) == LinkKind.playlist;
+
+  /// O que o link aponta: um vídeo, uma playlist, ou um vídeo aberto de dentro de uma playlist (os dois).
+  /// Os "Mix" automáticos do YouTube (list=RD…) não têm fim, então contam como vídeo.
+  static LinkKind linkKind(String raw) {
+    final u = Uri.tryParse(normalizeUrl(raw));
+    if (u == null || u.host.isEmpty) return LinkKind.unknown;
+    final list = u.queryParameters['list'] ?? '';
+    final hasList = list.isNotEmpty && !list.startsWith('RD');
+    final hasVideo = (u.queryParameters['v'] ?? '').isNotEmpty ||
+        u.host.endsWith('youtu.be') && u.pathSegments.isNotEmpty ||
+        u.pathSegments.isNotEmpty && const {'shorts', 'live', 'embed'}.contains(u.pathSegments.first);
+    if (u.pathSegments.isNotEmpty && u.pathSegments.first == 'playlist') return hasList ? LinkKind.playlist : LinkKind.unknown;
+    if (hasVideo && hasList) return LinkKind.both;
+    if (hasList) return LinkKind.playlist;
+    return LinkKind.video;
+  }
 
   Future<void> fetchSingle(String raw) async {
     final url = normalizeUrl(raw);

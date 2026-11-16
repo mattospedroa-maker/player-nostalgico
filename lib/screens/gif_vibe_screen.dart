@@ -383,7 +383,7 @@ class _GifVibeScreenState extends State<GifVibeScreen> {
                   ),
                 ),
                 child: busy
-                    ? const Padding(padding: EdgeInsets.all(5), child: CircularProgressIndicator(strokeWidth: 2))
+                    ? const Padding(padding: EdgeInsets.fromLTRB(3, 8, 3, 8), child: XpProgress(height: 8))
                     : Icon(done ? Icons.check : Icons.download, size: 15, color: done ? Colors.white : Xp.navy),
               ),
             ),
@@ -394,7 +394,7 @@ class _GifVibeScreenState extends State<GifVibeScreen> {
   }
 }
 
-/// Botão-pílula no estilo XP (azul quando selecionado).
+/// Botão de filtro: o mesmo botão afundado/saltado das outras telas.
 class _XpChip extends StatelessWidget {
   final String label;
   final bool on;
@@ -404,22 +404,7 @@ class _XpChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.only(right: 5),
-        child: GestureDetector(
-          onTap: onTap,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: const Color(0xFF2B4F9E)),
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: on ? const [Xp.blueLight, Xp.blue] : const [Colors.white, Color(0xFFD7E2F5)],
-              ),
-            ),
-            child: Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: on ? Colors.white : Xp.navy)),
-          ),
-        ),
+        child: XpToggle(label: label, on: on, onTap: onTap),
       );
 }
 
