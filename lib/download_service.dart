@@ -223,9 +223,9 @@ class DownloadService extends ChangeNotifier {
   /// Procura cada vídeo na Biblioteca (mesmo vídeo já baixado, ou mesmo artista + título).
   /// Na playlist, os que já existem ficam desmarcados (a não ser que o usuário tenha mexido).
   void markExisting(List<YtEntry> entries, {required bool uncheck}) {
-    final byKey = <String, String>{};
+    final byKey = <String, List<Track>>{};
     for (final t in app.tracks) {
-      byKey.putIfAbsent(trackKey(t), () => t.path);
+      if (usableTitle(t.title)) byKey.putIfAbsent(trackKey(t), () => []).add(t);
     }
     final ids = _downloaded;
     for (final e in entries) {
@@ -233,7 +233,15 @@ class DownloadService extends ChangeNotifier {
       String? found;
       final byId = ids[e.id];
       if (byId != null && File(byId).existsSync()) found = byId;
-      found ??= byKey[songKey(e.names.artist == unknownArtist ? '' : e.names.artist, e.names.title)];
+      if (found == null && usableTitle(e.names.title)) {
+        final same = byKey[songKey(e.names.artist == unknownArtist ? '' : e.names.artist, e.names.title)] ?? const [];
+        // mesma gravação: duração quase igual à do vídeo (se o vídeo não diz a duração, basta o nome)
+        final dur = (e.durationSec ?? 0) * 1000;
+        found = same
+            .where((t) => dur <= 0 || t.durationMs <= 0 || (t.durationMs - dur).abs() <= 15000)
+            .map((t) => t.path)
+            .firstOrNull;
+      }
       e.existingPath = found;
       if (uncheck && !e.userToggled) e.selected = found == null;
     }

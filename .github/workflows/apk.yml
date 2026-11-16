@@ -25,7 +25,16 @@ jobs:
       - run: flutter pub get
       - run: flutter analyze
       - run: flutter test
-      - run: flutter build apk --release --target-platform android-arm64
+      - name: Chave de assinatura fixa (permite instalar por cima sem perder os dados)
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then echo "$KEYSTORE_B64" | base64 -d > android/app/release.jks; echo "usando a chave fixa"; else echo "sem chave fixa: assina com a chave de debug do CI"; fi
+      - run: flutter build apk --release --target-platform android-arm64 --dart-define=LASTFM_KEY="$LASTFM_KEY" --dart-define=GIPHY_KEY="$GIPHY_KEY"
+        env:
+          LASTFM_KEY: ${{ secrets.LASTFM_KEY }}
+          GIPHY_KEY: ${{ secrets.GIPHY_KEY }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       - name: Conferir arquiteturas e tamanho do APK
         run: |
           ls -la build/app/outputs/flutter-apk/app-release.apk
