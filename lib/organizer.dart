@@ -88,14 +88,15 @@ class MusicBrainzClient {
       await Future.delayed(Duration(seconds: 2 * attempt));
       res = await _get(uri);
     }
-    if (res.statusCode != 200) return null;
+    // erro do servidor não é "não achei": quem chamou tenta de novo depois
+    if (res.statusCode != 200) throw HttpException('MusicBrainz respondeu ${res.statusCode}');
     return parseReleaseGroup(jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>);
   }
 
   static String? parseReleaseGroup(Map<String, dynamic> json) {
     final groups = (json['release-groups'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
     for (final g in groups) {
-      if (((g['score'] as num?) ?? 0) >= 90 && g['id'] is String) return g['id'] as String;
+      if (((g['score'] as num?) ?? 0) >= 85 && g['id'] is String) return g['id'] as String;
     }
     return null;
   }

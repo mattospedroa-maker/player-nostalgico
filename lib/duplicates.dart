@@ -44,15 +44,22 @@ String songKey(String artist, String title) {
 
 String trackKey(Track t) => songKey(t.artist == unknownArtist ? '' : t.artist, t.title);
 
-/// Grupos de músicas repetidas (2 ou mais cópias), a melhor cópia primeiro.
-List<List<Track>> findDuplicateGroups(List<Track> tracks) {
+Iterable<List<Track>> _rawGroups(List<Track> tracks) {
   final byKey = <String, List<Track>>{};
   for (final t in tracks) {
     final k = trackKey(t);
-    if (k.endsWith('|') || k.split('|')[1].isEmpty) continue; // sem título útil
+    if (k.split('|')[1].isEmpty) continue; // sem título útil
     byKey.putIfAbsent(k, () => []).add(t);
   }
-  final groups = byKey.values.where((g) => g.length > 1).map(rankCopies).toList()
+  return byKey.values.where((g) => g.length > 1);
+}
+
+/// Quantos arquivos sobram (cópias além da primeira de cada música). Não lê o disco.
+int duplicateExtraCount(List<Track> tracks) => _rawGroups(tracks).fold(0, (a, g) => a + g.length - 1);
+
+/// Grupos de músicas repetidas (2 ou mais cópias), a melhor cópia primeiro.
+List<List<Track>> findDuplicateGroups(List<Track> tracks) {
+  final groups = _rawGroups(tracks).map(rankCopies).toList()
     ..sort((a, b) => a.first.title.toLowerCase().compareTo(b.first.title.toLowerCase()));
   return groups;
 }

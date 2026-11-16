@@ -209,6 +209,8 @@ class AppState extends ChangeNotifier {
       if (t != null) await s.toggleFavorite(t);
     };
     await s.reload();
+    // capas que faltam (inclusive as que falharam antes), em segundo plano
+    unawaited(Future<void>.delayed(const Duration(seconds: 5), () => s.fetchMissingCovers()).catchError((_) {}));
     // Android 13+: a notificação com os controles precisa desta permissão
     if (Platform.isAndroid) unawaited(Permission.notification.request().catchError((_) => PermissionStatus.denied));
     return s;
@@ -280,9 +282,10 @@ class AppState extends ChangeNotifier {
     while (fillingGenres) {
       await Future<void>.delayed(const Duration(seconds: 2)); // o MusicBrainz aceita 1 pedido por segundo
     }
-    final tried = (prefs.getStringList('coverTried') ?? const []).toSet();
+    // v2: a versão antiga marcava como "tentado" até quando o MusicBrainz falhava; tenta tudo de novo uma vez
+    final tried = (prefs.getStringList('coverTried2') ?? const []).toSet();
     final n = await covers.fetchMissing(tracks, tried, onEach: notifyListeners);
-    await prefs.setStringList('coverTried', tried.toList());
+    await prefs.setStringList('coverTried2', tried.toList());
     if (n > 0) notifyListeners();
     return n;
   }
@@ -369,6 +372,7 @@ class AppState extends ChangeNotifier {
     await reload();
     final updated = byId(t.id);
     if (updated != null) player.replaceTrack(updated);
+    unawaited(fetchMissingCovers().catchError((_) => 0)); // álbum novo: busca a capa
     return warning;
   }
 
