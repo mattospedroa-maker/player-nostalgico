@@ -512,7 +512,7 @@ class AppState extends ChangeNotifier {
     final fresh = byId(t.id) ?? t;
     player.handler?.setFavorite(fresh.favorite);
     // arte inicial = primeiro GIF da música (depois o carrossel avisa a cada troca)
-    gifs.gifsFor(fresh).then((g) => nowShowingGif(fresh, g.isEmpty ? null : g.first));
+    gifs.gifsFor(fresh).then((g) => nowShowingGif(fresh, g.isEmpty ? null : g.first)).catchError((_) {}); // arte é secundária: nunca derruba o player
     if (!autoGifs || t.id == _lastAutoFetchId) return;
     _lastAutoFetchId = t.id;
     gifFetcher.fetchFor(fresh).catchError((_) => 0);

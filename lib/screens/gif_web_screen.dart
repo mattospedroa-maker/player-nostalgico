@@ -64,6 +64,12 @@ class _GifWebScreenState extends State<GifWebScreen> {
   bool _busy = false;
 
   @override
+  void dispose() {
+    _q.dispose();
+    super.dispose();
+  }
+
+  @override
   void initState() {
     super.initState();
     final app = context.read<AppState>();

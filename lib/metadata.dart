@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:audio_metadata_reader/audio_metadata_reader.dart' as amr;
@@ -23,7 +24,20 @@ class FileMetadataReader implements MetadataReader {
   const FileMetadataReader();
 
   @override
-  Future<TagInfo?> read(String path) async {
+  Future<TagInfo?> read(String path) async => readTagsSync(path);
+
+  /// Lê as tags de vários arquivos num isolate separado (a leitura é síncrona e travaria a tela
+  /// durante a leitura de uma pasta grande).
+  static Future<List<TagInfo?>> readMany(List<String> paths) async {
+    if (paths.isEmpty) return const [];
+    try {
+      return await Isolate.run(() => [for (final p in paths) readTagsSync(p)]);
+    } catch (_) {
+      return [for (final p in paths) readTagsSync(p)]; // sem isolate: lê aqui mesmo, como antes
+    }
+  }
+
+  static TagInfo? readTagsSync(String path) {
     try {
       final m = amr.readMetadata(File(path), getImage: false);
       String clean(String? s) => (s ?? '').replaceAll('\u0000', '').trim();
