@@ -209,6 +209,8 @@ class AppState extends ChangeNotifier {
       if (t != null) await s.toggleFavorite(t);
     };
     await s.reload();
+    // capas que faltam (inclusive as que falharam antes), em segundo plano
+    unawaited(Future<void>.delayed(const Duration(seconds: 5), () => s.fetchMissingCovers()).catchError((_) {}));
     // Android 13+: a notificação com os controles precisa desta permissão
     if (Platform.isAndroid) unawaited(Permission.notification.request().catchError((_) => PermissionStatus.denied));
     return s;
@@ -280,9 +282,10 @@ class AppState extends ChangeNotifier {
     while (fillingGenres) {
       await Future<void>.delayed(const Duration(seconds: 2)); // o MusicBrainz aceita 1 pedido por segundo
     }
-    final tried = (prefs.getStringList('coverTried') ?? const []).toSet();
+    // v2: a versão antiga marcava como "tentado" até quando o MusicBrainz falhava; tenta tudo de novo uma vez
+    final tried = (prefs.getStringList('coverTried2') ?? const []).toSet();
     final n = await covers.fetchMissing(tracks, tried, onEach: notifyListeners);
-    await prefs.setStringList('coverTried', tried.toList());
+    await prefs.setStringList('coverTried2', tried.toList());
     if (n > 0) notifyListeners();
     return n;
   }
@@ -369,6 +372,7 @@ class AppState extends ChangeNotifier {
     await reload();
     final updated = byId(t.id);
     if (updated != null) player.replaceTrack(updated);
+    unawaited(fetchMissingCovers().catchError((_) => 0)); // álbum novo: busca a capa
     return warning;
   }
 
@@ -381,6 +385,36 @@ class AppState extends ChangeNotifier {
     final root = sourceRoot;
     if (root != null) removeEmptyParents(root, [t.path]);
     await reload();
+  }
+
+  /// Limpa músicas repetidas: para cada grupo, fica [keep] e as outras cópias são apagadas do celular.
+  /// Favorito, playlists, histórico e GIFs fixados passam para a cópia que fica. Devolve quantos arquivos apagou.
+  Future<int> removeDuplicates(Map<Track, List<Track>> plan) async {
+    var removed = 0;
+    final root = sourceRoot;
+    for (final entry in plan.entries) {
+      final keep = entry.key;
+      var fav = keep.favorite;
+      for (final t in entry.value) {
+        if (t.id == null || t.id == keep.id) continue;
+        if (player.current?.id == t.id) await player.next();
+        fav = fav || t.favorite;
+        await db.replaceInPlaylists(t.id!, keep.id!);
+        await db.mergeTrackHistory(t.id!, keep.id!);
+        try {
+          final f = File(t.path);
+          if (f.existsSync()) await f.delete();
+        } catch (_) {
+          continue; // não deu para apagar o arquivo: deixa no banco também
+        }
+        await db.deleteTrack(t.id!);
+        if (root != null) removeEmptyParents(root, [t.path]);
+        removed++;
+      }
+      if (fav && !keep.favorite) await db.setFavorite(keep.id!, true);
+    }
+    await reload();
+    return removed;
   }
 
   Organizer organizer({bool cleanNames = true}) =>

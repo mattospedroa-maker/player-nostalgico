@@ -275,7 +275,7 @@ class _GifCarouselState extends State<GifCarousel> {
     _lastCount = app.gifs.count;
     final gifs = await app.gifs.gifsFor(widget.track);
     Uint8List? cover;
-    if (gifs.isEmpty) cover = await app.metadata.cover(widget.track.path) ?? await app.covers.fileFor(widget.track)?.readAsBytes();
+    if (gifs.isEmpty) cover = await app.covers.fileFor(widget.track)?.readAsBytes() ?? await app.metadata.cover(widget.track.path);
     if (!mounted) return;
     setState(() {
       _gifs = gifs;

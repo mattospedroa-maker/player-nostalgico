@@ -9,6 +9,8 @@ import '../models.dart';
 import '../player_service.dart';
 import '../theme.dart';
 import '../widgets.dart';
+import '../duplicates.dart';
+import 'duplicates_screen.dart';
 import 'organizer_screen.dart';
 import 'youtube_screen.dart';
 import 'track_list_screen.dart';
@@ -120,6 +122,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
             label: 'Gêneros',
             detail: '${distinct((t) => t.genre).where((g) => g.isNotEmpty).length}',
             onTap: () => _openGroups('Gêneros', (t) => t.genre.isEmpty ? 'Sem gênero' : t.genre)),
+        if (duplicateExtraCount(tracks) case final extra when extra > 0)
+          IpodRow(
+              label: 'Músicas repetidas',
+              detail: '$extra sobrando',
+              onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const DuplicatesScreen()))),
         IpodRow(label: 'Pastas', detail: p.basename(root), onTap: () => _openGroups('Pastas', (t) => p.relative(p.dirname(t.path), from: root))),
         IpodRow(label: 'Acervo de GIFs', detail: '${app.gifs.count}', onTap: () => _gifInfo(app)),
       ]),

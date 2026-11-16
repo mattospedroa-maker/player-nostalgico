@@ -23,47 +23,67 @@ class CoverService {
 
   static bool hasAlbum(Track t) => t.album != unknownAlbum && t.album.trim().isNotEmpty && t.artist != unknownArtist && t.artist.trim().isNotEmpty;
 
-  /// Capa baixada para o álbum desta música (ou null).
+  /// Nome do arquivo da capa: por álbum; sem álbum, pela própria música.
+  static String fileKey(Track t) => hasAlbum(t) ? keyFor(t.artist, t.album) : 'f_${sha1.convert(utf8.encode(t.path)).toString().substring(0, 16)}';
+
+  /// Capa guardada para esta música (do álbum ou tirada do próprio arquivo), ou null.
   File? fileFor(Track t) {
-    if (!hasAlbum(t)) return null;
-    final f = File(p.join(dir, '${keyFor(t.artist, t.album)}.jpg'));
+    final f = File(p.join(dir, '${fileKey(t)}.jpg'));
     return f.existsSync() ? f : null;
   }
 
-  /// Busca as capas que faltam (uma vez por álbum). [tried] guarda os álbuns já tentados.
+  /// Busca as capas que faltam (uma vez por álbum). [tried] guarda os álbuns já resolvidos.
+  /// Ordem: Cover Art Archive (capa oficial do álbum) > capa gravada no arquivo/pasta (ex.: miniatura do YouTube).
   Future<int> fetchMissing(List<Track> tracks, Set<String> tried, {MusicBrainzClient? mb, void Function()? onEach}) async {
-    final albums = <String, Track>{};
+    final items = <String, Track>{};
     for (final t in tracks) {
-      if (hasAlbum(t)) albums.putIfAbsent(keyFor(t.artist, t.album), () => t);
+      items.putIfAbsent(fileKey(t), () => t);
     }
     final client0 = mb ?? MusicBrainzClient();
+    var online = true;
     var n = 0;
-    for (final e in albums.entries) {
+    for (final e in items.entries) {
       if (tried.contains(e.key) || fileFor(e.value) != null) continue;
-      // já tem capa dentro do arquivo ou na pasta: não precisa baixar
-      if (await metadata.cover(e.value.path) != null) {
-        tried.add(e.key);
-        continue;
+      final t = e.value;
+      if (online && hasAlbum(t)) {
+        try {
+          final id = await client0.releaseGroupId(t.artist, t.album);
+          if (id != null && await _download(id, e.key)) {
+            tried.add(e.key);
+            n++;
+            onEach?.call();
+            continue;
+          }
+        } catch (_) {
+          online = false; // sem internet / MusicBrainz ocupado: usa só as capas dos arquivos e tenta de novo depois
+        }
       }
-      String? id;
-      try {
-        id = await client0.releaseGroupId(e.value.artist, e.value.album);
-      } catch (_) {
-        break; // sem internet: tenta na próxima leitura
-      }
-      tried.add(e.key);
-      if (id == null) continue;
-      try {
-        final res = await client
-            .get(Uri.https('coverartarchive.org', '/release-group/$id/front-500'), headers: {'User-Agent': MusicBrainzClient.userAgent})
-            .timeout(const Duration(seconds: 30));
-        if (res.statusCode != 200 || res.bodyBytes.length < 1024) continue;
+      // capa dentro do arquivo ou na pasta (cover.jpg)
+      final embedded = await metadata.cover(t.path);
+      if (embedded != null && embedded.length > 1024) {
         await Directory(dir).create(recursive: true);
-        await File(p.join(dir, '${e.key}.jpg')).writeAsBytes(res.bodyBytes, flush: true);
+        await File(p.join(dir, '${e.key}.jpg')).writeAsBytes(embedded, flush: true);
+        tried.add(e.key);
         n++;
         onEach?.call();
-      } catch (_) {}
+        continue;
+      }
+      if (online || !hasAlbum(t)) tried.add(e.key);
     }
     return n;
+  }
+
+  Future<bool> _download(String releaseGroupId, String key) async {
+    try {
+      final res = await client
+          .get(Uri.https('coverartarchive.org', '/release-group/$releaseGroupId/front-500'), headers: {'User-Agent': MusicBrainzClient.userAgent})
+          .timeout(const Duration(seconds: 30));
+      if (res.statusCode != 200 || res.bodyBytes.length < 1024) return false;
+      await Directory(dir).create(recursive: true);
+      await File(p.join(dir, '$key.jpg')).writeAsBytes(res.bodyBytes, flush: true);
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 }

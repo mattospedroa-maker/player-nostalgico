@@ -1,5 +1,6 @@
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
@@ -272,13 +273,14 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
           const SizedBox(height: 8),
           Text('Vai para: ${e.names.artist} / ${e.names.album} / ${e.names.title}.mp3',
               style: const TextStyle(fontSize: 12, color: Xp.blueMuted)),
+          if (e.existingPath != null) _alreadyHave(e.existingPath!),
         ],
       ]),
       if (e != null)
-        _bigButton('Baixar MP3', Icons.download, () async {
+        _bigButton(e.existingPath != null ? 'Baixar mesmo assim' : 'Baixar MP3', Icons.download, () async {
           if (!await _ready()) return;
           ds.enqueue([e]);
-        }),
+        }, primary: e.existingPath == null),
       const Padding(
         padding: EdgeInsets.fromLTRB(16, 6, 16, 0),
         child: Text(
@@ -289,6 +291,31 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
       ),
     ]);
   }
+
+  Widget _alreadyHave(String path) {
+    final root = context.read<AppState>().sourceRoot;
+    final rel = root == null ? path : p.relative(path, from: root);
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF6D6),
+        border: Border.all(color: const Color(0xFFE0B84A), width: 1.5),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text.rich(TextSpan(children: [
+        const TextSpan(text: '⚠ Você já tem esta música\n', style: TextStyle(fontWeight: FontWeight.bold)),
+        TextSpan(text: rel.replaceAll(p.separator, ' / ')),
+      ]), style: const TextStyle(color: Color(0xFF6B4D00), fontSize: 13)),
+    );
+  }
+
+  Widget _haveBadge() => Container(
+        margin: const EdgeInsets.only(top: 3),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+        decoration: BoxDecoration(color: const Color(0xFFFFF6D6), borderRadius: BorderRadius.circular(4)),
+        child: const Text('✔ Já está na Biblioteca', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF8A6200))),
+      );
 
   // ---------- aba "Playlist" ----------
 
@@ -309,8 +336,16 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
               const SizedBox(height: 10),
               Row(children: [
                 Expanded(
-                  child: Text('"${ds.playlistTitle}" · ${items.length} vídeos',
-                      overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, color: Xp.blueText)),
+                  child: Text.rich(
+                    TextSpan(text: '"${ds.playlistTitle}" · ${items.length} vídeos', children: [
+                      if (ds.playlistExistingCount > 0)
+                        TextSpan(
+                          text: ' · ${ds.playlistExistingCount} já ${ds.playlistExistingCount == 1 ? 'está' : 'estão'} na Biblioteca',
+                          style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF8A6200)),
+                        ),
+                    ]),
+                    style: const TextStyle(fontSize: 13, color: Xp.blueText),
+                  ),
                 ),
                 TextButton(
                   onPressed: () => ds.selectAll(selected.length != items.where((e) => !e.unavailable).length),
@@ -318,6 +353,11 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
                 ),
               ]),
               for (final e in items) _playlistRow(ds, e),
+              if (ds.playlistExistingCount > 0)
+                const Padding(
+                  padding: EdgeInsets.only(top: 6),
+                  child: Text('Quer baixar uma repetida mesmo assim? É só marcar de novo.', style: TextStyle(fontSize: 12, color: Xp.blueMuted)),
+                ),
               CheckboxListTile(
                 contentPadding: EdgeInsets.zero,
                 dense: true,
@@ -356,9 +396,12 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
                 if (e.unavailable)
                   const Text('Indisponível', style: TextStyle(color: Xp.blueMuted))
                 else ...[
-                  Text(e.names.title, style: const TextStyle(fontWeight: FontWeight.bold, color: Xp.navy, fontSize: 15)),
+                  Text(e.names.title,
+                      style: TextStyle(
+                          fontWeight: FontWeight.bold, color: e.existingPath != null && !e.selected ? const Color(0xFF7A869C) : Xp.navy, fontSize: 15)),
                   Text('${e.names.artist} · ${e.lookingUp ? 'procurando álbum…' : e.names.album}',
                       style: const TextStyle(fontSize: 12, color: Xp.blueMuted)),
+                  if (e.existingPath != null) _haveBadge(),
                 ],
               ]),
             ),

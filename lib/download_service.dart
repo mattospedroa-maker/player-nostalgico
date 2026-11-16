@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
@@ -7,6 +8,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'app_state.dart';
+import 'duplicates.dart';
 import 'models.dart';
 import 'organizer.dart';
 import 'youtube_names.dart';
@@ -32,6 +34,12 @@ class YtEntry {
   String? error;
   String? savedPath;
   int? sizeBytes;
+
+  /// Caminho da música igual que já está na Biblioteca (null = nova).
+  String? existingPath;
+
+  /// O usuário marcou/desmarcou à mão: a detecção de repetidas não mexe mais.
+  bool userToggled = false;
 
   YtEntry({required this.id, required this.url, required this.originalTitle, required this.names, this.thumbnail, this.durationSec, this.selected = true});
 
@@ -85,6 +93,7 @@ class DownloadService extends ChangeNotifier {
   bool _cancelAll = false;
   String? lastSummary;
   final Map<YtEntry, String> _playlistOf = {};
+  final Map<String, List<String>> _existingFor = {};
 
   int get doneCount => queue.where((e) => e.finished).length;
   int get okCount => queue.where((e) => e.status == YtStatus.done).length;
@@ -122,6 +131,7 @@ class DownloadService extends ChangeNotifier {
       await _maybeUpdate();
       final info = await ytdlp.info(url, playlist: false);
       single = YtEntry.fromInfo(info);
+      markExisting([single!], uncheck: false);
       notifyListeners();
       unawaited(_lookupAlbums([single!]));
     } catch (e) {
@@ -146,7 +156,8 @@ class DownloadService extends ChangeNotifier {
       final entries = (info['entries'] as List?)?.whereType<Map>().map((m) => YtEntry.fromInfo(m.cast<String, dynamic>())).toList() ?? [];
       if (entries.isEmpty) throw const YtDlpException('Não achei vídeos nesse link. É mesmo uma playlist?');
       playlistTitle = '${info['title'] ?? 'Playlist'}';
-      playlist = entries;
+      playlist = _dropRepeatedInList(entries);
+      markExisting(playlist, uncheck: true);
       notifyListeners();
       unawaited(_lookupAlbums(entries));
     } catch (e) {
@@ -169,6 +180,7 @@ class DownloadService extends ChangeNotifier {
         final found = await mb.lookup(n.title, artist: hint);
         if (found != null && !e.edited && (hint == null || _sameArtist(found.artist, hint))) {
           e.names = YtNames(artist: found.artist, title: found.title, album: found.album);
+          markExisting([e], uncheck: !identical(e, single));
         }
       } catch (_) {
         // sem internet / MusicBrainz ocupado: fica o nome do vídeo
@@ -184,10 +196,63 @@ class DownloadService extends ChangeNotifier {
   void edit(YtEntry e, {String? artist, String? title, String? album}) {
     e.names = e.names.copyWith(artist: artist, title: title, album: album);
     e.edited = true;
+    final before = e.existingPath;
+    markExisting([e], uncheck: !identical(e, single));
+    if (before != e.existingPath) notifyListeners();
   }
+
+  // ---------- repetidas ----------
+
+  /// Vídeos do YouTube já baixados: id -> caminho do .mp3.
+  Map<String, String> get _downloaded {
+    try {
+      final raw = app.prefs.getString('ytBaixados');
+      if (raw == null) return {};
+      return (jsonDecode(raw) as Map).map((k, v) => MapEntry('$k', '$v'));
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> _rememberDownload(String id, String path) async {
+    if (id.isEmpty) return;
+    final m = _downloaded..[id] = path;
+    await app.prefs.setString('ytBaixados', jsonEncode(m));
+  }
+
+  /// Procura cada vídeo na Biblioteca (mesmo vídeo já baixado, ou mesmo artista + título).
+  /// Na playlist, os que já existem ficam desmarcados (a não ser que o usuário tenha mexido).
+  void markExisting(List<YtEntry> entries, {required bool uncheck}) {
+    final byKey = <String, String>{};
+    for (final t in app.tracks) {
+      byKey.putIfAbsent(trackKey(t), () => t.path);
+    }
+    final ids = _downloaded;
+    for (final e in entries) {
+      if (e.unavailable) continue;
+      String? found;
+      final byId = ids[e.id];
+      if (byId != null && File(byId).existsSync()) found = byId;
+      found ??= byKey[songKey(e.names.artist == unknownArtist ? '' : e.names.artist, e.names.title)];
+      e.existingPath = found;
+      if (uncheck && !e.userToggled) e.selected = found == null;
+    }
+  }
+
+  /// Mesma música duas vezes na playlist: fica só a primeira marcada.
+  List<YtEntry> _dropRepeatedInList(List<YtEntry> entries) {
+    final seen = <String>{};
+    for (final e in entries) {
+      if (!seen.add(songKey(e.names.artist, e.names.title))) e.selected = false;
+    }
+    return entries;
+  }
+
+  int get playlistExistingCount => playlist.where((e) => e.existingPath != null).length;
 
   void toggle(YtEntry e) {
     e.selected = !e.selected;
+    e.userToggled = true;
     notifyListeners();
   }
 
@@ -217,6 +282,13 @@ class DownloadService extends ChangeNotifier {
         ..error = null;
       queue.add(e);
       if (playlistName != null) _playlistOf[e] = playlistName;
+    }
+    // músicas da playlist que já estavam na Biblioteca também entram na playlist do app
+    if (playlistName != null) {
+      _existingFor[playlistName] = [
+        for (final e in playlist)
+          if (!entries.contains(e) && e.existingPath != null) e.existingPath!,
+      ];
     }
     notifyListeners();
     if (!running) unawaited(_runQueue());
@@ -263,6 +335,7 @@ class DownloadService extends ChangeNotifier {
           notifyListeners();
           e.savedPath = await _saveToLibrary(File(mp3), e.names, root);
           e.sizeBytes = File(e.savedPath!).lengthSync();
+          await _rememberDownload(e.id, e.savedPath!);
           e.status = YtStatus.done;
           e.progress = 1;
         } on YtDlpException catch (err) {
@@ -322,10 +395,13 @@ class DownloadService extends ChangeNotifier {
       await Future<void>.delayed(const Duration(milliseconds: 500));
     }
     await app.rescan();
-    final byName = <String, List<YtEntry>>{};
+    final byName = <String, List<String>>{};
     for (final e in queue.where((e) => e.status == YtStatus.done)) {
       final name = _playlistOf.remove(e);
-      if (name != null) byName.putIfAbsent(name, () => []).add(e);
+      if (name != null) byName.putIfAbsent(name, () => []).add(e.savedPath!);
+    }
+    for (final name in byName.keys.toList()) {
+      byName[name]!.insertAll(0, _existingFor.remove(name) ?? const []);
     }
     for (final entry in byName.entries) {
       var pl = app.playlists.where((x) => x.name == entry.key).firstOrNull;
@@ -334,9 +410,13 @@ class DownloadService extends ChangeNotifier {
         pl = app.playlists.where((x) => x.name == entry.key).firstOrNull;
       }
       if (pl == null) continue;
-      for (final e in entry.value) {
-        final t = app.tracks.where((t) => p.equals(t.path, e.savedPath!)).firstOrNull;
-        if (t != null) await app.addToPlaylist(pl.id, t);
+      final already = (await app.db.playlistTracks(pl.id)).map((t) => t.id).toSet();
+      for (final path in entry.value) {
+        final t = app.tracks.where((t) => p.equals(t.path, path)).firstOrNull;
+        if (t != null && !already.contains(t.id)) {
+          already.add(t.id);
+          await app.addToPlaylist(pl.id, t);
+        }
       }
     }
   }
