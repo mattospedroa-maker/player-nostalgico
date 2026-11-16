@@ -56,9 +56,21 @@ class YtDlpBridge(private val context: Context, messenger: BinaryMessenger) : Me
             } catch (e: YoutubeDL.CanceledException) {
                 main.post { result.error("canceled", "Cancelado", null) }
             } catch (e: Throwable) {
-                main.post { result.error("ytdlp", e.message ?: e.toString(), null) }
+                main.post { result.error("ytdlp", describe(e), null) }
             }
         }
+    }
+
+    /** Mensagem legível com a causa (em vez de só o nome da classe da exceção). */
+    private fun describe(e: Throwable): String {
+        val parts = mutableListOf<String>()
+        var t: Throwable? = e
+        while (t != null && parts.size < 4) {
+            val msg = t.message?.takeIf { it.isNotBlank() }
+            parts += if (msg != null) "${t.javaClass.simpleName}: $msg" else t.javaClass.name
+            t = t.cause.takeIf { it !== t }
+        }
+        return parts.joinToString(" <- ")
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {

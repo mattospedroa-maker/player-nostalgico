@@ -34,6 +34,7 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             // yt-dlp + Python + ffmpeg pesam ~50 MB por arquitetura: o APK de release leva só a dos celulares (arm64).
             ndk { abiFilters += listOf("arm64-v8a") }
         }
