@@ -82,11 +82,17 @@ class GifService extends ChangeNotifier {
 
   String songExtras(String artist, String title) => _readExtras()[extrasKey(artist, title)] ?? '';
 
-  Future<void> setSongExtras(String artist, String title, String words) async {
+  /// Palavras do artista (valem para todas as músicas dele).
+  String artistExtras(String artist) => _readExtras()[extrasKey(artist)] ?? '';
+
+  Future<void> setArtistExtras(String artist, String words) => _setExtras(extrasKey(artist), words);
+
+  Future<void> setSongExtras(String artist, String title, String words) => _setExtras(extrasKey(artist, title), words);
+
+  Future<void> _setExtras(String k, String words) async {
     final root = gifRoot;
     if (root == null) return;
     final m = _readExtras();
-    final k = extrasKey(artist, title);
     words.trim().isEmpty ? m.remove(k) : m[k] = words.trim();
     await Directory(root).create(recursive: true);
     await File(p.join(root, 'palavras.json')).writeAsString(const JsonEncoder.withIndent('  ').convert(m));
@@ -109,13 +115,24 @@ class GifService extends ChangeNotifier {
   void addToCache(String path) => _cache = [..._cache, File(path)];
 
   /// GIFs para a música: fixados primeiro, depois os que batem com artista/álbum/título/gênero, depois gerais.
+  /// Nome dos GIFs que o app baixou sozinho (hash do conteúdo). Os outros foram escolhidos pelo usuário.
+  static final autoName = RegExp(r'^[0-9a-f]{12}\.gif$');
+  static bool isAuto(String path) => autoName.hasMatch(p.basename(path));
+
   Future<List<String>> gifsFor(Track t, {int max = 9}) async {
     final pinned = t.id == null ? <String>[] : (await db.pinnedGifs(t.id!)).where((g) => File(g).existsSync()).toList();
+    // os escolhidos pelo usuário aparecem primeiro na roda
+    final mine = pinned.where((g) => !isAuto(g)).toList();
+    pinned
+      ..removeWhere((g) => !isAuto(g))
+      ..insertAll(0, mine);
     final keys = [t.artist, t.album, t.title, t.genre].map(_norm).where((k) => k.length >= 2).toList();
     final matching = <String>[];
     final general = <String>[];
     for (final f in _cache) {
       if (pinned.contains(f.path) || !f.existsSync()) continue;
+      // GIF automático de outra música (ex.: do mesmo álbum) não entra: era isso que deixava o álbum todo igual
+      if (isAuto(f.path)) continue;
       final tags = p.split(p.relative(p.dirname(f.path), from: gifRoot!)).where((s) => s != '.').map(_norm).toList()
         ..add(_norm(p.basenameWithoutExtension(f.path)));
       final hit = tags.any((tag) => tag.length >= 2 && keys.any((k) => k.contains(tag) || tag.contains(k)));

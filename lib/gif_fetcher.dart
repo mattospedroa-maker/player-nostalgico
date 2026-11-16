@@ -9,7 +9,9 @@ import 'package:path/path.dart' as p;
 
 import 'clip_info.dart';
 import 'filename_parser.dart';
+import 'gif_feedback.dart';
 import 'gif_providers.dart';
+import 'visual_search.dart';
 import 'gif_service.dart';
 import 'lastfm.dart';
 import 'models.dart';
@@ -51,6 +53,30 @@ class GifFetcher {
   /// Última situação do clipe por música (para mostrar "Do clipe: ...").
   final Map<int?, ClipInfo?> clipInfo = {};
   final Map<String, DateTime> _clipFailedAt = {};
+
+  GifFeedback? _feedback;
+  String? _feedbackRoot;
+
+  /// Preferências que o usuário ensinou (👎 e downloads), em `GIFs/.preferencias.json`.
+  GifFeedback? get feedback {
+    final root = gifs.gifRoot;
+    if (root == null) return null;
+    if (_feedbackRoot != root) {
+      _feedback = GifFeedback(File(p.join(root, '.preferencias.json')));
+      _feedbackRoot = root;
+    }
+    return _feedback;
+  }
+
+  /// Álbum de trilha sonora (anime, jogo, filme): o nome vira busca. Ex.: "Naruto Original Soundtrack" -> "Naruto".
+  static String? soundtrackName(String album) {
+    final a = album.trim();
+    if (a.isEmpty || a == unknownAlbum) return null;
+    final re = RegExp(r'\b(o\.?s\.?t\.?|original (motion picture |game |video game )?soundtrack|soundtrack|original score|score|opening|ending|theme songs?|trilha sonora|anime)\b', caseSensitive: false);
+    if (!re.hasMatch(a)) return null;
+    final name = a.replaceAll(re, ' ').replaceAll(RegExp(r'[\(\)\[\]\-:|]+'), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+    return name.length >= 2 ? name : null;
+  }
 
   GifFetcher(this.gifs, {required this.client, List<GifProvider>? providers, this.maxBytes = 8 * 1024 * 1024, this.retryAfter = const Duration(days: 3)})
       : providers = providers ?? [NekosBestProvider(client)]; // só GIFs de anime (pedido do usuário)
@@ -131,7 +157,7 @@ class GifFetcher {
   }
 
   /// Título e artista limpos, do jeito que o Last.fm conhece.
-  static (String, String) _names(Track t) {
+  static (String, String) namesFor(Track t) {
     final parsed = parseFileName(t.title);
     var artist = t.artist.trim();
     if (artist.isEmpty || artist == unknownArtist) artist = parsed.artist ?? '';
@@ -140,7 +166,7 @@ class GifFetcher {
 
   /// Tags do Last.fm da música, com cache em `GIFs/.lastfm.json`. Nunca lança erro.
   Future<TagResult> tagsFor(Track t) async {
-    final (title, artist) = _names(t);
+    final (title, artist) = namesFor(t);
     final root = gifs.gifRoot;
     if (root != null && _tagCacheRoot != root) {
       _tagCache = TagCache(File(p.join(root, '.lastfm.json')));
@@ -162,7 +188,7 @@ class GifFetcher {
   /// Cenas do videoclipe pela Wikipédia, com cache em `GIFs/.clipes.json`. Nunca lança erro.
   Future<ClipInfo?> clipFor(Track t) async {
     if (!useClipInfo) return null;
-    final (title, artist) = _names(t);
+    final (title, artist) = namesFor(t);
     final root = gifs.gifRoot;
     if (root != null) _clipCache ??= ClipCache(File(p.join(root, '.clipes.json')));
     final (hit, cached) = _clipCache?.get(artist, title) ?? (false, null);
@@ -185,10 +211,30 @@ class GifFetcher {
   /// Pesquisas visuais da música: tags do Last.fm + cenas do clipe -> dicionário; sem nada, a alternativa básica.
   /// O clima escolhido no selo pesa mais que tudo.
   Future<VisualPlan> visualPlanFor(Track t) async {
-    final (title, artist) = _names(t);
+    final (title, artist) = namesFor(t);
     final r = await tagsFor(t);
     final clip = await clipFor(t);
-    return mapper.convert(r.tags, mood: t.chosenMood, title: title, artist: artist, genre: t.genre, scenes: clip?.scenes ?? const {});
+    var plan = mapper.convert(r.tags, mood: t.chosenMood, title: title, artist: artist, genre: t.genre, scenes: clip?.scenes ?? const {});
+    // palavras do usuário (música e artista) e o nome da trilha sonora vêm na frente: são as mais específicas
+    final top = plan.all.isEmpty ? 1.0 : plan.all.first.score;
+    final extras = gifs.extrasFor(t.artist, title);
+    final ost = soundtrackName(t.album);
+    final front = <VisualQuery>[
+      for (final e in extras)
+        for (final w in e.split(',').map((x) => x.trim()).where((x) => x.length >= 2)) VisualQuery(w, 'Suas palavras', top * 2),
+      if (ost != null) VisualQuery(ost, 'Trilha sonora', top * 1.4),
+    ];
+    if (front.isNotEmpty) {
+      final seen = <String>{};
+      plan = VisualPlan(
+        all: [...front, ...plan.all].where((q) => seen.add(VisualTagMapper.normalize(q.text))).toList(),
+        anime: plan.anime,
+        matchedTags: plan.matchedTags,
+        fromTags: plan.fromTags,
+        clipScenes: plan.clipScenes,
+      );
+    }
+    return feedback?.apply(plan, artist, title) ?? plan;
   }
 
   /// Texto pronto para a busca na web (inclui as palavras extras).
@@ -306,6 +352,8 @@ class GifFetcher {
       }
 
       final rnd = Random(t.path.hashCode);
+      final (title0, artist0) = namesFor(t);
+      final rejected = feedback?.rejected(artist0, title0) ?? const <String>{};
       final titleC = await collect(plan.title, anime: false);
       if (plan.anime) titleC.insertAll(0, await collect(plan.animeQueries, anime: true));
       final artistC = (await collect(plan.artist, anime: false))..shuffle(rnd); // varia entre as músicas do artista
@@ -313,7 +361,10 @@ class GifFetcher {
       final animeC = <GifCandidate>[];
       final nekos = usable.whereType<NekosBestProvider>().firstOrNull;
       if (nekos != null && plan.moods.isNotEmpty) {
-        final cats = List.of(plan.moods);
+        // categorias que o usuário marcou como "não combina" para esta música saem da lista
+        final fb = feedback;
+        final cats = plan.moods.where((c) => fb == null || fb.weight(artist0, title0, 'anime:$c') > 0.4).toList();
+        if (cats.isEmpty) cats.addAll(plan.moods);
         // das tags já vêm em ordem de importância; do gênero/clima, sorteia
         if (tagAnime.isEmpty || t.chosenMood != null) {
           cats.shuffle(rnd);
@@ -350,10 +401,12 @@ class GifFetcher {
         final bucket = [for (var k = 0; k < 4; k++) buckets[(want + k) % 4]].firstWhere((b) => b.isNotEmpty);
         while (bucket.isNotEmpty) {
           final c = bucket.removeAt(0);
+          if (rejected.contains(c.url)) continue; // o usuário disse que não combina
           // 1) mesmo endereço já baixado para outra música: usa o mesmo arquivo, sem baixar
           final known = index[c.url] as String?;
           if (known != null && File(known).existsSync()) {
             if (have.contains(p.basenameWithoutExtension(known))) continue;
+            if (rejected.contains(p.basenameWithoutExtension(known))) continue;
             if (await gifs.db.gifUsers(known) > 0) {
               reuse.add(known);
               continue;
@@ -366,6 +419,7 @@ class GifFetcher {
           final bytes = await _download(c.url);
           if (bytes == null) continue;
           final hash = sha1.convert(bytes).toString().substring(0, 12);
+          if (rejected.contains(hash)) continue;
           if (!have.add(hash)) continue; // mesmo GIF vindo de outro endereço
           // 2) mesmo conteúdo já guardado (por outra música): aponta para ele, não grava de novo
           var target = gifs.findByName('$hash.gif');
@@ -425,6 +479,53 @@ class GifFetcher {
     await _clearAuto(t, pinned, root);
     await gifs.refresh();
     return fetchFor(t, force: true);
+  }
+
+  /// 👎 num GIF salvo: tira da música, nunca mais volta sozinho (para a música e o artista)
+  /// e a categoria de anime que trouxe ele perde força.
+  Future<void> rejectFile(Track t, String path) async {
+    final (title, artist) = namesFor(t);
+    final hash = p.basenameWithoutExtension(path);
+    final urls = [for (final e in _readIndex().entries) if (e.value == path) e.key];
+    feedback?.reject(artist, title, [hash, ...urls]);
+    for (final u in urls) {
+      final cat = nekosCategory(u);
+      if (cat != null) feedback?.vote(artist, title, 'anime:$cat', -1);
+    }
+    await gifs.deleteGif(path, trackId: t.id);
+  }
+
+  /// Baixa uns GIFs na hora para palavras que o usuário acabou de escrever (pedido dele: ver o resultado logo).
+  /// GIPHY (anime primeiro) quando tem chave; anime do nekos.best sempre, pelas palavras extras.
+  Future<int> fetchForKeywords(Track t, List<String> words, {GiphyProvider? giphy, int perWord = 3}) async {
+    final (title, artist) = namesFor(t);
+    final rejected = feedback?.rejected(artist, title) ?? const <String>{};
+    final (artistDir, titleDir) = dirsFor(t);
+    var saved = 0;
+    if (giphy != null && (giphy.apiKey ?? '').isNotEmpty) {
+      for (final w in words.where((w) => w.trim().length >= 2).take(3)) {
+        try {
+          final page = await TermPager(giphy, VisualQuery(w.trim(), 'Suas palavras', 2), exclude: rejected, artist: artist, song: title)
+              .next(count: perWord + 2);
+          var n = 0;
+          for (final r in page) {
+            if (n >= perWord) break;
+            final bytes = await _download(r.gif.url);
+            if (bytes == null) continue;
+            final path = await gifs.saveForTrack(t, bytes,
+                artistDir: artistDir, titleDir: titleDir, credit: 'GIPHY · ${r.gif.pageUrl.isEmpty ? r.gif.url : r.gif.pageUrl}');
+            if (path != null) {
+              n++;
+              saved++;
+            }
+          }
+        } catch (_) {
+          // sem internet ou limite do GIPHY: segue com o anime
+        }
+      }
+    }
+    saved += await fetchFor(t, force: true).catchError((_) => 0);
+    return saved;
   }
 
   Future<Uint8List?> _download(String url) async {

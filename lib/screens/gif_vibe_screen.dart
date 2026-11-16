@@ -83,6 +83,8 @@ class _GifVibeScreenState extends State<GifVibeScreen> {
   /// Carrega a próxima página de cada grupo visível (um grupo por vez, para respeitar o limite do GIPHY).
   Future<void> _loadVisible({bool reset = false}) async {
     final giphy = context.read<AppState>().giphy;
+    final (song, artist) = GifFetcher.namesFor(widget.track);
+    final rejected = context.read<AppState>().gifFetcher.feedback?.rejected(artist, song) ?? const <String>{};
     if (giphy.apiKey == null || giphy.apiKey!.isEmpty) {
       setState(() => _error = GiphyError.noKey.name);
       return;
@@ -99,7 +101,7 @@ class _GifVibeScreenState extends State<GifVibeScreen> {
       try {
         // termo acabou: passa para o próximo do grupo
         for (var tries = 0; tries < g.terms.length; tries++) {
-          g.pager ??= TermPager(giphy, g.term);
+          g.pager ??= TermPager(giphy, g.term, exclude: rejected, artist: artist, song: song);
           final page = await g.pager!.next(count: perPage);
           g.results.addAll(page.where((r) => !g.results.any((x) => x.gif.id == r.gif.id)));
           if (page.isNotEmpty || !g.pager!.done) break;
@@ -145,6 +147,7 @@ class _GifVibeScreenState extends State<GifVibeScreen> {
         messenger.showSnackBar(const SnackBar(content: Text('Não deu para salvar esse GIF.')));
       } else {
         setState(() => _downloaded.add(id));
+        app.likedWeb(widget.track, r); // o termo que achou esse GIF ganha força
         messenger.showSnackBar(const SnackBar(content: Text('GIF salvo na música. Ele já entra na roda do Tocando agora.')));
       }
     } catch (_) {
@@ -152,6 +155,17 @@ class _GifVibeScreenState extends State<GifVibeScreen> {
     } finally {
       if (mounted) setState(() => _downloading.remove(id));
     }
+  }
+
+  /// 👎: esconde o GIF (não volta mais) e o termo que trouxe ele perde força para esta música.
+  void _reject(VisualResult r) {
+    context.read<AppState>().rejectWeb(widget.track, r);
+    setState(() {
+      for (final g in _groups) {
+        g.results.removeWhere((x) => x.gif.id == r.gif.id);
+      }
+    });
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Escondido. Vou buscar menos "${r.term}" para esta música.')));
   }
 
   void _preview(VisualResult r) {
@@ -325,6 +339,23 @@ class _GifVibeScreenState extends State<GifVibeScreen> {
         decoration: BoxDecoration(color: Colors.black, border: Border.all(color: const Color(0xFF7A96C9))),
         child: Stack(fit: StackFit.expand, children: [
           Image.network(r.gif.previewUrl, fit: BoxFit.cover, cacheWidth: 200, errorBuilder: (_, _, _) => const ColoredBox(color: Colors.black26)),
+          Positioned(
+            left: 3,
+            bottom: 3,
+            child: GestureDetector(
+              onTap: () => _reject(r),
+              child: Container(
+                width: 26,
+                height: 26,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: const Color(0xFFAA3333)),
+                  gradient: const RadialGradient(center: Alignment(-.2, -.4), colors: [Colors.white, Color(0xFFF3C9C9)]),
+                ),
+                child: const Icon(Icons.thumb_down_alt_outlined, size: 14, color: Color(0xFFAA3333)),
+              ),
+            ),
+          ),
           if (!r.anime)
             Positioned(
               left: 3,

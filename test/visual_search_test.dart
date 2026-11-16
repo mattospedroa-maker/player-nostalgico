@@ -60,8 +60,10 @@ void main() {
 
     asked.clear();
     final dark = await TermPager(g, const VisualQuery('dark cinematic', 'Sombrio', 1)).next(count: 12);
-    expect(asked, ['anime dark cinematic']); // tinha anime de sobra
-    expect(dark.every((r) => r.anime), isTrue);
+    // anime de sobra: ~70% anime e ~30% geral (preferência por anime, mas não 100%)
+    expect(asked, ['anime dark cinematic', 'dark cinematic']);
+    expect(dark.where((r) => r.anime).length, 8);
+    expect(dark.take(8).every((r) => r.anime), isTrue);
   });
 
   test('roda do player: mistura os termos principais', () async {

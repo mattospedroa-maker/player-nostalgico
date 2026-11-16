@@ -15,6 +15,7 @@ import 'db.dart';
 import 'download_service.dart';
 import 'audio_handler.dart';
 import 'cover_service.dart';
+import 'filename_parser.dart';
 import 'gif_fetcher.dart';
 import 'gif_service.dart';
 import 'library_scanner.dart';
@@ -97,8 +98,12 @@ class AppState extends ChangeNotifier {
   Future<List<VisualResult>> playerVisualsFor(Track t) {
     if (gifSource == GifSource.anime || giphyKey.isEmpty || t.id == null) return Future.value(const []);
     final key = '${t.id}|${t.mood}|${gifSource.name}|v2'; // v2: sorteio por música (menos repetição no álbum)
+    final rejected = _rejectedFor(t);
     final cached = _playerVisuals[key] ?? _readVisualsDisk(key);
-    if (cached != null) return Future.value(_playerVisuals[key] = cached);
+    if (cached != null) {
+      _playerVisuals[key] = cached;
+      return Future.value(cached.where((r) => !rejected.contains(r.gif.id)).toList());
+    }
     // falhou há pouco (ex.: limite do GIPHY): espera um pouco antes de tentar de novo
     final failed = _visualsFailedAt[key];
     if (failed != null && DateTime.now().difference(failed) < const Duration(minutes: 10)) return Future.value(const []);
@@ -107,7 +112,12 @@ class AppState extends ChangeNotifier {
       try {
         final plan = await gifFetcher.visualPlanFor(t);
         final picks = await PlayerVisuals(giphy).pick(plan,
-            count: gifSource == GifSource.giphy ? 9 : 5, rnd: Random(Object.hash(t.path, t.mood)), avoid: _visualsUsedNear(t));
+            count: gifSource == GifSource.giphy ? 9 : 5,
+            rnd: Random(Object.hash(t.path, t.mood)),
+            avoid: _visualsUsedNear(t),
+            rejected: rejected,
+            artist: t.artist,
+            song: t.title);
         if (picks.isEmpty) {
           _visualsFailedAt[key] = DateTime.now();
         } else {
@@ -122,6 +132,47 @@ class AppState extends ChangeNotifier {
         unawaited(Future<void>(() => _visualsInFlight.remove(key)));
       }
     }();
+  }
+
+  Set<String> _rejectedFor(Track t) {
+    final (title, artist) = GifFetcher.namesFor(t);
+    return gifFetcher.feedback?.rejected(artist, title) ?? const {};
+  }
+
+  /// 👎 num GIF salvo da música.
+  Future<void> rejectGif(Track t, String path) => gifFetcher.rejectFile(t, path);
+
+  /// 👎 num GIF do GIPHY (tela "GIFs pela vibe" ou roda): some e o termo que trouxe ele perde força.
+  void rejectWeb(Track t, VisualResult r) {
+    final fb = gifFetcher.feedback;
+    final (title, artist) = GifFetcher.namesFor(t);
+    fb?.reject(artist, title, [r.gif.id, r.gif.url]);
+    if (r.term.isNotEmpty) fb?.vote(artist, title, r.term, -1);
+    visualsEpoch++;
+    notifyListeners();
+  }
+
+  /// ⬇ de um GIF do GIPHY: o termo que achou ele ganha força para a música e o artista.
+  void likedWeb(Track t, VisualResult r) {
+    final (title, artist) = GifFetcher.namesFor(t);
+    if (r.term.isNotEmpty) gifFetcher.feedback?.vote(artist, title, r.term, 1);
+  }
+
+  /// Salva as palavras da música e do artista e já baixa uns GIFs para as palavras novas.
+  Future<int> saveKeywords(Track t, {required String song, required String artist}) async {
+    final title = parseFileName(t.title).title;
+    final oldWords = {...gifs.songExtras(t.artist, title).split(','), ...gifs.artistExtras(t.artist).split(',')}
+        .map((w) => w.trim().toLowerCase())
+        .toSet();
+    await gifs.setSongExtras(t.artist, title, song);
+    await gifs.setArtistExtras(t.artist, artist);
+    final fresh = [...song.split(','), ...artist.split(',')].map((w) => w.trim()).where((w) => w.length >= 2 && !oldWords.contains(w.toLowerCase())).toList();
+    if (fresh.isEmpty) return 0;
+    _playerVisuals.removeWhere((k, _) => k.startsWith('${t.id}|'));
+    final n = await gifFetcher.fetchForKeywords(t, fresh, giphy: giphyKey.isEmpty ? null : giphy);
+    visualsEpoch++;
+    notifyListeners();
+    return n;
   }
 
   /// GIFs do GIPHY que outras músicas do mesmo álbum (ou artista) já mostram, para não repetir.

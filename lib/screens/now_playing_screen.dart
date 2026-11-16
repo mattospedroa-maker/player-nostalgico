@@ -461,6 +461,7 @@ Future<void> showGifManager(BuildContext context, Track t) async {
   if (app.sourceRoot == null || t.id == null) return;
   final parsedTitle = parseFileName(t.title).title;
   final extras = TextEditingController(text: app.gifs.songExtras(t.artist, parsedTitle));
+  final artistExtras = TextEditingController(text: app.gifs.artistExtras(t.artist));
   final messenger = ScaffoldMessenger.of(context);
   final nav = Navigator.of(context);
   await showModalBottomSheet<void>(
@@ -468,7 +469,19 @@ Future<void> showGifManager(BuildContext context, Track t) async {
     isScrollControlled: true,
     backgroundColor: Xp.bgTop,
     builder: (ctx) => StatefulBuilder(builder: (ctx, setSt) {
-      Future<void> saveExtras() => app.gifs.setSongExtras(t.artist, parsedTitle, extras.text);
+      Future<void> saveExtras() async {
+        await app.gifs.setSongExtras(t.artist, parsedTitle, extras.text);
+        await app.gifs.setArtistExtras(t.artist, artistExtras.text);
+      }
+
+      // palavras novas: já baixa uns GIFs para elas (pedido do usuário)
+      Future<void> saveKeywords() async {
+        messenger.showSnackBar(const SnackBar(content: Text('Palavras salvas. Baixando GIFs para elas...')));
+        final n = await app.saveKeywords(t, song: extras.text, artist: artistExtras.text);
+        messenger.showSnackBar(SnackBar(content: Text(n > 0 ? '$n GIFs novos pelas suas palavras.' : 'Palavras salvas. Não achei GIF novo agora.')));
+        setSt(() {});
+      }
+
       return FutureBuilder<(List<String>, List<String>)>(
         future: () async {
           final pinned = (await app.db.pinnedGifs(t.id!)).where((g) => File(g).existsSync()).toList();
@@ -557,21 +570,52 @@ Future<void> showGifManager(BuildContext context, Track t) async {
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   child: TextField(
                     controller: extras,
-                    onSubmitted: (_) => saveExtras(),
+                    textInputAction: TextInputAction.done,
+                    onSubmitted: (_) => saveKeywords(),
                     decoration: const InputDecoration(
                       isDense: true,
                       filled: true,
                       fillColor: Colors.white,
                       border: OutlineInputBorder(),
-                      labelText: 'Palavras extras para buscar (ex.: rock lee vs gaara)',
+                      labelText: 'Palavras desta música (ex.: rock lee vs gaara)',
                     ),
                   ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  child: Row(children: [
+                    Expanded(
+                      child: TextField(
+                        controller: artistExtras,
+                        textInputAction: TextInputAction.done,
+                        onSubmitted: (_) => saveKeywords(),
+                        decoration: InputDecoration(
+                          isDense: true,
+                          filled: true,
+                          fillColor: Colors.white,
+                          border: const OutlineInputBorder(),
+                          labelText: 'Palavras do artista (todas as músicas de ${t.artist})',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    XpButton(label: 'Salvar', icon: Icons.check, onTap: saveKeywords),
+                  ]),
+                ),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(12, 2, 12, 2),
+                  child: Wrap(crossAxisAlignment: WrapCrossAlignment.center, runSpacing: 2, children: [
+                    _SourceTag(manual: true),
+                    Text(' escolhido por você   ', style: TextStyle(fontSize: 11, color: Xp.blueText)),
+                    _SourceTag(manual: false),
+                    Text(' baixado sozinho   👎 não combina', style: TextStyle(fontSize: 11, color: Xp.blueText)),
+                  ]),
                 ),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   child: Text(
                       'Fixados: ${pinned.length} de $maxGifsPerTrack. Os GIFs ficam na pasta GIFs e funcionam sem internet. '
-                      'Alfinete fixa ou solta; lixeira tira da música (o arquivo só é apagado se nenhuma outra música usa).',
+                      '📌 fixa ou solta; 👎 tira e o GIF nunca mais volta sozinho; 🗑 só tira desta música.',
                       style: const TextStyle(fontSize: 12, color: Xp.blueText)),
                 ),
                 Expanded(
@@ -580,44 +624,52 @@ Future<void> showGifManager(BuildContext context, Track t) async {
                     gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, mainAxisSpacing: 6, crossAxisSpacing: 6),
                     itemCount: gifs.length,
                     itemBuilder: (ctx, i) {
-                      final isPinned = pinned.contains(gifs[i]);
+                      final g = gifs[i];
+                      final isPinned = pinned.contains(g);
+                      Widget act(IconData icon, String tip, VoidCallback onTap, {bool on = false}) => Expanded(
+                            child: Tooltip(
+                              message: tip,
+                              child: InkWell(
+                                onTap: onTap,
+                                child: Container(
+                                  color: on ? const Color(0xFFFFD400) : Colors.transparent,
+                                  padding: const EdgeInsets.symmetric(vertical: 3),
+                                  child: Icon(icon, size: 16, color: on ? Colors.black : Colors.white),
+                                ),
+                              ),
+                            ),
+                          );
                       return Stack(fit: StackFit.expand, children: [
-                        Image.file(File(gifs[i]), fit: BoxFit.cover, cacheWidth: 240),
+                        Image.file(File(g), fit: BoxFit.cover, cacheWidth: 240, errorBuilder: (_, _, _) => const ColoredBox(color: Colors.black26)),
+                        Positioned(left: 3, top: 3, child: _SourceTag(manual: !GifService.isAuto(g))),
                         Positioned(
-                          right: 2,
-                          top: 2,
-                          child: GestureDetector(
-                            onTap: () async {
-                              if (isPinned) {
-                                await app.db.unpinGif(t.id!, gifs[i]);
-                              } else if (pinned.length < maxGifsPerTrack) {
-                                await app.db.pinGif(t.id!, gifs[i]);
-                              } else {
-                                messenger.showSnackBar(const SnackBar(content: Text('Máximo de $maxGifsPerTrack GIFs por música.')));
-                              }
-                              app.gifs.changed();
-                              setSt(() {});
-                            },
-                            child: Container(
-                              padding: const EdgeInsets.all(3),
-                              color: isPinned ? const Color(0xFFFFD400) : Colors.black45,
-                              child: Icon(Icons.push_pin, size: 16, color: isPinned ? Colors.black : Colors.white),
-                            ),
-                          ),
-                        ),
-                        Positioned(
-                          left: 2,
-                          top: 2,
-                          child: GestureDetector(
-                            onTap: () async {
-                              await app.gifs.deleteGif(gifs[i], trackId: t.id);
-                              setSt(() {});
-                            },
-                            child: Container(
-                              padding: const EdgeInsets.all(3),
-                              color: Colors.black45,
-                              child: const Icon(Icons.delete_outline, size: 16, color: Colors.white),
-                            ),
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          child: Container(
+                            color: Colors.black54,
+                            child: Row(children: [
+                              act(Icons.push_pin, isPinned ? 'Soltar da música' : 'Fixar na música', () async {
+                                if (isPinned) {
+                                  await app.db.unpinGif(t.id!, g);
+                                } else if (pinned.length < maxGifsPerTrack) {
+                                  await app.db.pinGif(t.id!, g);
+                                } else {
+                                  messenger.showSnackBar(const SnackBar(content: Text('Máximo de $maxGifsPerTrack GIFs por música.')));
+                                }
+                                app.gifs.changed();
+                                setSt(() {});
+                              }, on: isPinned),
+                              act(Icons.thumb_down_alt_outlined, 'Não combina (nunca mais volta sozinho)', () async {
+                                await app.rejectGif(t, g);
+                                messenger.showSnackBar(const SnackBar(content: Text('Não combina: tirei e ele não volta mais sozinho.')));
+                                setSt(() {});
+                              }),
+                              act(Icons.delete_outline, 'Tirar desta música', () async {
+                                await app.gifs.deleteGif(g, trackId: t.id);
+                                setSt(() {});
+                              }),
+                            ]),
                           ),
                         ),
                       ]);
@@ -632,6 +684,19 @@ Future<void> showGifManager(BuildContext context, Track t) async {
     }),
   );
   await app.gifs.setSongExtras(t.artist, parsedTitle, extras.text);
+  await app.gifs.setArtistExtras(t.artist, artistExtras.text);
+}
+
+/// Etiqueta de origem do GIF: "VOCÊ" (escolhido pelo usuário) ou "AUTO" (baixado sozinho).
+class _SourceTag extends StatelessWidget {
+  final bool manual;
+  const _SourceTag({required this.manual});
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+        decoration: BoxDecoration(color: manual ? const Color(0xFF1D7A2A) : const Color(0xFF55688F), borderRadius: BorderRadius.circular(3)),
+        child: Text(manual ? 'VOCÊ' : 'AUTO', style: const TextStyle(color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.bold)),
+      );
 }
 
 class SeekBar extends StatelessWidget {

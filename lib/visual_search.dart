@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'gif_feedback.dart';
 import 'gif_providers.dart';
 import 'visual_tags.dart';
 
@@ -22,22 +23,34 @@ class VisualResult {
 
   /// true = veio da pesquisa na versão anime do termo.
   final bool anime;
-  const VisualResult(this.gif, this.query, this.group, {required this.anime});
+
+  /// Termo do dicionário que achou o GIF (para o 👎 e o ⬇ ensinarem o app).
+  final String term;
+
+  /// Nota para a vibe (maior = melhor).
+  final double score;
+  const VisualResult(this.gif, this.query, this.group, {required this.anime, this.term = '', this.score = 0});
 }
 
-/// Pagina um termo visual no GIPHY sempre com foco em anime:
-/// primeiro `anime TERMO`; quando a versão anime acaba ou vem pouca coisa, completa com o termo geral.
+/// Pagina um termo visual no GIPHY com preferência por anime (mas não 100%):
+/// cada página tem ~70% da versão anime (`anime TERMO`) e ~30% do termo geral; se um lado acabar, o outro completa.
+/// Memes, reações e GIFs com texto ficam de fora; [exclude] tira os que o usuário rejeitou.
 class TermPager {
   final GiphyProvider giphy;
   final VisualQuery term;
+  final Set<String> exclude;
+  final double generalShare;
+  final String artist, song;
   int _animeOffset = 0, _generalOffset = 0;
   bool _animeDone = false, _generalDone = false;
   final Set<String> _seen = {};
 
   /// [startOffset]: começa mais adiante nos resultados (cada música pega uma parte diferente da lista).
-  TermPager(this.giphy, this.term, {int startOffset = 0}) {
+  TermPager(this.giphy, this.term,
+      {int startOffset = 0, this.exclude = const {}, this.generalShare = 0.3, this.artist = '', this.song = ''}) {
     _animeOffset = startOffset;
     _generalOffset = startOffset;
+    if (generalVariant(term.text).toLowerCase() == animeVariant(term.text).toLowerCase()) _generalDone = true;
   }
 
   bool get done => _animeDone && _generalDone;
@@ -51,28 +64,37 @@ class TermPager {
     return g.isEmpty ? q : g;
   }
 
-  /// Próxima página de até [count] GIFs (anime primeiro). Erros do GIPHY sobem como [GiphyException].
-  Future<List<VisualResult>> next({int count = GiphyProvider.pageSize}) async {
-    final out = <VisualResult>[];
-    final animeQ = animeVariant(term.text);
-    final generalQ = generalVariant(term.text);
-    if (!_animeDone) {
-      final page = await giphy.search(animeQ, offset: _animeOffset, limit: count);
+  Future<List<VisualResult>> _page(bool anime, int want) async {
+    if (want <= 0 || (anime ? _animeDone : _generalDone)) return const [];
+    final q = anime ? animeVariant(term.text) : generalVariant(term.text);
+    final page = await giphy.search(q, offset: anime ? _animeOffset : _generalOffset, limit: want);
+    if (anime) {
       _animeOffset += page.length;
-      if (page.length < count) _animeDone = true;
-      out.addAll([for (final g in page) if (_seen.add(g.id)) VisualResult(g, animeQ, term.group, anime: true)]);
+      if (page.length < want) _animeDone = true;
+    } else {
+      _generalOffset += page.length;
+      if (page.length < want) _generalDone = true;
     }
-    // pouco anime: completa com o termo geral (se for diferente)
-    if (out.length < count ~/ 2 || (_animeDone && out.length < count)) {
-      if (generalQ.toLowerCase() == animeQ.toLowerCase()) _generalDone = true;
-      if (!_generalDone) {
-        final want = count - out.length;
-        final page = await giphy.search(generalQ, offset: _generalOffset, limit: want);
-        _generalOffset += page.length;
-        if (page.length < want) _generalDone = true;
-        out.addAll([for (final g in page) if (_seen.add(g.id)) VisualResult(g, generalQ, term.group, anime: false)]);
-      }
-    }
+    return [
+      for (final g in page)
+        if (!exclude.contains(g.id) && !looksLikeMeme(g.title) && _seen.add(g.id))
+          VisualResult(g, q, term.group,
+              anime: anime,
+              term: term.text,
+              score: resultScore(termScore: term.score, anime: anime, title: g.title, artist: artist, song: song)),
+    ];
+  }
+
+  /// Próxima página de até [count] GIFs, anime na frente. Erros do GIPHY sobem como [GiphyException].
+  Future<List<VisualResult>> next({int count = GiphyProvider.pageSize}) async {
+    final general = _generalDone ? 0 : (count * generalShare).round();
+    final anime = await _page(true, count - general);
+    // anime acabou ou veio pouco: o geral completa
+    final gen = await _page(false, count - anime.length);
+    var out = [...anime, ...gen];
+    if (out.length < count && !_animeDone) out = [...out, ...await _page(true, count - out.length)];
+    // anime primeiro (preferência), depois pela nota
+    out.sort((a, b) => a.anime == b.anime ? b.score.compareTo(a.score) : (a.anime ? -1 : 1));
     return out;
   }
 }
@@ -85,7 +107,9 @@ class PlayerVisuals {
 
   /// [rnd]: sorteio próprio da música (músicas do mesmo álbum têm tags parecidas; assim cada uma
   /// pega termos e trechos diferentes dos resultados). [avoid]: GIFs já usados por músicas do mesmo álbum/artista.
-  Future<List<VisualResult>> pick(VisualPlan plan, {int count = 5, int terms = 3, Random? rnd, Set<String> avoid = const {}}) async {
+  /// [rejected]: GIFs que o usuário marcou como "não combina" (nunca voltam).
+  Future<List<VisualResult>> pick(VisualPlan plan,
+      {int count = 5, int terms = 3, Random? rnd, Set<String> avoid = const {}, Set<String> rejected = const {}, String artist = '', String song = ''}) async {
     final r = rnd ?? Random();
     // o termo principal fica; os outros são sorteados entre os seguintes
     final pool = plan.top(terms * 2);
@@ -97,9 +121,10 @@ class PlayerVisuals {
     for (final q in top) {
       try {
         // começa num trecho sorteado dos resultados e pede o dobro, para pular os repetidos
-        final pager = TermPager(giphy, q, startOffset: r.nextInt(4) * per * 2);
+        final pager = TermPager(giphy, q, startOffset: r.nextInt(4) * per * 2, exclude: rejected, artist: artist, song: song);
         var page = (await pager.next(count: per * 2)).where((x) => !avoid.contains(x.gif.id)).toList();
-        if (page.isEmpty) page = await TermPager(giphy, q).next(count: per); // trecho vazio: volta para o começo
+        // trecho vazio: volta para o começo
+        if (page.isEmpty) page = await TermPager(giphy, q, exclude: rejected, artist: artist, song: song).next(count: per);
         lists.add(page.take(per).toList());
       } on GiphyException catch (e) {
         if (e.error == GiphyError.noKey || e.error == GiphyError.invalidKey) rethrow;
