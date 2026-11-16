@@ -32,17 +32,55 @@ String _artistKey(String artist) {
   return _plain(a);
 }
 
-/// Chave de "mesma música": artista + título sem enfeites + marcas de versão.
-/// "Where Did You Sleep Last Night" e "Where Did You Sleep Last Night [Live]" dão chaves diferentes.
-String songKey(String artist, String title) {
-  final versions = _versionWords.allMatches(title).map((m) => _plain(m.group(0)!)).toSet().toList()..sort();
-  var t = title.replaceAll(_ignoredParts, ' ').replaceAll(_trailingFeat, '');
-  t = t.replaceAll(_versionWords, ' ');
-  final base = _plain(t);
-  return '${_artistKey(artist)}|$base${versions.isEmpty ? '' : '|${versions.join('+')}'}';
+/// Trecho de versão no fim ou entre colchetes: "(Live)", "[Live at Reading 1992]", " - Live in New York", "Remix XYZ".
+/// Só conta depois do começo do título ("Live Forever" não é versão ao vivo).
+final _versionTail = RegExp(
+    r'(?<=\S)\s*(?:[\(\[【][^\)\]】]*\b(?:live|ao vivo|en vivo|remix|rmx|acoustic|ac[uú]stic[oa]?|unplugged version|instrumental|karaok[eê]|cover|demo|nightcore|slowed|sped up|reverb|8d)\b[^\)\]】]*[\)\]】]|\s[-–—]?\s*(?:live|ao vivo|en vivo|remix|rmx|acoustic|ac[uú]stic[oa]?|instrumental|karaok[eê]|nightcore|slowed|sped up|8d)\b.*$)',
+    caseSensitive: false);
+
+/// Álbum ou pasta de show: a música é ao vivo mesmo sem "live" no título.
+final _liveAlbum = RegExp(r'\b(live|ao vivo|en vivo|concerts?|in concert|unplugged|bootleg|sessions? at|tour \d{4})\b|\b\d{2,4}[.\-]\d{2}[.\-]\d{2,4}\b', caseSensitive: false);
+
+/// Normaliza a versão: "ao vivo"/"en vivo" = live, "rmx" = remix, "acústico" = acoustic.
+String _versionName(String w) {
+  final p = _plain(w);
+  if (p == 'aovivo' || p == 'envivo') return 'live';
+  if (p == 'rmx') return 'remix';
+  if (p.startsWith('acust') || p.startsWith('acoust')) return 'acoustic';
+  if (p == 'unpluggedversion') return 'acoustic';
+  return p;
 }
 
-String trackKey(Track t) => songKey(t.artist == unknownArtist ? '' : t.artist, t.title);
+/// (título base, tipo de versão). Tipo '' = original.
+(String, String) songParts(String title, {String album = '', String path = ''}) {
+  final versions = <String>{};
+  var t = title.replaceAll(_ignoredParts, ' ').replaceAll(_trailingFeat, '');
+  t = t.replaceAllMapped(_versionTail, (m) {
+    for (final v in _versionWords.allMatches(m.group(0)!)) {
+      versions.add(_versionName(v.group(0)!));
+    }
+    return ' ';
+  });
+  if (_liveAlbum.hasMatch(album) || _liveAlbum.hasMatch(path.replaceAll(RegExp(r'[\\/][^\\/]*$'), ''))) versions.add('live');
+  return (_plain(t), (versions.toList()..sort()).join('+'));
+}
+
+/// Chave de "mesma música": artista + título sem enfeites + tipo de versão.
+/// "Where Did You Sleep Last Night" e "Where Did You Sleep Last Night [Live]" dão chaves diferentes.
+String songKey(String artist, String title, {String album = '', String path = ''}) {
+  final (base, version) = songParts(title, album: album, path: path);
+  return '${_artistKey(artist)}|$base${version.isEmpty ? '' : '|$version'}';
+}
+
+String _artistOf(Track t) => t.artist == unknownArtist ? '' : t.artist;
+
+/// Chave só do título (sem tipo de versão): junta original, lives e remixes da mesma música.
+String baseKey(Track t) => '${_artistKey(_artistOf(t))}|${songParts(t.title).$1}';
+
+/// Tipo de versão da música ('' = original, 'live', 'remix'...), olhando título, álbum e pasta.
+String versionOf(Track t) => songParts(t.title, album: t.album, path: t.path).$2;
+
+String trackKey(Track t) => songKey(_artistOf(t), t.title, album: t.album, path: t.path);
 
 /// Título que serve para comparar: precisa ter pelo menos 3 letras ("1", "10/89)", "(Outro)" sozinhos não servem).
 bool usableTitle(String title) {
@@ -61,18 +99,21 @@ bool sameRecording(Track a, Track b) {
   return (a.durationMs - b.durationMs).abs() <= sameRecordingTolerance.inMilliseconds;
 }
 
-/// Repetidas = mesmo artista + mesmo título + mesma gravação (duração quase igual).
+/// Repetidas:
+/// - mesma gravação (mesmo artista e título, duração quase igual), em qualquer álbum/pasta;
+/// - versões que não são a original (ao vivo, remix, acústica...): fica só UMA de cada tipo por música,
+///   mesmo que sejam shows diferentes. Gravações originais com durações diferentes ficam todas.
 Iterable<List<Track>> _rawGroups(List<Track> tracks) {
-  final byKey = <String, List<Track>>{};
+  final byBase = <String, List<Track>>{};
   for (final t in tracks) {
     if (!usableTitle(t.title)) continue;
-    final k = trackKey(t);
+    final k = baseKey(t);
     if (k.split('|')[1].isEmpty) continue;
-    byKey.putIfAbsent(k, () => []).add(t);
+    byBase.putIfAbsent(k, () => []).add(t);
   }
   final out = <List<Track>>[];
-  for (final g in byKey.values.where((g) => g.length > 1)) {
-    // separa por gravação: cada cópia entra no primeiro grupo em que combina com todas
+  for (final g in byBase.values.where((g) => g.length > 1)) {
+    // 1. junta cópias da mesma gravação
     final clusters = <List<Track>>[];
     for (final t in [...g]..sort((a, b) => a.durationMs.compareTo(b.durationMs))) {
       final c = clusters.where((c) => c.every((x) => sameRecording(x, t))).firstOrNull;
@@ -82,7 +123,18 @@ Iterable<List<Track>> _rawGroups(List<Track> tracks) {
         clusters.add([t]);
       }
     }
-    out.addAll(clusters.where((c) => c.length > 1));
+    // 2. por tipo de versão: originais separadas por gravação; cada outro tipo vira um grupo só
+    final byType = <String, List<Track>>{};
+    for (final c in clusters) {
+      final types = c.map(versionOf).where((v) => v.isNotEmpty).toSet();
+      final type = types.isEmpty ? '' : (types.toList()..sort()).first;
+      if (type.isEmpty) {
+        if (c.length > 1) out.add(c);
+      } else {
+        byType.putIfAbsent(type, () => []).addAll(c);
+      }
+    }
+    out.addAll(byType.values.where((v) => v.length > 1));
   }
   return out;
 }

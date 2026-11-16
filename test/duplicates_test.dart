@@ -35,29 +35,30 @@ void main() {
       t('Where Did You Sleep Last Night', 'Nirvana', album: unknownAlbum, added: 1),
       t('Where Did You Sleep Last Night', 'Nirvana', album: 'MTV Unplugged in New York', added: 3),
       t('Where Did You Sleep Last Night', 'Nirvana', album: unknownAlbum, path: '/m/x (2).mp3', added: 2),
-      t('Where Did You Sleep Last Night [Live]', 'Nirvana'),
+      t('Where Did You Sleep Last Night [Live]', 'Nirvana', album: unknownAlbum, ms: 300000),
       t('When the Sun Hits', 'Slowdive'),
       t('Numb', 'Linkin Park'),
       t('When the Sun Hits', 'Slowdive', album: unknownAlbum),
     ]);
     expect(groups.length, 2);
     final nirvana = groups.firstWhere((g) => g.first.artist == 'Nirvana');
-    expect(nirvana.length, 3);
+    // MTV Unplugged é ao vivo: entra junto com a outra live (fica uma só)
+    expect(nirvana.length, 4);
     expect(nirvana.first.album, 'MTV Unplugged in New York');
     expect(nirvana.last.path, '/m/x (2).mp3');
     expect(groups.firstWhere((g) => g.first.artist == 'Slowdive').first.album, 'A');
   });
 
-  test('músicas diferentes com título ruim ou shows diferentes não são repetidas', () {
+  test('músicas diferentes com título ruim ou gravações de estúdio diferentes não são repetidas', () {
     final groups = findDuplicateGroups([
       // títulos que viraram número por causa do nome do arquivo
       t('1', 'Sabaton', album: 'War And Victory', ms: 200000),
       t('1', 'Sabaton', album: 'The Art of War', ms: 260000),
       t('(Outro)', 'Nirvana', album: 'Show 1'),
       t('(Outro)', 'Nirvana', album: 'Show 2'),
-      // mesma música em shows diferentes: durações diferentes
-      t('Breed', 'Nirvana', album: '92.10.30 Buenos Aires', ms: 190000),
-      t('Breed', 'Nirvana', album: '92.02.19 Tokyo', ms: 205000),
+      // gravações de estúdio diferentes da mesma música (duração bem diferente) ficam as duas
+      t('Breed', 'Nirvana', album: 'Nevermind', ms: 183000),
+      t('Breed', 'Nirvana', album: 'Demos', ms: 205000),
       // 1648 é música de verdade, mas as edições ENG e SWE têm durações diferentes
       t('1648', 'Sabaton', album: 'Carolus Rex ENG', ms: 230000),
       t('1648', 'Sabaton', album: 'Carolus Rex SWE', ms: 238000),
@@ -77,6 +78,35 @@ void main() {
     ]);
     expect(groups.length, 1);
     expect(groups.first.length, 2);
+  });
+
+  test('lives de shows diferentes: fica só uma; original fica separada', () {
+    final groups = findDuplicateGroups([
+      t('Smells Like Teen Spirit', 'Nirvana', album: 'Nevermind', ms: 301000),
+      t('Smells Like Teen Spirit (Live New York)', 'Nirvana', album: 'Shows', ms: 290000),
+      t('Smells Like Teen Spirit - Live Brasilia', 'Nirvana', album: 'Shows', ms: 320000),
+      t('Smells Like Teen Spirit [Remix]', 'Nirvana', ms: 250000),
+    ]);
+    expect(groups.length, 1);
+    expect(groups.first.map((x) => x.title), containsAll(['Smells Like Teen Spirit (Live New York)', 'Smells Like Teen Spirit - Live Brasilia']));
+  });
+
+  test('álbum ou pasta de show conta como live', () {
+    final groups = findDuplicateGroups([
+      t('Breed', 'Nirvana', album: '92.10.30 Buenos Aires Disc 1', ms: 190000),
+      t('Breed', 'Nirvana', album: '92.02.19 Tokyo', ms: 205000),
+      t('Breed', 'Nirvana', album: 'Nevermind', ms: 183000),
+    ]);
+    expect(groups.length, 1);
+    expect(groups.first.length, 2);
+    expect(groups.first.every((x) => x.album != 'Nevermind'), isTrue);
+  });
+
+  test('"Live Forever" não é versão ao vivo', () {
+    expect(songParts('Live Forever').$2, '');
+    expect(songParts('Live and Let Die').$2, '');
+    expect(songParts('Numb (Ao Vivo)').$2, 'live');
+    expect(songParts('Numb - Acústico').$2, 'acoustic');
   });
 
   test('favorita ganha de cópia sem favorito', () {
