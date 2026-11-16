@@ -49,7 +49,7 @@ jobs:
           name: player-nostalgico-apk
           path: build/app/outputs/flutter-apk/app-release.apk
       - name: Publicar APK em Releases
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
