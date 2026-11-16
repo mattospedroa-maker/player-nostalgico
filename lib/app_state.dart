@@ -51,7 +51,8 @@ class AppState extends ChangeNotifier {
   }
 
   /// Chave da API do Last.fm (fica só no celular, nunca no código). Vazia = GIFs pelo gênero.
-  String get lastFmKey => prefs.getString('lastFmKey') ?? '';
+  /// Chave digitada na tela; se vazia, a que veio embutida no APK de teste (secret LASTFM_KEY do GitHub).
+  String get lastFmKey => _keyOr(prefs.getString('lastFmKey'), const String.fromEnvironment('LASTFM_KEY'));
   Future<void> setLastFmKey(String v) async {
     await prefs.setString('lastFmKey', v.trim());
     notifyListeners();
@@ -61,7 +62,9 @@ class AppState extends ChangeNotifier {
   }
 
   /// Chave da API do GIPHY (só no celular). Vazia = sem GIPHY, só anime.
-  String get giphyKey => prefs.getString('giphyKey') ?? '';
+  String get giphyKey => _keyOr(prefs.getString('giphyKey'), const String.fromEnvironment('GIPHY_KEY'));
+
+  static String _keyOr(String? typed, String builtIn) => (typed != null && typed.trim().isNotEmpty) ? typed.trim() : builtIn.trim();
   Future<void> setGiphyKey(String v) async {
     await prefs.setString('giphyKey', v.trim());
     _playerVisuals.clear();

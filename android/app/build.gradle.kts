@@ -29,11 +29,21 @@ android {
         versionName = flutter.versionName
     }
 
+    // Chave fixa vinda dos secrets do GitHub (o CI grava em app/release.jks). Sem ela, usa a de debug.
+    val releaseKeystore = file("release.jks")
+    val keystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: ""
+    signingConfigs {
+        create("fixa") {
+            storeFile = releaseKeystore
+            storePassword = keystorePassword
+            keyAlias = "nostalgic"
+            keyPassword = keystorePassword
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (releaseKeystore.exists() && keystorePassword.isNotEmpty()) signingConfigs.getByName("fixa") else signingConfigs.getByName("debug")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             // yt-dlp + Python + ffmpeg pesam ~50 MB por arquitetura: o APK de release leva só a dos celulares (arm64).
             ndk { abiFilters += listOf("arm64-v8a") }

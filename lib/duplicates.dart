@@ -44,14 +44,47 @@ String songKey(String artist, String title) {
 
 String trackKey(Track t) => songKey(t.artist == unknownArtist ? '' : t.artist, t.title);
 
+/// Título que serve para comparar: precisa ter pelo menos 3 letras ("1", "10/89)", "(Outro)" sozinhos não servem).
+bool usableTitle(String title) {
+  final letters = RegExp(r'[A-Za-zÀ-ɏ぀-ヿ一-鿿]').allMatches(title.replaceAll(RegExp(r'\b(outro|intro|interlude|untitled|track|faixa|bonus)\b', caseSensitive: false), '')).length;
+  return letters >= 3;
+}
+
+/// Diferença máxima de duração para ser a MESMA gravação (shows e versões diferentes têm durações diferentes).
+const sameRecordingTolerance = Duration(milliseconds: 2500);
+
+bool sameRecording(Track a, Track b) {
+  if (a.durationMs <= 0 || b.durationMs <= 0) {
+    // sem duração: só junta se for o mesmo álbum
+    return a.album.toLowerCase() == b.album.toLowerCase();
+  }
+  return (a.durationMs - b.durationMs).abs() <= sameRecordingTolerance.inMilliseconds;
+}
+
+/// Repetidas = mesmo artista + mesmo título + mesma gravação (duração quase igual).
 Iterable<List<Track>> _rawGroups(List<Track> tracks) {
   final byKey = <String, List<Track>>{};
   for (final t in tracks) {
+    if (!usableTitle(t.title)) continue;
     final k = trackKey(t);
-    if (k.split('|')[1].isEmpty) continue; // sem título útil
+    if (k.split('|')[1].isEmpty) continue;
     byKey.putIfAbsent(k, () => []).add(t);
   }
-  return byKey.values.where((g) => g.length > 1);
+  final out = <List<Track>>[];
+  for (final g in byKey.values.where((g) => g.length > 1)) {
+    // separa por gravação: cada cópia entra no primeiro grupo em que combina com todas
+    final clusters = <List<Track>>[];
+    for (final t in [...g]..sort((a, b) => a.durationMs.compareTo(b.durationMs))) {
+      final c = clusters.where((c) => c.every((x) => sameRecording(x, t))).firstOrNull;
+      if (c != null) {
+        c.add(t);
+      } else {
+        clusters.add([t]);
+      }
+    }
+    out.addAll(clusters.where((c) => c.length > 1));
+  }
+  return out;
 }
 
 /// Quantos arquivos sobram (cópias além da primeira de cada música). Não lê o disco.
