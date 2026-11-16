@@ -120,7 +120,7 @@ class _DuplicatesScreenState extends State<DuplicatesScreen> {
                       const Padding(
                         padding: EdgeInsets.fromLTRB(14, 4, 14, 0),
                         child: Text(
-                          '"[Live]", "Remix" e "Acoustic" contam como versões diferentes e não entram aqui. '
+                          'De cada música fica a original e uma versão de cada tipo (ao vivo, remix, acústica). '
                           'Favoritas e playlists passam para a cópia que fica.',
                           style: TextStyle(fontSize: 12, color: Xp.blueMuted),
                         ),

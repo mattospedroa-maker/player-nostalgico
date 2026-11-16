@@ -223,9 +223,9 @@ class DownloadService extends ChangeNotifier {
   /// Procura cada vídeo na Biblioteca (mesmo vídeo já baixado, ou mesmo artista + título).
   /// Na playlist, os que já existem ficam desmarcados (a não ser que o usuário tenha mexido).
   void markExisting(List<YtEntry> entries, {required bool uncheck}) {
-    final byKey = <String, List<Track>>{};
+    final byBase = <String, List<Track>>{};
     for (final t in app.tracks) {
-      if (usableTitle(t.title)) byKey.putIfAbsent(trackKey(t), () => []).add(t);
+      if (usableTitle(t.title)) byBase.putIfAbsent(baseKey(t), () => []).add(t);
     }
     final ids = _downloaded;
     for (final e in entries) {
@@ -234,11 +234,14 @@ class DownloadService extends ChangeNotifier {
       final byId = ids[e.id];
       if (byId != null && File(byId).existsSync()) found = byId;
       if (found == null && usableTitle(e.names.title)) {
-        final same = byKey[songKey(e.names.artist == unknownArtist ? '' : e.names.artist, e.names.title)] ?? const [];
-        // mesma gravação: duração quase igual à do vídeo (se o vídeo não diz a duração, basta o nome)
+        final artist = e.names.artist == unknownArtist ? '' : e.names.artist;
+        final key = songKey(artist, e.names.title).split('|').take(2).join('|');
+        final (_, version) = songParts(e.names.title, album: e.names.album);
         final dur = (e.durationSec ?? 0) * 1000;
-        found = same
-            .where((t) => dur <= 0 || t.durationMs <= 0 || (t.durationMs - dur).abs() <= 15000)
+        found = (byBase[key] ?? const <Track>[])
+            .where((t) => versionOf(t) == version)
+            // versão ao vivo/remix: basta ter uma do mesmo tipo; original: precisa ser a mesma gravação
+            .where((t) => version.isNotEmpty || dur <= 0 || t.durationMs <= 0 || (t.durationMs - dur).abs() <= 15000)
             .map((t) => t.path)
             .firstOrNull;
       }
