@@ -10,6 +10,7 @@ import '../player_service.dart';
 import '../theme.dart';
 import '../widgets.dart';
 import 'organizer_screen.dart';
+import 'youtube_screen.dart';
 import 'track_list_screen.dart';
 
 class LibraryScreen extends StatefulWidget {
@@ -95,6 +96,15 @@ class _LibraryScreenState extends State<LibraryScreen> {
           icon: Icons.travel_explore,
           primary: true,
           onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const OrganizerScreen())),
+        ),
+      ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),
+        child: XpButton(
+          label: 'Baixar do YouTube (MP3)',
+          icon: Icons.download,
+          primary: true,
+          onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const YoutubeScreen())),
         ),
       ),
       Padding(

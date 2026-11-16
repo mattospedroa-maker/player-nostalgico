@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Os ícones dos botões da notificação (♥ e os do audio_service) são usados pelo nome; sem isto o build de release os remove. -->
 <resources xmlns:tools="http://schemas.android.com/tools"
-    tools:keep="@drawable/ic_fav_on,@drawable/ic_fav_off,@drawable/ic_close,@drawable/audio_service_*,@mipmap/ic_launcher" />
+    tools:keep="@drawable/ic_fav_on,@drawable/ic_fav_off,@drawable/ic_close,@drawable/audio_service_*,@mipmap/ic_launcher,@raw/ytdlp" />
