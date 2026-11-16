@@ -184,4 +184,19 @@ void main() {
     final picks = PlayerService.pickMix(seed, lib, mode: MixMode.vibe, count: 3, rnd: Random(1));
     expect(picks.map((t) => t.artist).toSet(), {'C', 'D', 'E'});
   });
+
+  test('resumo do histórico numa consulta só (plays sem os pulados, última vez)', () async {
+    final a = await db.upsertTrack(const Track(path: '/x/a.mp3', title: 'A', artist: 'X', album: 'Y', addedAt: 0, modifiedAt: 0));
+    final b = await db.upsertTrack(const Track(path: '/x/b.mp3', title: 'B', artist: 'X', album: 'Y', addedAt: 0, modifiedAt: 0));
+    await db.logPlay(a, 200, false);
+    await db.logPlay(a, 200, false);
+    await db.logPlay(a, 6, true);
+    await db.logPlay(b, 6, true);
+    final s = await db.playStats();
+    expect(s.count(a), 2);
+    expect(s.skipCount(a), 1);
+    expect(s.count(b), 0);
+    expect(s.last(b), greaterThan(0));
+    expect(s.count(999), 0);
+  });
 }

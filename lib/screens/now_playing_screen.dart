@@ -9,6 +9,7 @@ import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
+import '../crossfade.dart';
 import '../audio_handler.dart';
 import '../filename_parser.dart';
 import '../gif_fetcher.dart';
@@ -62,6 +63,7 @@ class NowPlayingScreen extends StatelessWidget {
               XpMenuItem('Próxima', t == null ? null : ps.next),
               XpMenuItem('Aleatório', ps.toggleShuffle, checked: ps.shuffle),
               XpMenuItem('Repetir', ps.cycleLoop, checked: ps.loop != LoopMode.off),
+              XpMenuItem('Transição suave (${crossfadeDuration.inSeconds}s)', () => ps.setCrossfade(!ps.crossfade), checked: ps.crossfade),
             ],
           ),
           (
@@ -96,7 +98,7 @@ class NowPlayingScreen extends StatelessWidget {
                         ),
                       ),
                     ),
-                    SeekBar(player: ps.player),
+                    SeekBar(player: ps.player, onSeek: ps.seek),
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 10),
                       child: GlossyBar(
@@ -112,6 +114,14 @@ class NowPlayingScreen extends StatelessWidget {
                             onTap: ps.cycleLoop,
                             tooltip: 'Repetir',
                           ),
+                          GlossyButton(
+                            icon: Icons.swap_horiz,
+                            size: 36,
+                            active: ps.crossfade,
+                            glyph: CrossfadeGlyph.new,
+                            onTap: () => ps.setCrossfade(!ps.crossfade),
+                            tooltip: ps.crossfade ? 'Transição suave: ligada' : 'Transição suave: desligada',
+                          ),
                         ],
                       ),
                     ),
@@ -125,6 +135,7 @@ class NowPlayingScreen extends StatelessWidget {
           t == null ? 'Pronto' : '${ps.playing ? 'Tocando' : 'Pausado'} · ${t.title}',
           if (t != null) p.extension(t.path).replaceFirst('.', '').toUpperCase(),
           'Mix: ${ps.mixMode == MixMode.artist ? 'artista' : 'vibe'}',
+          ps.crossfade ? 'Transição: ligada' : 'Transição: desligada',
         ]),
       ],
     );
@@ -316,7 +327,7 @@ class _QueueWindowState extends State<_QueueWindow> {
                     return InkWell(
                       onTap: () => setState(() => _sel = i),
                       onDoubleTap: () {
-                        ps.player.seek(Duration.zero, index: i);
+                        ps.jumpTo(i);
                         Navigator.pop(context);
                       },
                       child: Container(
@@ -356,7 +367,7 @@ class _QueueWindowState extends State<_QueueWindow> {
           act(XpIcons.play, 'Tocar', sel == null
               ? null
               : () {
-                  ps.player.seek(Duration.zero, index: sel);
+                  ps.jumpTo(sel);
                   Navigator.pop(context);
                 }),
           act(XpIcons.bin, 'Tirar', sel == null || sel == cur ? null : () => ps.removeAt(sel).then((_) => mounted ? setState(() => _sel = null) : null)),
@@ -872,7 +883,10 @@ class _SourceTag extends StatelessWidget {
 
 class SeekBar extends StatelessWidget {
   final AudioPlayer player;
-  const SeekBar({super.key, required this.player});
+
+  /// Seek do usuário (passa pelo PlayerService para interromper uma transição em andamento).
+  final Future<void> Function(Duration)? onSeek;
+  const SeekBar({super.key, required this.player, this.onSeek});
 
   @override
   Widget build(BuildContext context) => StreamBuilder<Duration>(
@@ -896,7 +910,7 @@ class SeekBar extends StatelessWidget {
           child: Slider(
             value: pos.inMilliseconds.toDouble().clamp(0, max),
             max: max,
-            onChanged: (v) => player.seek(Duration(milliseconds: v.round())),
+            onChanged: (v) => (onSeek ?? player.seek)(Duration(milliseconds: v.round())),
           ),
         ),
       );

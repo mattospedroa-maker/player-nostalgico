@@ -482,7 +482,10 @@ class GlossyButton extends StatelessWidget {
   final double size;
   final bool active;
   final String? tooltip;
-  const GlossyButton({super.key, required this.icon, this.onTap, this.size = 44, this.active = false, this.tooltip});
+
+  /// Desenho próprio no lugar do ícone (recebe a cor: azul-marinho, ou vermelho quando ligado).
+  final Widget Function(Color color, double size)? glyph;
+  const GlossyButton({super.key, required this.icon, this.onTap, this.size = 44, this.active = false, this.tooltip, this.glyph});
 
   @override
   Widget build(BuildContext context) {
@@ -502,11 +505,55 @@ class GlossyButton extends StatelessWidget {
           ),
           boxShadow: const [BoxShadow(color: Color(0xFF0B1F4F), spreadRadius: 1)],
         ),
-        child: Icon(icon, size: size * .48, color: active ? Xp.red : const Color(0xFF1D3C78)),
+        child: glyph != null
+            ? Center(child: glyph!(active ? Xp.red : const Color(0xFF1D3C78), size * .5))
+            : Icon(icon, size: size * .48, color: active ? Xp.red : const Color(0xFF1D3C78)),
       ),
     );
     return tooltip == null ? btn : Tooltip(message: tooltip!, child: btn);
   }
+}
+
+/// Ícone do crossfade: uma curva descendo (a música que sai) cruzando com uma subindo (a que entra).
+class CrossfadeGlyph extends StatelessWidget {
+  final Color color;
+  final double size;
+  const CrossfadeGlyph(this.color, this.size, {super.key});
+
+  @override
+  Widget build(BuildContext context) => CustomPaint(size: Size.square(size), painter: _CrossfadePainter(color));
+}
+
+class _CrossfadePainter extends CustomPainter {
+  final Color color;
+  _CrossfadePainter(this.color);
+
+  @override
+  void paint(Canvas canvas, Size s) {
+    final w = s.width, h = s.height;
+    // gráfico do volume: a curva da música que sai desce, a da que entra sobe (com a linha de base embaixo)
+    final top = h * .14, bottom = h * .8, l = w * .06, r = w * .94;
+    final line = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = w * .075
+      ..strokeCap = StrokeCap.round;
+    final out = Path()..moveTo(l, top);
+    final inn = Path()..moveTo(l, bottom);
+    for (var i = 1; i <= 16; i++) {
+      final t = i / 16;
+      final x = l + (r - l) * t;
+      out.lineTo(x, bottom - (bottom - top) * cos(t * pi / 2));
+      inn.lineTo(x, bottom - (bottom - top) * sin(t * pi / 2));
+    }
+    canvas.drawPath(Path.from(out)..lineTo(r, bottom)..lineTo(l, bottom)..close(), Paint()..color = color.withValues(alpha: .25));
+    canvas.drawPath(out, line);
+    canvas.drawPath(inn, line);
+    canvas.drawLine(Offset(l, h * .92), Offset(r, h * .92), line..strokeWidth = w * .05);
+  }
+
+  @override
+  bool shouldRepaint(_CrossfadePainter old) => old.color != color;
 }
 
 /// Barra escura do WMP 9 que segura os botões de transporte.

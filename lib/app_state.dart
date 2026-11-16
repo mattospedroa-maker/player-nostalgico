@@ -24,6 +24,7 @@ import 'models.dart';
 import 'gif_providers.dart';
 import 'mood.dart';
 import 'organizer.dart';
+import 'play_stats.dart';
 import 'player_service.dart';
 import 'recommender.dart';
 import 'visual_search.dart';
@@ -257,7 +258,10 @@ class AppState extends ChangeNotifier {
     s.player
       ..library = (() => s.tracks)
       ..mixMode = MixMode.values.asNameMap()[prefs.getString('mixMode')] ?? MixMode.vibe
-      ..onMixModeChanged = ((m) => prefs.setString('mixMode', m.name));
+      ..onMixModeChanged = ((m) => prefs.setString('mixMode', m.name))
+      ..onCrossfadeChanged = ((on) => prefs.setBool('crossfade', on))
+      ..onPlayLogged = s._invalidateStats;
+    s.player.crossfader.enabled = prefs.getBool('crossfade') ?? false;
     handler?.onFavorite = () async {
       final t = s.player.current == null ? null : s.byId(s.player.current!.id);
       if (t != null) await s.toggleFavorite(t);
@@ -597,6 +601,30 @@ class AppState extends ChangeNotifier {
   }
 
   Future<Recommender> recommender() async => Recommender(tracks, await db.plays());
+
+  /// Resumo do histórico (plays e última vez por música), guardado até a próxima música ser registrada.
+  PlayStats? _stats;
+  Future<PlayStats>? _statsLoading;
+
+  /// Muda quando o histórico muda (as telas recalculam ordem por plays e coleções automáticas).
+  final ValueNotifier<int> statsVersion = ValueNotifier(0);
+
+  PlayStats get playStatsNow => _stats ?? PlayStats.empty;
+
+  Future<PlayStats> playStats() {
+    final s = _stats;
+    if (s != null) return Future.value(s);
+    return _statsLoading ??= db.playStats().then((v) {
+      _stats = v;
+      _statsLoading = null;
+      return v;
+    });
+  }
+
+  void _invalidateStats() {
+    _stats = null;
+    statsVersion.value++;
+  }
 
   Future<void> createPlaylist(String name) async {
     await db.createPlaylist(name);

@@ -1,9 +1,15 @@
+import 'dart:async';
+
 import 'package:material_ui/material_ui.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
+import '../library_search.dart';
 import '../models.dart';
+import '../mood.dart';
+import '../play_stats.dart';
+import '../smart_collections.dart';
 import '../player_service.dart';
 import '../theme.dart';
 import '../xp_icons.dart';
@@ -12,6 +18,7 @@ import '../duplicates.dart';
 import 'duplicates_screen.dart';
 import 'organizer_screen.dart';
 import 'youtube_screen.dart';
+import 'smart_library_widgets.dart';
 import 'track_list_screen.dart';
 
 class LibraryScreen extends StatefulWidget {
@@ -23,6 +30,58 @@ class LibraryScreen extends StatefulWidget {
 
 class _LibraryScreenState extends State<LibraryScreen> {
   String _query = '';
+  final _search = TextEditingController();
+  Timer? _debounce;
+  TrackFilter _filter = const TrackFilter();
+  TrackSort _sort = TrackSort.relevance;
+
+  /// "Filtros e ordem" aberto mesmo sem nada digitado.
+  bool _browsing = false;
+
+  // último resultado (só refaz quando a busca, o filtro, a ordem, a biblioteca ou o histórico mudam)
+  Object? _resultKey;
+  List<Track> _results = const [];
+
+  bool get _searching => _query.isNotEmpty || !_filter.isEmpty || _browsing;
+
+  AppState? _app;
+
+  @override
+  void initState() {
+    super.initState();
+    _app = context.read<AppState>()..statsVersion.addListener(_onStats);
+  }
+
+  void _onStats() {
+    if (mounted && _searching) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _app?.statsVersion.removeListener(_onStats);
+    _debounce?.cancel();
+    _search.dispose();
+    super.dispose();
+  }
+
+  /// Espera parar de digitar um instante antes de buscar.
+  void _onType(String v) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 250), () {
+      if (mounted) setState(() => _query = v.trim());
+    });
+  }
+
+  void _clearAll() {
+    _debounce?.cancel();
+    _search.clear();
+    setState(() {
+      _query = '';
+      _filter = const TrackFilter();
+      _sort = TrackSort.relevance;
+      _browsing = false;
+    });
+  }
 
   void _push(Widget w) => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => w));
 
@@ -30,6 +89,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
     final root = app.sourceRoot;
+    if (_searching) _updateResults(app);
     return Column(
       children: [
         XpTitleBar(
@@ -52,12 +112,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
             ],
           ),
         ]),
-        XpAddressBar(_query.isEmpty ? 'Música' : 'Música\\Busca: "$_query"'),
+        XpAddressBar(_query.isEmpty ? (_searching ? 'Música\\Filtrar' : 'Música') : 'Música\\Busca: "$_query"'),
         if (app.scanning) Padding(padding: const EdgeInsets.fromLTRB(8, 4, 8, 4), child: XpProgress(value: app.scanProgress, height: 14)),
         Expanded(
           child: ColoredBox(color: Colors.white, child: root == null ? _welcome() : _library(app, root)),
         ),
-        XpStatusBar([app.scanning ? 'Lendo a pasta…' : '${app.tracks.length} músicas', if (root != null) p.basename(root), 'Meu computador']),
+        XpStatusBar([app.scanning ? 'Lendo a pasta…' : (_searching ? '${_results.length} de ${app.tracks.length} músicas' : '${app.tracks.length} músicas'), if (root != null) p.basename(root), 'Meu computador']),
       ],
     );
   }
@@ -87,33 +147,14 @@ class _LibraryScreenState extends State<LibraryScreen> {
   Widget _library(AppState app, String root) {
     final ps = context.read<PlayerService>();
     final tracks = app.tracks;
-    if (_query.isNotEmpty) {
-      final q = _query.toLowerCase();
-      final hits = tracks.where((t) => t.title.toLowerCase().contains(q) || t.artist.toLowerCase().contains(q) || t.album.toLowerCase().contains(q)).toList();
-      return Column(
-        children: [
-          _searchField(),
-          const XpColumnHeader('Nome', right: 'Artista'),
-          Expanded(
-            child: hits.isEmpty
-                ? const EmptyHint(Icons.search_off, 'Nada encontrado.')
-                : ListView.builder(
-                    itemCount: hits.length,
-                    itemBuilder: (_, i) => TrackTile(
-                      track: hits[i],
-                      onTap: () => playTracks(context, hits, start: i),
-                    ),
-                  ),
-          ),
-        ],
-      );
-    }
+    if (_searching) return _resultsView(app);
     final recent = [...tracks]..sort((a, b) => b.addedAt.compareTo(a.addedAt));
     Set<String> distinct(String Function(Track) f) => tracks.map(f).toSet();
     return ListView(
       padding: EdgeInsets.zero,
       children: [
         _searchField(),
+        _filterLink(),
         XpTaskPane(
           title: 'Tarefas de música',
           tasks: [
@@ -162,6 +203,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
             IpodRow(icon: XpIcons.film, label: 'Acervo de GIFs', detail: '${app.gifs.count}', onTap: () => showGifLibraryInfo(context)),
           ],
         ),
+        _smartBox(app),
         if (recent.isNotEmpty) ...[
           Padding(
             padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
@@ -201,17 +243,208 @@ class _LibraryScreenState extends State<LibraryScreen> {
     child: Bevel(
       sunken: true,
       child: TextField(
-        onChanged: (v) => setState(() => _query = v.trim()),
+        controller: _search,
+        onChanged: _onType,
         style: const TextStyle(fontSize: 14),
-        decoration: const InputDecoration(
+        decoration: InputDecoration(
           isDense: true,
           border: InputBorder.none,
-          prefixIcon: Padding(padding: EdgeInsets.all(8), child: XpIcon(XpIcons.find, size: 18)),
-          prefixIconConstraints: BoxConstraints(minWidth: 34, minHeight: 34),
-          hintText: 'Buscar música, artista, álbum…',
-          contentPadding: EdgeInsets.symmetric(vertical: 10),
+          prefixIcon: const Padding(padding: EdgeInsets.all(8), child: XpIcon(XpIcons.find, size: 18)),
+          prefixIconConstraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+          suffixIcon: _searching ? IconButton(icon: const Icon(Icons.close, size: 18), tooltip: 'Limpar busca', onPressed: _clearAll) : null,
+          hintText: 'Buscar música, artista, álbum, gênero, clima…',
+          contentPadding: const EdgeInsets.symmetric(vertical: 10),
         ),
       ),
     ),
   );
+
+  /// Link "Filtros e ordem" embaixo da busca (abre a lista com filtros sem precisar digitar).
+  Widget _filterLink() => Padding(
+    padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+    child: Align(
+      alignment: Alignment.centerLeft,
+      child: InkWell(
+        onTap: () => setState(() => _browsing = true),
+        child: const Padding(
+          padding: EdgeInsets.symmetric(vertical: 4),
+          child: Text('▸ Filtrar e organizar (artista, gênero, clima…)', style: TextStyle(fontSize: 13.5, color: Xp.linkBlue, decoration: TextDecoration.underline)),
+        ),
+      ),
+    ),
+  );
+
+  /// Refaz a lista só quando a busca, o filtro, a ordem, a biblioteca ou o histórico mudam.
+  void _updateResults(AppState app) {
+    final needsStats = _sort == TrackSort.plays || _sort == TrackSort.recent;
+    final stats = needsStats ? app.playStatsNow : PlayStats.empty;
+    if (needsStats) {
+      // o resumo do histórico chega uma vez; depois só muda quando uma música entra no histórico
+      app.playStats().then((s) {
+        if (mounted && !identical(s, stats)) setState(() {});
+      });
+    }
+    final key = (identityHashCode(app.tracks), _query, _filter.artist, _filter.album, _filter.genre, _filter.mood, _filter.favoritesOnly, _sort, identityHashCode(stats));
+    if (key == _resultKey) return;
+    _resultKey = key;
+    _stats = stats;
+    _results = queryLibrary(app.tracks, query: _query, filter: _filter, sort: _sort, stats: stats);
+  }
+
+  PlayStats _stats = PlayStats.empty;
+
+  Widget _resultsView(AppState app) {
+    final hits = _results;
+    return Column(
+      children: [
+        _searchField(),
+        _filtersBox(app),
+        XpColumnHeader('Nome', right: '${hits.length} itens'),
+        Expanded(
+          child: hits.isEmpty
+              ? const EmptyHint(Icons.search_off, 'Nada encontrado.\nTente menos palavras ou tire um filtro.')
+              : ListView.builder(
+                  itemCount: hits.length,
+                  itemBuilder: (_, i) => TrackTile(
+                    track: hits[i],
+                    subtitle: _details(hits[i], _stats),
+                    onTap: () => playTracks(context, hits, start: i),
+                  ),
+                ),
+        ),
+      ],
+    );
+  }
+
+  String _details(Track t, PlayStats stats) {
+    final parts = <String>[t.artist];
+    if (t.album != unknownAlbum && t.album.isNotEmpty) parts.add(t.album);
+    if (_sort == TrackSort.plays || _sort == TrackSort.recent) parts.add('${stats.count(t.id)} plays');
+    return parts.join(' · ');
+  }
+
+  Widget _filtersBox(AppState app) {
+    String countOf(int n) => '$n';
+    Future<void> pick<T>(String title, List<(T?, String, int)> opts, T? current, void Function(T?) set) async {
+      final i = await showXpChoice(context, title: title, options: [for (final o in opts) (o.$2, o.$3 < 0 ? null : countOf(o.$3))], selected: opts.indexWhere((o) => o.$1 == current));
+      if (i != null && mounted) setState(() => set(opts[i].$1));
+    }
+
+    // opções contam só as músicas que passam pelos outros filtros (assim nunca dá lista vazia)
+    List<(String?, String, int)> group(String Function(Track) key, TrackFilter others, {bool skipEmpty = false}) {
+      final m = <String, int>{};
+      for (final t in app.tracks) {
+        if (!others.matches(t)) continue;
+        final k = key(t);
+        if (skipEmpty && k.isEmpty) continue;
+        m[k] = (m[k] ?? 0) + 1;
+      }
+      final keys = m.keys.toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+      return [(null, 'Todos', -1), for (final k in keys) (k, k, m[k]!)];
+    }
+
+    final f = _filter;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 0, 8, 6),
+      child: XpGroupBox(
+        title: 'Filtrar e organizar',
+        background: Colors.white,
+        child: Column(children: [
+          Row(children: [
+            Expanded(
+              child: XpCombo(
+                label: 'Artista:',
+                value: f.artist ?? 'Todos',
+                set: f.artist != null,
+                onTap: () => pick('Artista', group((t) => t.artist, f.copyWith(artist: () => null)), f.artist, (v) => _filter = _filter.copyWith(artist: () => v)),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: XpCombo(
+                label: 'Gênero:',
+                value: f.genre ?? 'Todos',
+                set: f.genre != null,
+                onTap: () => pick('Gênero', group((t) => t.genre, f.copyWith(genre: () => null), skipEmpty: true), f.genre, (v) => _filter = _filter.copyWith(genre: () => v)),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 6),
+          Row(children: [
+            Expanded(
+              child: XpCombo(
+                label: 'Clima:',
+                value: f.mood == null ? 'Todos' : '${f.mood!.emoji} ${f.mood!.label}',
+                set: f.mood != null,
+                onTap: () {
+                  final others = f.copyWith(mood: () => null);
+                  final n = <Mood, int>{};
+                  for (final t in app.tracks) {
+                    final m = t.effectiveMood;
+                    if (m != null && others.matches(t)) n[m] = (n[m] ?? 0) + 1;
+                  }
+                  pick<Mood>('Clima', [(null, 'Todos', -1), for (final m in Mood.values) if (n[m] != null) (m, '${m.emoji} ${m.label}', n[m]!)], f.mood,
+                      (v) => _filter = _filter.copyWith(mood: () => v));
+                },
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: XpCombo(
+                label: 'Organizar por:',
+                value: _query.isEmpty && _sort == TrackSort.relevance ? TrackSort.artist.label : _sort.label,
+                onTap: () => pick<TrackSort>('Organizar por', [for (final s in TrackSort.values) if (s != TrackSort.relevance || _query.isNotEmpty) (s, s.label, -1)], _sort,
+                    (v) => _sort = v ?? TrackSort.relevance),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 6),
+          Row(children: [
+            XpToggle(label: '♥ Só favoritas', on: f.favoritesOnly, onTap: () => setState(() => _filter = f.copyWith(favoritesOnly: !f.favoritesOnly))),
+            const Spacer(),
+            if (!f.isEmpty)
+              InkWell(
+                onTap: () => setState(() => _filter = const TrackFilter()),
+                child: const Padding(padding: EdgeInsets.all(4), child: Text('Limpar filtros', style: TextStyle(fontSize: 13.5, color: Xp.linkBlue, decoration: TextDecoration.underline))),
+              ),
+          ]),
+        ]),
+      ),
+    );
+  }
+
+  /// Coleções automáticas: recalculadas quando a biblioteca ou o histórico mudam (não são playlists).
+  Widget _smartBox(AppState app) {
+    final current = context.select<PlayerService, int?>((p) => p.current?.id);
+    return ValueListenableBuilder<int>(
+      valueListenable: app.statsVersion,
+      builder: (context, _, _) => FutureBuilder<PlayStats>(
+        future: app.playStats(),
+        initialData: app.playStatsNow,
+        builder: (context, snap) {
+          final cols = buildSmartCollections(app.tracks, snap.data ?? PlayStats.empty, current: app.byId(current));
+          final moods = cols.where((c) => c.id.startsWith('mood:')).toList();
+          void open(SmartCollection c) => _push(SmartCollectionScreen(id: c.id, title: c.title));
+          return IpodBox(
+            title: 'Coleções automáticas',
+            trailing: 'Itens',
+            children: [
+              for (final c in cols.where((c) => !c.id.startsWith('mood:'))) IpodRow(icon: c.icon, label: c.title, detail: '${c.tracks.length}', onTap: () => open(c)),
+              if (moods.isNotEmpty)
+                Builder(
+                  builder: (ctx) => IpodRow(
+                    icon: XpIcons.cassette,
+                    label: 'Por clima',
+                    detail: '${moods.length} climas',
+                    onTap: () => showXpContextMenu(ctx, header: 'Por clima', items: [
+                      for (final c in moods) XpMenuEntry('${c.title.replaceFirst('Clima ', '')}  (${c.tracks.length})', () => open(c)),
+                    ]),
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
 }
