@@ -35,6 +35,14 @@ class _EditTrackScreenState extends State<EditTrackScreen> {
   int _tab = 0;
 
   @override
+  void dispose() {
+    for (final c in [_title, _artist, _album, _genre, _year]) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
   void initState() {
     super.initState();
     context.read<AppState>().gifs.gifsFor(widget.track).then((g) {

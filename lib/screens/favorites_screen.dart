@@ -245,7 +245,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
   }
 
   Widget _buddy(Track t, XpIcons icon, String detail, VoidCallback onTap) {
-    final playing = context.select<AppState, int?>((s) => s.player.current?.id) == t.id;
+    final playing = context.select<PlayerService, int?>((p) => p.current?.id) == t.id;
     return GestureDetector(
       onLongPressStart: (d) => showTrackMenu(context, t, at: d.globalPosition),
       child: InkWell(

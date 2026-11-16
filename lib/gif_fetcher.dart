@@ -107,8 +107,20 @@ class GifFetcher {
   static List<String> moodCategories(String genre) {
     final g = genre.toLowerCase().trim();
     if (g.isEmpty || g == 'desconhecido') return const [];
-    for (final (re, cats) in _moods) {
-      if (RegExp(re).hasMatch(g)) return cats;
+    // a biblioteca tem poucos gêneros diferentes: guarda a resposta de cada um
+    // (antes compilava as expressões da tabela a cada chamada, e isso roda para cada música na busca, no mix e nas coleções)
+    final known = _moodCache[g];
+    if (known != null) return known;
+    if (_moodCache.length > 4000) _moodCache.clear();
+    return _moodCache[g] = _moodFor(g);
+  }
+
+  static final Map<String, List<String>> _moodCache = {};
+  static final List<(RegExp, List<String>)> _moodRes = [for (final (re, cats) in _moods) (RegExp(re), cats)];
+
+  static List<String> _moodFor(String g) {
+    for (final (re, cats) in _moodRes) {
+      if (re.hasMatch(g)) return cats;
     }
     return const ['happy', 'wave', 'smile', 'thumbsup', 'dance'];
   }
@@ -248,40 +260,50 @@ class GifFetcher {
 
   Map<String, dynamic> _readLog() {
     final path = _logPath();
-    if (path == null || !File(path).existsSync()) return {};
-    try {
-      return jsonDecode(File(path).readAsStringSync()) as Map<String, dynamic>;
-    } catch (_) {
-      return {};
-    }
+    return path == null ? {} : _readJson(path);
   }
 
   /// Endereço -> arquivo já baixado (GIFs/.indice.json), para não baixar o mesmo GIF duas vezes.
   Map<String, dynamic> _readIndex() {
     final root = gifs.gifRoot;
-    final f = root == null ? null : File(p.join(root, '.indice.json'));
-    if (f == null || !f.existsSync()) return {};
-    try {
-      return jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
-    } catch (_) {
-      return {};
-    }
+    return root == null ? {} : _readJson(p.join(root, '.indice.json'));
   }
 
   void _writeIndex(Map<String, dynamic> index) {
     final root = gifs.gifRoot;
     if (root == null) return;
-    File(p.join(root, '.indice.json'))
-      ..parent.createSync(recursive: true)
-      ..writeAsStringSync(jsonEncode(index));
+    _writeJson(p.join(root, '.indice.json'), index);
   }
 
   void _writeLog(Map<String, dynamic> log) {
     final path = _logPath();
     if (path == null) return;
-    File(path)
-      ..parent.createSync(recursive: true)
-      ..writeAsStringSync(jsonEncode(log));
+    _writeJson(path, log);
+  }
+
+  /// Registro e índice ficam na memória depois da primeira leitura: antes eram lidos e decodificados do
+  /// disco a cada música que começava a tocar. Só esta classe grava esses arquivos. Como as buscas
+  /// usam o mesmo mapa, duas buscas ao mesmo tempo não apagam mais o registro uma da outra.
+  final Map<String, Map<String, dynamic>> _json = {};
+
+  Map<String, dynamic> _readJson(String path) {
+    final known = _json[path];
+    if (known != null) return known;
+    var m = <String, dynamic>{};
+    try {
+      final f = File(path);
+      if (f.existsSync()) m = (jsonDecode(f.readAsStringSync()) as Map).cast<String, dynamic>();
+    } catch (_) {}
+    return _json[path] = m;
+  }
+
+  void _writeJson(String path, Map<String, dynamic> m) {
+    _json[path] = m;
+    try {
+      File(path)
+        ..parent.createSync(recursive: true)
+        ..writeAsStringSync(jsonEncode(m));
+    } catch (_) {}
   }
 
   /// Versão da regra de escolha. Músicas buscadas com uma regra antiga são refeitas.

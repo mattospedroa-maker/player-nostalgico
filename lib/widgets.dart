@@ -66,7 +66,7 @@ class TrackTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final app = context.read<AppState>();
-    final playing = context.select<AppState, int?>((s) => s.player.current?.id) == track.id;
+    final playing = context.select<PlayerService, int?>((p) => p.current?.id) == track.id;
     final fg = playing ? Colors.white : Colors.black;
     final sub = playing ? const Color(0xFFDFE8FF) : const Color(0xFF666666);
     return Material(
@@ -310,7 +310,7 @@ void showGifLibraryInfo(BuildContext context) {
       actions: [
         TextButton(
           onPressed: () {
-            app.reload();
+            app.reload(rereadGifs: true);
             Navigator.pop(ctx);
           },
           child: const Text('Recarregar'),

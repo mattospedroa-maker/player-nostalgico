@@ -283,7 +283,11 @@ class PlayerService extends ChangeNotifier {
         return v + r.nextDouble(); // um pouco de sorte para variar
       }
 
-      final ranked = pool.where((t) => !out.contains(t)).toList()..sort((a, b) => vibe(b).compareTo(vibe(a)));
+      // pontuação calculada uma vez por música (antes era refeita a cada comparação da ordenação,
+      // com um sorteio novo a cada vez: lento em bibliotecas grandes e com ordem instável)
+      final taken = out.toSet();
+      final scored = [for (final t in pool) if (!taken.contains(t)) (t, vibe(t))]..sort((a, b) => b.$2.compareTo(a.$2));
+      final ranked = [for (final s in scored) s.$1];
       final perArtist = <String, int>{};
       for (final t in out) {
         perArtist[t.artist] = (perArtist[t.artist] ?? 0) + 1;

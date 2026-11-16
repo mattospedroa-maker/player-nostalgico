@@ -148,8 +148,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
     final ps = context.read<PlayerService>();
     final tracks = app.tracks;
     if (_searching) return _resultsView(app);
-    final recent = [...tracks]..sort((a, b) => b.addedAt.compareTo(a.addedAt));
-    Set<String> distinct(String Function(Track) f) => tracks.map(f).toSet();
+    final sum = _summaryOf(tracks);
+    final recent = sum.recent;
     return ListView(
       padding: EdgeInsets.zero,
       children: [
@@ -177,22 +177,22 @@ class _LibraryScreenState extends State<LibraryScreen> {
             IpodRow(
               icon: XpIcons.person,
               label: 'Artistas',
-              detail: '${distinct((t) => t.artist).length}',
+              detail: '${sum.artists}',
               onTap: () => _push(const GroupListScreen(kind: GroupKind.artist)),
             ),
             IpodRow(
               icon: XpIcons.disc,
               label: 'Álbuns',
-              detail: '${distinct((t) => t.album).length}',
+              detail: '${sum.albums}',
               onTap: () => _push(const GroupListScreen(kind: GroupKind.album)),
             ),
             IpodRow(
               icon: XpIcons.star,
               label: 'Gêneros',
-              detail: '${distinct((t) => t.genre).where((g) => g.isNotEmpty).length}',
+              detail: '${sum.genres}',
               onTap: () => _push(const GroupListScreen(kind: GroupKind.genre)),
             ),
-            if (duplicateExtraCount(tracks) case final extra when extra > 0)
+            if (sum.duplicates case final extra when extra > 0)
               IpodRow(icon: XpIcons.duplicate, label: 'Músicas repetidas', detail: '$extra sobrando', onTap: () => _push(const DuplicatesScreen())),
             IpodRow(
               icon: XpIcons.folder,
@@ -213,7 +213,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   const XpColumnHeader('Adicionadas recentemente'),
-                  for (final t in recent.take(8))
+                  for (final t in recent)
                     TrackTile(
                       track: t,
                       onTap: () {
@@ -413,6 +413,25 @@ class _LibraryScreenState extends State<LibraryScreen> {
     );
   }
 
+  /// Contas da página inicial (recentes, artistas, álbuns, gêneros, repetidas), refeitas só quando a lista
+  /// de músicas muda. Antes eram refeitas a cada redesenho da tela (inclusive a cada arquivo lido na releitura).
+  _LibrarySummary? _summary;
+  _LibrarySummary _summaryOf(List<Track> tracks) {
+    final s = _summary;
+    if (s != null && identical(s.tracks, tracks)) return s;
+    return _summary = _LibrarySummary(tracks);
+  }
+
+  // coleções automáticas da última vez (refeitas quando a biblioteca, o histórico ou a música atual mudam)
+  (List<Track>, PlayStats, int?)? _colsKey;
+  List<SmartCollection> _cols = const [];
+  List<SmartCollection> _collections(AppState app, PlayStats stats, int? current) {
+    final k = _colsKey;
+    if (k != null && identical(k.$1, app.tracks) && identical(k.$2, stats) && k.$3 == current) return _cols;
+    _colsKey = (app.tracks, stats, current);
+    return _cols = buildSmartCollections(app.tracks, stats, current: app.byId(current));
+  }
+
   /// Coleções automáticas: recalculadas quando a biblioteca ou o histórico mudam (não são playlists).
   Widget _smartBox(AppState app) {
     final current = context.select<PlayerService, int?>((p) => p.current?.id);
@@ -422,7 +441,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
         future: app.playStats(),
         initialData: app.playStatsNow,
         builder: (context, snap) {
-          final cols = buildSmartCollections(app.tracks, snap.data ?? PlayStats.empty, current: app.byId(current));
+          final cols = _collections(app, snap.data ?? PlayStats.empty, current);
           final moods = cols.where((c) => c.id.startsWith('mood:')).toList();
           void open(SmartCollection c) => _push(SmartCollectionScreen(id: c.id, title: c.title));
           return IpodBox(
@@ -447,4 +466,15 @@ class _LibraryScreenState extends State<LibraryScreen> {
       ),
     );
   }
+}
+
+/// Resumo da biblioteca para a página inicial.
+class _LibrarySummary {
+  final List<Track> tracks;
+  late final List<Track> recent = ([...tracks]..sort((a, b) => b.addedAt.compareTo(a.addedAt))).take(8).toList();
+  late final int artists = tracks.map((t) => t.artist).toSet().length;
+  late final int albums = tracks.map((t) => t.album).toSet().length;
+  late final int genres = tracks.map((t) => t.genre).where((g) => g.isNotEmpty).toSet().length;
+  late final int duplicates = duplicateExtraCount(tracks);
+  _LibrarySummary(this.tracks);
 }
