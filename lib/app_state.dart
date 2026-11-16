@@ -383,6 +383,36 @@ class AppState extends ChangeNotifier {
     await reload();
   }
 
+  /// Limpa músicas repetidas: para cada grupo, fica [keep] e as outras cópias são apagadas do celular.
+  /// Favorito, playlists, histórico e GIFs fixados passam para a cópia que fica. Devolve quantos arquivos apagou.
+  Future<int> removeDuplicates(Map<Track, List<Track>> plan) async {
+    var removed = 0;
+    final root = sourceRoot;
+    for (final entry in plan.entries) {
+      final keep = entry.key;
+      var fav = keep.favorite;
+      for (final t in entry.value) {
+        if (t.id == null || t.id == keep.id) continue;
+        if (player.current?.id == t.id) await player.next();
+        fav = fav || t.favorite;
+        await db.replaceInPlaylists(t.id!, keep.id!);
+        await db.mergeTrackHistory(t.id!, keep.id!);
+        try {
+          final f = File(t.path);
+          if (f.existsSync()) await f.delete();
+        } catch (_) {
+          continue; // não deu para apagar o arquivo: deixa no banco também
+        }
+        await db.deleteTrack(t.id!);
+        if (root != null) removeEmptyParents(root, [t.path]);
+        removed++;
+      }
+      if (fav && !keep.favorite) await db.setFavorite(keep.id!, true);
+    }
+    await reload();
+    return removed;
+  }
+
   Organizer organizer({bool cleanNames = true}) =>
       Organizer(sourceRoot: sourceRoot!, mb: MusicBrainzClient(), metadata: metadata, cleanNames: cleanNames);
 

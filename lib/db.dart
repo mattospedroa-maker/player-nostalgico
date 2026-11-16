@@ -155,6 +155,28 @@ class AppDb {
       SELECT t.* FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id
       WHERE pt.playlist_id = ? ORDER BY pt.position''', [id])).map(Track.fromMap).toList();
 
+  /// Playlists onde a música está.
+  Future<List<int>> playlistIdsOf(int trackId) async =>
+      (await db.rawQuery('SELECT DISTINCT playlist_id FROM playlist_tracks WHERE track_id = ?', [trackId])).map((r) => r['playlist_id'] as int).toList();
+
+  /// Troca a música [from] por [to] nas playlists (no mesmo lugar), sem repetir.
+  Future<void> replaceInPlaylists(int from, int to) async {
+    for (final pid in await playlistIdsOf(from)) {
+      final has = await db.rawQuery('SELECT 1 FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?', [pid, to]);
+      if (has.isEmpty) {
+        await db.update('playlist_tracks', {'track_id': to}, where: 'playlist_id = ? AND track_id = ?', whereArgs: [pid, from]);
+      } else {
+        await db.delete('playlist_tracks', where: 'playlist_id = ? AND track_id = ?', whereArgs: [pid, from]);
+      }
+    }
+  }
+
+  /// Passa histórico de reprodução e GIFs fixados de uma cópia para outra.
+  Future<void> mergeTrackHistory(int from, int to) async {
+    await db.update('plays', {'track_id': to}, where: 'track_id = ?', whereArgs: [from]);
+    await db.rawInsert('INSERT OR IGNORE INTO track_gifs(track_id, gif_path) SELECT ?, gif_path FROM track_gifs WHERE track_id = ?', [to, from]);
+  }
+
   Future<void> addToPlaylist(int playlistId, int trackId) async {
     final r = await db.rawQuery('SELECT COALESCE(MAX(position), -1) + 1 AS p FROM playlist_tracks WHERE playlist_id = ?', [playlistId]);
     await db.insert('playlist_tracks', {'playlist_id': playlistId, 'track_id': trackId, 'position': r.first['p'] as int});
