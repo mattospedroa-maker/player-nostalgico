@@ -19,6 +19,13 @@ class AppDb {
           if (from < 3) await db.execute("ALTER TABLE tracks ADD COLUMN mood TEXT NOT NULL DEFAULT ''");
         },
         onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+        // índices que faltavam (só acrescentam, não mexem em nenhum dado): abrir playlist, trocar
+        // música de playlist e contar quem usa um GIF deixam de ler a tabela inteira
+        onOpen: (db) async {
+          await db.execute('CREATE INDEX IF NOT EXISTS playlist_tracks_pl ON playlist_tracks(playlist_id, position)');
+          await db.execute('CREATE INDEX IF NOT EXISTS playlist_tracks_track ON playlist_tracks(track_id)');
+          await db.execute('CREATE INDEX IF NOT EXISTS track_gifs_path ON track_gifs(gif_path)');
+        },
         onCreate: (db, _) async {
           await db.execute('''
             CREATE TABLE tracks(
@@ -76,7 +83,9 @@ class AppDb {
 
   Future<Map<String, Track>> tracksByPath() async => {for (final t in await allTracks()) t.path: t};
 
-  Future<int> upsertTrack(Track t) async {
+  /// [tx]: para gravar várias de uma vez dentro de uma transação (a leitura da pasta usa).
+  Future<int> upsertTrack(Track t, {DatabaseExecutor? tx}) async {
+    final db = tx ?? this.db;
     final existing = await db.query('tracks', where: 'path = ?', whereArgs: [t.path]);
     if (existing.isEmpty) return db.insert('tracks', t.toMap()..remove('id'));
     final old = existing.first;
@@ -245,7 +254,7 @@ class AppDb {
 
   /// Quantas músicas usam este GIF.
   Future<int> gifUsers(String gifPath) async =>
-      (await db.query('track_gifs', where: 'gif_path = ?', whereArgs: [gifPath])).length;
+      Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM track_gifs WHERE gif_path = ?', [gifPath])) ?? 0;
 
   Future<void> deleteGifEverywhere(String gifPath) => db.delete('track_gifs', where: 'gif_path = ?', whereArgs: [gifPath]);
 

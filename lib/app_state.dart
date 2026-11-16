@@ -266,7 +266,7 @@ class AppState extends ChangeNotifier {
       final t = s.player.current == null ? null : s.byId(s.player.current!.id);
       if (t != null) await s.toggleFavorite(t);
     };
-    await s.reload();
+    await s.reload(rereadGifs: true);
     // capas que faltam (inclusive as que falharam antes), em segundo plano
     unawaited(Future<void>.delayed(const Duration(seconds: 5), () => s.fetchMissingCovers()).catchError((_) {}));
     // Android 13+: a notificação com os controles precisa desta permissão
@@ -295,10 +295,13 @@ class AppState extends ChangeNotifier {
     return legacy.isGranted;
   }
 
-  Future<void> reload() async {
+  /// Relê músicas e playlists do banco. A pasta de GIFs só é relida com [rereadGifs]
+  /// (abertura, releitura da pasta, "Recarregar"): favoritar, editar ou mexer em playlists não muda os GIFs,
+  /// e reler a pasta inteira a cada toque custava tempo à toa.
+  Future<void> reload({bool rereadGifs = false}) async {
     tracks = await db.allTracks();
     playlists = await db.playlists();
-    await gifs.refresh();
+    if (rereadGifs) await gifs.refresh();
     notifyListeners();
   }
 
@@ -312,14 +315,19 @@ class AppState extends ChangeNotifier {
     try {
       // limpeza de nomes melhorou: relê tudo uma vez
       final force = (prefs.getInt('scanVersion') ?? 1) < scanVersion;
+      var shown = -1;
       await LibraryScanner(db, metadata).scan(root, force: force, onProgress: (d, t) {
         scanProgress = t == 0 ? 1 : d / t;
+        // avisa as telas só quando a barra anda 1% (antes era a cada arquivo: milhares de redesenhos)
+        final pct = (scanProgress * 100).floor();
+        if (pct == shown) return;
+        shown = pct;
         notifyListeners();
       });
       await prefs.setInt('scanVersion', scanVersion);
     } finally {
       scanning = false;
-      await reload();
+      await reload(rereadGifs: true);
     }
     // músicas novas na biblioteca: busca GIFs sozinho, em segundo plano
     final added = tracks.where((t) => !before.contains(t.id)).toList();
@@ -593,12 +601,19 @@ class AppState extends ChangeNotifier {
     return null;
   }
 
+  /// Música pelo id. Usa um índice refeito só quando a lista de músicas muda
+  /// (as telas chamam isto para cada linha; a busca linear deixava listas grandes lentas).
   Track? byId(int? id) {
-    for (final t in tracks) {
-      if (t.id == id) return t;
+    if (id == null) return null;
+    if (!identical(_indexed, tracks)) {
+      _indexed = tracks;
+      _byId = {for (final t in tracks) if (t.id != null) t.id!: t};
     }
-    return null;
+    return _byId[id];
   }
+
+  List<Track>? _indexed;
+  Map<int, Track> _byId = const {};
 
   Future<Recommender> recommender() async => Recommender(tracks, await db.plays());
 
