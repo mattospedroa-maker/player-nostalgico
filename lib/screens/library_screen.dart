@@ -1,13 +1,12 @@
-import 'package:file_picker/file_picker.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
-import '../main.dart';
 import '../models.dart';
 import '../player_service.dart';
 import '../theme.dart';
+import '../xp_icons.dart';
 import '../widgets.dart';
 import '../duplicates.dart';
 import 'duplicates_screen.dart';
@@ -25,164 +24,194 @@ class LibraryScreen extends StatefulWidget {
 class _LibraryScreenState extends State<LibraryScreen> {
   String _query = '';
 
-  Future<void> _chooseFolder() async {
-    final app = context.read<AppState>();
-    final messenger = ScaffoldMessenger.of(context);
-    if (!await app.ensureStoragePermission()) {
-      messenger.showSnackBar(const SnackBar(content: Text('Sem permissão de acesso aos arquivos, não consigo ler as músicas.')));
-      return;
-    }
-    final dir = await FilePicker.getDirectoryPath(dialogTitle: 'Escolha a pasta das suas músicas');
-    if (dir == null) return;
-    await app.setSourceRoot(dir);
-  }
+  void _push(Widget w) => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => w));
 
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
     final root = app.sourceRoot;
-    return Column(children: [
-      XpTitleBar(title: 'Biblioteca', actions: [
-        if (root != null) XpTitleButton(icon: Icons.refresh, tooltip: 'Reler pasta', onTap: app.rescan),
-        XpTitleButton(icon: Icons.folder_open, tooltip: 'Trocar pasta', onTap: _chooseFolder),
-      ]),
-      if (app.scanning) LinearProgressIndicator(value: app.scanProgress, minHeight: 3, color: Xp.navy),
-      Expanded(child: root == null ? _welcome() : _library(app, root)),
-    ]);
+    return Column(
+      children: [
+        XpTitleBar(
+          title: 'Biblioteca',
+          icon: XpIcons.folder,
+          actions: [
+            if (root != null) XpTitleButton(icon: Icons.refresh, tooltip: 'Reler pasta', onTap: app.rescan),
+            XpTitleButton(icon: Icons.folder_open, tooltip: 'Trocar pasta', onTap: () => chooseMusicFolder(context)),
+          ],
+        ),
+        XpMenuBar([
+          ('Arquivo', [XpMenuItem('Trocar pasta de músicas…', () => chooseMusicFolder(context)), XpMenuItem('Reler pasta', root == null ? null : app.rescan)]),
+          (
+            'Ferramentas',
+            [
+              XpMenuItem('Buscar novas músicas', () => _push(const OrganizerScreen())),
+              XpMenuItem('Baixar do YouTube (MP3)', () => _push(const YoutubeScreen())),
+              XpMenuItem('Músicas repetidas', () => _push(const DuplicatesScreen())),
+              XpMenuItem('Acervo de GIFs', () => showGifLibraryInfo(context)),
+            ],
+          ),
+        ]),
+        XpAddressBar(_query.isEmpty ? 'Música' : 'Música\\Busca: "$_query"'),
+        if (app.scanning) LinearProgressIndicator(value: app.scanProgress, minHeight: 3, color: Xp.navy),
+        Expanded(
+          child: ColoredBox(color: Colors.white, child: root == null ? _welcome() : _library(app, root)),
+        ),
+        XpStatusBar([app.scanning ? 'Lendo a pasta…' : '${app.tracks.length} músicas', if (root != null) p.basename(root), 'Meu computador']),
+      ],
+    );
   }
 
-  Widget _welcome() => ListView(padding: const EdgeInsets.all(24), children: [
-        const SizedBox(height: 40),
-        const Icon(Icons.library_music, size: 72, color: Xp.blue),
-        const SizedBox(height: 16),
-        const Text('Bem-vindo!',
-            textAlign: TextAlign.center, style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Xp.navy)),
-        const SizedBox(height: 8),
-        const Text('Escolha a pasta onde ficam suas músicas. O app lê essa pasta e as subpastas, e tudo funciona sem internet.',
-            textAlign: TextAlign.center, style: TextStyle(color: Xp.blueText)),
-        const SizedBox(height: 24),
-        XpButton(label: 'Escolher pasta de músicas', icon: Icons.folder_open, primary: true, onTap: _chooseFolder),
-      ]);
+  Widget _welcome() => ListView(
+    padding: const EdgeInsets.all(24),
+    children: [
+      const SizedBox(height: 40),
+      const Center(child: XpIcon(XpIcons.computer, size: 80)),
+      const SizedBox(height: 16),
+      const Text(
+        'Bem-vindo!',
+        textAlign: TextAlign.center,
+        style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Xp.navy),
+      ),
+      const SizedBox(height: 8),
+      const Text(
+        'Escolha a pasta onde ficam suas músicas. O app lê essa pasta e as subpastas, e tudo funciona sem internet.',
+        textAlign: TextAlign.center,
+        style: TextStyle(color: Xp.blueText),
+      ),
+      const SizedBox(height: 24),
+      XpButton(label: 'Escolher pasta de músicas', xpIcon: XpIcons.folder, primary: true, onTap: () => chooseMusicFolder(context)),
+    ],
+  );
 
   Widget _library(AppState app, String root) {
     final ps = context.read<PlayerService>();
     final tracks = app.tracks;
     if (_query.isNotEmpty) {
       final q = _query.toLowerCase();
-      final hits = tracks
-          .where((t) => t.title.toLowerCase().contains(q) || t.artist.toLowerCase().contains(q) || t.album.toLowerCase().contains(q))
-          .toList();
-      return Column(children: [
-        _searchField(),
-        Expanded(
-          child: hits.isEmpty
-              ? const EmptyHint(Icons.search_off, 'Nada encontrado.')
-              : ListView.builder(
-                  itemCount: hits.length,
-                  itemBuilder: (_, i) => TrackTile(track: hits[i], onTap: () {
-                    ps.playQueue(hits, start: i);
-                    HomeShell.goTo(context, 0);
-                  }),
-                ),
-        ),
-      ]);
+      final hits = tracks.where((t) => t.title.toLowerCase().contains(q) || t.artist.toLowerCase().contains(q) || t.album.toLowerCase().contains(q)).toList();
+      return Column(
+        children: [
+          _searchField(),
+          const XpColumnHeader('Nome', right: 'Artista'),
+          Expanded(
+            child: hits.isEmpty
+                ? const EmptyHint(Icons.search_off, 'Nada encontrado.')
+                : ListView.builder(
+                    itemCount: hits.length,
+                    itemBuilder: (_, i) => TrackTile(
+                      track: hits[i],
+                      onTap: () => playTracks(context, hits, start: i),
+                    ),
+                  ),
+          ),
+        ],
+      );
     }
     final recent = [...tracks]..sort((a, b) => b.addedAt.compareTo(a.addedAt));
     Set<String> distinct(String Function(Track) f) => tracks.map(f).toSet();
-    return ListView(padding: EdgeInsets.zero, children: [
-      _searchField(),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(10, 10, 10, 0),
-        child: XpButton(
-          label: 'Buscar novas músicas',
-          icon: Icons.travel_explore,
-          primary: true,
-          onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const OrganizerScreen())),
+    return ListView(
+      padding: EdgeInsets.zero,
+      children: [
+        _searchField(),
+        XpTaskPane(
+          title: 'Tarefas de música',
+          tasks: [
+            (XpIcons.play, 'Tocar tudo', tracks.isEmpty ? null : () => playTracks(context, tracks, shuffle: false)),
+            (XpIcons.shuffle, 'Tocar em ordem aleatória', tracks.isEmpty ? null : () => playTracks(context, tracks, shuffle: true)),
+            (XpIcons.find, 'Buscar novas músicas', () => _push(const OrganizerScreen())),
+            (XpIcons.youtube, 'Baixar do YouTube (MP3)', () => _push(const YoutubeScreen())),
+          ],
         ),
-      ),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),
-        child: XpButton(
-          label: 'Baixar do YouTube (MP3)',
-          icon: Icons.download,
-          primary: true,
-          onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const YoutubeScreen())),
+        IpodBox(
+          title: 'Nome',
+          trailing: 'Itens',
+          children: [
+            IpodRow(
+              icon: XpIcons.note,
+              label: 'Todas as músicas',
+              detail: '${tracks.length}',
+              onTap: () => _push(TrackListScreen(title: 'Todas as músicas', tracks: tracks, path: 'Música\\Todas')),
+            ),
+            IpodRow(
+              icon: XpIcons.person,
+              label: 'Artistas',
+              detail: '${distinct((t) => t.artist).length}',
+              onTap: () => _push(const GroupListScreen(kind: GroupKind.artist)),
+            ),
+            IpodRow(
+              icon: XpIcons.disc,
+              label: 'Álbuns',
+              detail: '${distinct((t) => t.album).length}',
+              onTap: () => _push(const GroupListScreen(kind: GroupKind.album)),
+            ),
+            IpodRow(
+              icon: XpIcons.star,
+              label: 'Gêneros',
+              detail: '${distinct((t) => t.genre).where((g) => g.isNotEmpty).length}',
+              onTap: () => _push(const GroupListScreen(kind: GroupKind.genre)),
+            ),
+            if (duplicateExtraCount(tracks) case final extra when extra > 0)
+              IpodRow(icon: XpIcons.duplicate, label: 'Músicas repetidas', detail: '$extra sobrando', onTap: () => _push(const DuplicatesScreen())),
+            IpodRow(
+              icon: XpIcons.folder,
+              label: 'Pastas',
+              detail: p.basename(root),
+              onTap: () => _push(const GroupListScreen(kind: GroupKind.folder)),
+            ),
+            IpodRow(icon: XpIcons.film, label: 'Acervo de GIFs', detail: '${app.gifs.count}', onTap: () => showGifLibraryInfo(context)),
+          ],
         ),
-      ),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(14, 4, 14, 0),
-        child: Text('Pasta: ${p.basename(root)} · organiza em Artista/Álbum',
-            style: const TextStyle(fontSize: 11, color: Xp.blueMuted)),
-      ),
-      IpodBox(title: 'Música', trailing: '${tracks.length} faixas', children: [
-        IpodRow(label: 'Todas as músicas', selected: true, onTap: () => _open('Todas as músicas', tracks)),
-        IpodRow(label: 'Artistas', detail: '${distinct((t) => t.artist).length}', onTap: () => _openGroups('Artistas', (t) => t.artist)),
-        IpodRow(label: 'Álbuns', detail: '${distinct((t) => t.album).length}', onTap: () => _openGroups('Álbuns', (t) => t.album, sub: (t) => t.artist)),
-        IpodRow(
-            label: 'Gêneros',
-            detail: '${distinct((t) => t.genre).where((g) => g.isNotEmpty).length}',
-            onTap: () => _openGroups('Gêneros', (t) => t.genre.isEmpty ? 'Sem gênero' : t.genre)),
-        if (duplicateExtraCount(tracks) case final extra when extra > 0)
-          IpodRow(
-              label: 'Músicas repetidas',
-              detail: '$extra sobrando',
-              onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const DuplicatesScreen()))),
-        IpodRow(label: 'Pastas', detail: p.basename(root), onTap: () => _openGroups('Pastas', (t) => p.relative(p.dirname(t.path), from: root))),
-        IpodRow(label: 'Acervo de GIFs', detail: '${app.gifs.count}', onTap: () => _gifInfo(app)),
-      ]),
-      if (recent.isNotEmpty) ...[
-        const SectionLabel('Adicionadas recentemente'),
-        for (final t in recent.take(8))
-          TrackTile(track: t, onTap: () {
-            ps.playQueue([t]);
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                content: Text('Tocando "${t.title}". Depois dela: mix ${ps.mixMode == MixMode.artist ? 'do mesmo artista' : 'da mesma vibe'} (troque no Tocando agora).')));
-            HomeShell.goTo(context, 0);
-          }),
-      ] else if (!app.scanning)
-        const EmptyHint(Icons.music_off, 'Nenhuma música encontrada nessa pasta.'),
-      const SizedBox(height: 20),
-    ]);
+        if (recent.isNotEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+            child: Bevel(
+              sunken: true,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const XpColumnHeader('Adicionadas recentemente'),
+                  for (final t in recent.take(8))
+                    TrackTile(
+                      track: t,
+                      onTap: () {
+                        playTracks(context, [t]);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              'Tocando "${t.title}". Depois dela: mix ${ps.mixMode == MixMode.artist ? 'do mesmo artista' : 'da mesma vibe'} (troque no Tocando agora).',
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ] else if (!app.scanning)
+          const EmptyHint(Icons.music_off, 'Nenhuma música encontrada nessa pasta.'),
+        const SizedBox(height: 12),
+      ],
+    );
   }
 
   Widget _searchField() => Padding(
-        padding: const EdgeInsets.fromLTRB(10, 10, 10, 0),
-        child: TextField(
-          onChanged: (v) => setState(() => _query = v.trim()),
-          decoration: const InputDecoration(
-            isDense: true,
-            filled: true,
-            fillColor: Colors.white,
-            prefixIcon: Icon(Icons.search, size: 20),
-            hintText: 'Buscar música, artista, álbum…',
-            border: OutlineInputBorder(borderRadius: BorderRadius.zero, borderSide: BorderSide(color: Color(0xFF7F9DB9))),
-          ),
+    padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+    child: Bevel(
+      sunken: true,
+      child: TextField(
+        onChanged: (v) => setState(() => _query = v.trim()),
+        style: const TextStyle(fontSize: 14),
+        decoration: const InputDecoration(
+          isDense: true,
+          border: InputBorder.none,
+          prefixIcon: Padding(padding: EdgeInsets.all(8), child: XpIcon(XpIcons.find, size: 18)),
+          prefixIconConstraints: BoxConstraints(minWidth: 34, minHeight: 34),
+          hintText: 'Buscar música, artista, álbum…',
+          contentPadding: EdgeInsets.symmetric(vertical: 10),
         ),
-      );
-
-  void _open(String title, List<Track> tracks) =>
-      Navigator.of(context).push(MaterialPageRoute(builder: (_) => TrackListScreen(title: title, tracks: tracks)));
-
-  void _openGroups(String title, String Function(Track) key, {String Function(Track)? sub}) {
-    Navigator.of(context).push(MaterialPageRoute(builder: (_) => GroupListScreen(title: title, keyOf: key, subOf: sub)));
-  }
-
-  void _gifInfo(AppState app) => showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Acervo de GIFs'),
-          content: Text('${app.gifs.count} GIFs em\n${app.gifs.gifRoot}\n\n'
-              'Crie subpastas com o nome do artista, álbum ou gênero (ex.: GIFs/Hatsune Miku) e os GIFs aparecem nas músicas que combinam. '
-              'GIFs soltos direto na pasta GIFs aparecem em qualquer música.'),
-          actions: [
-            TextButton(
-                onPressed: () {
-                  app.reload();
-                  Navigator.pop(ctx);
-                },
-                child: const Text('Recarregar')),
-            FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
-          ],
-        ),
-      );
+      ),
+    ),
+  );
 }

@@ -1,7 +1,12 @@
+import 'dart:math';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
 import 'app_state.dart';
+import 'main.dart';
+import 'player_service.dart';
 import 'screens/edit_track_screen.dart';
 import 'models.dart';
 import 'theme.dart';
@@ -60,34 +65,52 @@ class TrackTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final app = context.read<AppState>();
     final playing = context.select<AppState, int?>((s) => s.player.current?.id) == track.id;
+    final fg = playing ? Colors.white : Colors.black;
+    final sub = playing ? const Color(0xFFDFE8FF) : const Color(0xFF666666);
     return Material(
-      color: playing ? const Color(0xFFE6EEFC) : Colors.white,
+      color: playing ? Xp.select : Colors.white,
       child: InkWell(
         onTap: onTap,
         onLongPress: () => showTrackMenu(context, track),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Xp.listBorder))),
-          child: Row(children: [
-            CoverSquare(track),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(track.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.bold, color: Xp.navy, fontSize: 14)),
-                Text(subtitle ?? track.artist,
-                    maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Xp.blueMuted, fontSize: 12)),
-                if (note != null) Text(note!, style: const TextStyle(color: Xp.navy, fontSize: 11)),
-              ]),
-            ),
-            trailing ??
-                IconButton(
-                  icon: Icon(track.favorite ? Icons.favorite : Icons.favorite_border, color: Xp.gold),
-                  onPressed: () => app.toggleFavorite(track),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+          decoration: const BoxDecoration(
+            border: Border(bottom: BorderSide(color: Color(0xFFF0F0F0))),
+          ),
+          child: Row(
+            children: [
+              CoverSquare(track, size: 38),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      track.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: fg, fontSize: 14.5),
+                    ),
+                    Text(
+                      subtitle ?? track.artist,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: sub, fontSize: 12),
+                    ),
+                    if (note != null) Text(note!, style: TextStyle(color: playing ? Colors.white : Xp.linkBlue, fontSize: 11.5)),
+                  ],
                 ),
-          ]),
+              ),
+              trailing ??
+                  IconButton(
+                    icon: Icon(
+                      track.favorite ? Icons.favorite : Icons.favorite_border,
+                      color: track.favorite ? const Color(0xFFE0342A) : (playing ? Colors.white70 : Colors.black26),
+                    ),
+                    onPressed: () => app.toggleFavorite(track),
+                  ),
+            ],
+          ),
         ),
       ),
     );
@@ -173,36 +196,6 @@ Future<String?> askText(BuildContext context, String title, String label, {Strin
   );
 }
 
-/// Card grande com degradê e botão de play (Favoritas / Para você).
-class HeroCard extends StatelessWidget {
-  final String title;
-  final String subtitle;
-  final List<Color> colors;
-  final VoidCallback? onPlay;
-  const HeroCard({super.key, required this.title, required this.subtitle, required this.colors, this.onPlay});
-
-  @override
-  Widget build(BuildContext context) => Container(
-        margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-        padding: const EdgeInsets.fromLTRB(14, 14, 10, 14),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(colors: colors),
-          border: Border.all(color: const Color(0xFF0B2F7A), width: 2),
-          borderRadius: BorderRadius.circular(4),
-        ),
-        child: Row(children: [
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 17)),
-              const SizedBox(height: 2),
-              Text(subtitle, style: const TextStyle(color: Colors.white70, fontSize: 12)),
-            ]),
-          ),
-          GlossyButton(icon: Icons.play_arrow, size: 44, onTap: onPlay),
-        ]),
-      );
-}
-
 class EmptyHint extends StatelessWidget {
   final IconData icon;
   final String text;
@@ -217,4 +210,53 @@ class EmptyHint extends StatelessWidget {
           Text(text, textAlign: TextAlign.center, style: const TextStyle(color: Xp.blueText)),
         ]),
       );
+}
+
+/// Escolhe a pasta das músicas (pede a permissão antes).
+Future<void> chooseMusicFolder(BuildContext context) async {
+  final app = context.read<AppState>();
+  final messenger = ScaffoldMessenger.of(context);
+  if (!await app.ensureStoragePermission()) {
+    messenger.showSnackBar(const SnackBar(content: Text('Sem permissão de acesso aos arquivos, não consigo ler as músicas.')));
+    return;
+  }
+  final dir = await FilePicker.getDirectoryPath(dialogTitle: 'Escolha a pasta das suas músicas');
+  if (dir == null) return;
+  await app.setSourceRoot(dir);
+}
+
+void showGifLibraryInfo(BuildContext context) {
+  final app = context.read<AppState>();
+  showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Acervo de GIFs'),
+      content: Text(
+        '${app.gifs.count} GIFs em\n${app.gifs.gifRoot}\n\n'
+        'Crie subpastas com o nome do artista, álbum ou gênero (ex.: GIFs/Hatsune Miku) e os GIFs aparecem nas músicas que combinam. '
+        'GIFs soltos direto na pasta GIFs aparecem em qualquer música.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () {
+            app.reload();
+            Navigator.pop(ctx);
+          },
+          child: const Text('Recarregar'),
+        ),
+        FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
+      ],
+    ),
+  );
+}
+
+/// Toca a lista (em ordem ou aleatória) e vai para o Tocando agora, sem fechar a tela atual:
+/// ao voltar para a aba, você continua de onde parou.
+Future<void> playTracks(BuildContext context, List<Track> list, {int start = 0, bool? shuffle}) async {
+  if (list.isEmpty) return;
+  final ps = context.read<PlayerService>();
+  if (shuffle != null && ps.shuffle != shuffle) await ps.toggleShuffle();
+  if (shuffle == true) start = Random().nextInt(list.length);
+  await ps.playQueue(list, start: start);
+  if (context.mounted) HomeShell.goTo(context, 0);
 }

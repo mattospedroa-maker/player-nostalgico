@@ -216,6 +216,15 @@ class AppDb {
   Future<List<String>> pinnedGifs(int trackId) async =>
       (await db.query('track_gifs', where: 'track_id = ?', whereArgs: [trackId])).map((r) => r['gif_path'] as String).toList();
 
+  /// Todos os GIFs fixados, por música (para escolher a miniatura de álbuns/artistas).
+  Future<Map<int, List<String>>> allPinnedGifs() async {
+    final m = <int, List<String>>{};
+    for (final r in await db.query('track_gifs')) {
+      m.putIfAbsent(r['track_id'] as int, () => []).add(r['gif_path'] as String);
+    }
+    return m;
+  }
+
   Future<void> pinGif(int trackId, String gifPath) =>
       db.insert('track_gifs', {'track_id': trackId, 'gif_path': gifPath}, conflictAlgorithm: ConflictAlgorithm.ignore);
 
