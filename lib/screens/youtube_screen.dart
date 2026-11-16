@@ -22,7 +22,8 @@ enum _Mode { none, single, playlist }
 
 class _YoutubeScreenState extends State<YoutubeScreen> {
   _Mode _mode = _Mode.none;
-  final _link = TextEditingController();
+  final _videoLink = TextEditingController();
+  final _playlistLink = TextEditingController();
   final _artist = TextEditingController();
   final _title = TextEditingController();
   final _album = TextEditingController();
@@ -39,54 +40,42 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
 
   @override
   void dispose() {
-    for (final c in [_link, _artist, _title, _album]) {
+    for (final c in [_videoLink, _playlistLink, _artist, _title, _album]) {
       c.dispose();
     }
     super.dispose();
   }
 
-  Future<void> _paste() async {
+  Future<void> _paste({required bool playlist}) async {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
     final text = data?.text?.trim() ?? '';
     if (text.isEmpty) return;
-    _link.text = DownloadService.normalizeUrl(text);
+    (playlist ? _playlistLink : _videoLink).text = DownloadService.normalizeUrl(text);
     if (!mounted) return;
-    await _search();
+    _search(playlist: playlist);
   }
 
-  Future<void> _search() async {
+  /// Cada campo busca o seu tipo. Um link só de playlist colado no campo de vídeo vai para o de playlist.
+  void _search({required bool playlist}) {
     final ds = context.read<DownloadService>();
-    final url = DownloadService.normalizeUrl(_link.text);
+    final field = playlist ? _playlistLink : _videoLink;
+    final url = DownloadService.normalizeUrl(field.text);
     FocusScope.of(context).unfocus();
     if (url.isEmpty) return;
-    _link.text = url;
-    var kind = DownloadService.linkKind(url);
-    if (kind == LinkKind.both) {
-      final picked = await _askVideoOrPlaylist();
-      if (picked == null) return;
-      kind = picked;
+    field.text = url;
+    if (!playlist && DownloadService.linkKind(url) == LinkKind.playlist) {
+      _videoLink.clear();
+      _playlistLink.text = url;
+      playlist = true;
     }
-    setState(() => _mode = kind == LinkKind.playlist ? _Mode.playlist : _Mode.single);
-    if (_mode == _Mode.playlist) {
+    setState(() => _mode = playlist ? _Mode.playlist : _Mode.single);
+    if (playlist) {
       ds.fetchPlaylist(url);
     } else {
       _filled = null;
       ds.fetchSingle(url);
     }
   }
-
-  Future<LinkKind?> _askVideoOrPlaylist() => showDialog<LinkKind>(
-        context: context,
-        builder: (ctx) => XpAlertDialog(
-          icon: XpIcons.question,
-          title: const Text('Vídeo ou playlist?'),
-          content: const Text('Este link é de um vídeo que está dentro de uma playlist. O que você quer copiar?'),
-          actions: [
-            FilledButton(onPressed: () => Navigator.pop(ctx, LinkKind.video), child: const Text('Só este vídeo')),
-            TextButton(onPressed: () => Navigator.pop(ctx, LinkKind.playlist), child: const Text('A playlist inteira')),
-          ],
-        ),
-      );
 
   Future<bool> _ready() async {
     final app = context.read<AppState>();
@@ -155,27 +144,40 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
 
   // ---------- campo do link e botões ----------
 
-  Widget _linkBar(DownloadService ds) => Padding(
-        padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
-        child: Row(children: [
-          const Text('Link:', style: TextStyle(fontSize: 14)),
-          const SizedBox(width: 6),
-          Expanded(
-            child: TextField(
-              controller: _link,
-              keyboardType: TextInputType.url,
-              textInputAction: TextInputAction.search,
-              onSubmitted: (_) => _search(),
-              style: const TextStyle(fontSize: 14),
-              decoration: const InputDecoration(hintText: 'cole o link aqui'),
+  Widget _linkBar(DownloadService ds) {
+    final busy = ds.loadingSingle || ds.loadingPlaylist;
+    Widget row(String label, TextEditingController c, String hint, {required bool playlist}) => Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: Row(children: [
+            SizedBox(width: 62, child: Text('$label:', style: const TextStyle(fontSize: 14))),
+            Expanded(
+              child: TextField(
+                controller: c,
+                keyboardType: TextInputType.url,
+                textInputAction: TextInputAction.search,
+                onSubmitted: (_) => _search(playlist: playlist),
+                style: const TextStyle(fontSize: 14),
+                decoration: InputDecoration(hintText: hint),
+              ),
             ),
-          ),
-          const SizedBox(width: 6),
-          XpButton(label: 'Colar', icon: Icons.content_paste, onTap: _paste),
-          const SizedBox(width: 4),
-          XpButton(label: 'Buscar', icon: Icons.search, primary: true, onTap: ds.loadingSingle || ds.loadingPlaylist ? null : _search),
+            const SizedBox(width: 5),
+            XpButton(label: 'Colar', onTap: () => _paste(playlist: playlist)),
+            const SizedBox(width: 4),
+            XpButton(label: 'Buscar', primary: true, onTap: busy ? null : () => _search(playlist: playlist)),
+          ]),
+        );
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+      child: XpGroupBox(
+        title: 'Links do YouTube',
+        background: Xp.beige,
+        child: Column(children: [
+          row('Vídeo', _videoLink, 'youtu.be/…', playlist: false),
+          row('Playlist', _playlistLink, '…playlist?list=…', playlist: true),
         ]),
-      );
+      ),
+    );
+  }
 
   /// Barra de baixo do painel: o botão principal muda conforme a etapa.
   Widget _actionBar(DownloadService ds) {
@@ -193,7 +195,8 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
                   primary: true,
                   onTap: () {
                     ds.queue.clear();
-                    _link.clear();
+                    _videoLink.clear();
+                    _playlistLink.clear();
                     setState(() => _mode = _Mode.none);
                   }),
             ];
@@ -242,7 +245,7 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
           SizedBox(width: 12),
           Expanded(
             child: Text(
-              'Cole o link de um vídeo ou de uma playlist do YouTube. Eu descubro sozinho qual é.\n\n'
+              'Cole o link de um vídeo no campo Vídeo, ou o de uma playlist no campo Playlist, e toque em Buscar.\n\n'
               'A música vira .mp3 (192 kbps, a qualidade máxima que o YouTube entrega), com as tags e a capa gravadas, '
               'e aparece na Biblioteca sozinha. O que você já tem é pulado.',
               style: TextStyle(fontSize: 13.5, height: 1.4),

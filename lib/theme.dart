@@ -1025,7 +1025,10 @@ class XpTabPage extends StatelessWidget {
 class XpGroupBox extends StatelessWidget {
   final String title;
   final Widget child;
-  const XpGroupBox({super.key, required this.title, required this.child});
+
+  /// Cor atrás do título (a mesma do fundo onde a moldura está).
+  final Color background;
+  const XpGroupBox({super.key, required this.title, required this.child, this.background = const Color(0xFFFCFCFE)});
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -1041,7 +1044,7 @@ class XpGroupBox extends StatelessWidget {
             left: 8,
             top: -9,
             child: Container(
-              color: const Color(0xFFFCFCFE),
+              color: background,
               padding: const EdgeInsets.symmetric(horizontal: 4),
               child: Text(title, style: const TextStyle(fontSize: 13.5, color: Color(0xFF0046D5))),
             ),
