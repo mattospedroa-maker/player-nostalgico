@@ -50,6 +50,7 @@ dependencies:
   material_ui: ^1.11.0
   webview_flutter: ^4.14.1
   webview_flutter_android: ^4.14.1
+  flutter_svg: ^2.4.0
 
 dev_dependencies:
   flutter_test:
@@ -83,6 +84,17 @@ flutter:
 
   # For details regarding adding assets from package dependencies, see
   # https://flutter.dev/to/asset-from-package
+
+  # Fontes embutidas: XpSans = "Wine Tahoma" (LGPL 2.1, projeto Wine), Lcd = VT323 (SIL OFL, ver fonts/VT323-OFL.txt)
+  fonts:
+    - family: XpSans
+      fonts:
+        - asset: fonts/tahoma.ttf
+        - asset: fonts/tahomabd.ttf
+          weight: 700
+    - family: Lcd
+      fonts:
+        - asset: fonts/VT323-Regular.ttf
 
   # To add custom fonts to your application, add a fonts section here,
   # in this "flutter" section. Each entry in this list should have a

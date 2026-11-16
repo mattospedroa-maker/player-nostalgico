@@ -7,6 +7,7 @@ import '../models.dart';
 import '../player_service.dart';
 import '../theme.dart';
 import '../widgets.dart';
+import '../xp_icons.dart';
 
 class PlaylistsScreen extends StatelessWidget {
   const PlaylistsScreen({super.key});
@@ -15,12 +16,13 @@ class PlaylistsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
     return Column(children: [
-      const XpTitleBar(title: 'Playlists'),
+      const XpTitleBar(title: 'Playlists', icon: XpIcons.list),
+      const XpAddressBar('Playlists'),
       Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(8),
         child: XpButton(
           label: 'Nova playlist',
-          icon: Icons.add,
+          xpIcon: XpIcons.plus,
           onTap: () async {
             final name = await askText(context, 'Nova playlist', 'Nome');
             if (name != null && name.isNotEmpty) await app.createPlaylist(name);
@@ -31,12 +33,13 @@ class PlaylistsScreen extends StatelessWidget {
         child: app.playlists.isEmpty
             ? const EmptyHint(Icons.queue_music, 'Nenhuma playlist ainda.\nSegure uma música para adicionar a uma playlist.')
             : GridView.builder(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
+                padding: const EdgeInsets.fromLTRB(10, 4, 10, 10),
                 gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: .95),
                 itemCount: app.playlists.length,
                 itemBuilder: (_, i) => _PlaylistCard(app.playlists[i]),
               ),
       ),
+      XpStatusBar(['${app.playlists.length} playlists']),
     ]);
   }
 }
@@ -52,14 +55,14 @@ class _PlaylistCard extends StatelessWidget {
       future: app.db.playlistTracks(pl.id),
       builder: (context, snap) {
         final ts = snap.data ?? const [];
-        final colors = [for (final t in ts.take(4)) colorFor('${t.artist}|${t.album}')];
-        while (colors.length < 4) {
-          colors.add(colorFor('${pl.name}${colors.length}'));
-        }
+        // capas de álbuns diferentes no mosaico (repete se a playlist tiver menos de 4)
+        final seen = <String>{};
+        final covers = [for (final t in ts) if (seen.add('${t.artist}|${t.album}')) t].take(4).toList();
         return InkWell(
           onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => PlaylistDetailScreen(playlist: pl))),
           child: Container(
-            decoration: BoxDecoration(color: Colors.white, border: Border.all(color: const Color(0xFF9FB2D4)), borderRadius: BorderRadius.circular(4)),
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(color: Colors.white, border: Border.all(color: const Color(0xFFB8C4D8)), boxShadow: const [BoxShadow(color: Color(0xFFD6DBE5), offset: Offset(1, 1))]),
             clipBehavior: Clip.antiAlias,
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Expanded(
@@ -67,12 +70,15 @@ class _PlaylistCard extends StatelessWidget {
                   crossAxisCount: 2,
                   physics: const NeverScrollableScrollPhysics(),
                   padding: EdgeInsets.zero,
-                  children: [for (final c in colors) Container(color: c)],
+                  children: [
+                    for (var i = 0; i < 4; i++)
+                      covers.isEmpty ? Container(color: colorFor('${pl.name}$i')) : LayoutBuilder(builder: (_, c) => CoverSquare(covers[i % covers.length], size: c.maxWidth)),
+                  ],
                 ),
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(8, 6, 8, 0),
-                child: Text(pl.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold, color: Xp.navy)),
+                child: Text(pl.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
@@ -121,7 +127,6 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
     final ps = context.read<PlayerService>();
     void play(int i) {
       ps.playQueue(_tracks, start: i);
-      Navigator.popUntil(context, (r) => r.isFirst);
       HomeShell.goTo(context, 0);
     }
 
@@ -129,7 +134,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
       body: XpBackground(
         child: SafeArea(
           child: Column(children: [
-            XpTitleBar(title: _name, actions: [
+            XpTitleBar(title: _name, icon: XpIcons.cassette, actions: [
               XpTitleButton(
                 icon: Icons.edit,
                 tooltip: 'Renomear',
@@ -165,12 +170,13 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
               ),
               XpTitleButton(icon: Icons.close, tooltip: 'Fechar', onTap: () => Navigator.pop(context)),
             ]),
+            XpAddressBar('Playlists\\$_name'),
             Padding(
-              padding: const EdgeInsets.all(10),
-              child: XpButton(label: 'Tocar playlist', icon: Icons.play_arrow, primary: true, onTap: _tracks.isEmpty ? null : () => play(0)),
+              padding: const EdgeInsets.all(8),
+              child: XpButton(label: 'Tocar playlist', xpIcon: XpIcons.play, primary: true, onTap: _tracks.isEmpty ? null : () => play(0)),
             ),
             Expanded(
-              child: _tracks.isEmpty
+              child: ColoredBox(color: Colors.white, child: _tracks.isEmpty
                   ? const EmptyHint(Icons.playlist_add, 'Playlist vazia.\nSegure uma música em qualquer lista para adicionar.')
                   : ReorderableListView.builder(
                       itemCount: _tracks.length,
@@ -197,8 +203,9 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                           trailing: ReorderableDragStartListener(index: i, child: const Padding(padding: EdgeInsets.all(8), child: Icon(Icons.drag_handle))),
                         ),
                       ),
-                    ),
+                    )),
             ),
+            XpStatusBar(['${_tracks.length} faixas', fmtTotal(_tracks)]),
           ]),
         ),
       ),

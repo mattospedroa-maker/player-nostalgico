@@ -46,8 +46,14 @@ Player de música offline para Android, com visual inspirado no Windows Media Pl
 | `lib/gif_service.dart` | Acervo local de GIFs e combinação com as músicas |
 | `lib/gif_fetcher.dart`, `lib/gif_providers.dart` | Busca e download automático de GIFs (Openverse, Wikimedia) |
 | `lib/recommender.dart` | Recomendação offline |
-| `lib/theme.dart` | Visual XP: barras de título, botões prateados, listas estilo iPod |
+| `lib/theme.dart` | Visual anos 2000: janelas Luna do XP, relevo 3D do Win98, visor LCD, barra do WMP 9, listas do Explorer |
+| `lib/xp_icons.dart` | Ícones coloridos estilo Windows 98/XP (SVG) |
+| `lib/thumbnails.dart` | Miniaturas de álbuns/artistas (capa ou GIF mais usado) e índice A–Z |
 | `lib/screens/` | As telas |
+
+## Fontes
+- `fonts/tahoma.ttf`, `fonts/tahomabd.ttf`: "Wine Tahoma" do projeto Wine (LGPL 2.1), parecida com a Tahoma do XP.
+- `fonts/VT323-Regular.ttf`: VT323 (SIL Open Font License, ver `fonts/VT323-OFL.txt`), usada no visor LCD.
 
 ## Próximos passos
 - Receber GIFs pelo "Compartilhar" do Android (ex.: direto do Pinterest).

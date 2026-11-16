@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
@@ -18,6 +19,7 @@ import '../player_service.dart';
 import '../theme.dart';
 import '../visual_search.dart';
 import '../widgets.dart';
+import '../xp_icons.dart';
 import 'edit_track_screen.dart';
 import 'gif_vibe_screen.dart';
 import 'gif_web_screen.dart';
@@ -30,47 +32,105 @@ class NowPlayingScreen extends StatelessWidget {
     final ps = context.watch<PlayerService>();
     final app = context.watch<AppState>();
     final t = ps.current == null ? null : (app.byId(ps.current!.id) ?? ps.current);
-    return Column(children: [
-      const XpTitleBar(title: 'Tocando agora'),
-      Expanded(
-        child: t == null
-            ? const EmptyHint(Icons.music_off, 'Nada tocando.\nEscolha uma música na Biblioteca.')
-            : ListView(padding: EdgeInsets.zero, children: [
-                GifCarousel(key: ValueKey(t.id), track: t),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(t.title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Xp.navy)),
-                    Text(t.artist, style: const TextStyle(fontSize: 14, color: Xp.blueText)),
-                    Text([t.album, if ((t.year ?? 0) > 0) '${t.year}'].join(' · '),
-                        style: const TextStyle(fontSize: 12, color: Xp.blueMuted)),
-                    if (audioInitError != null)
-                      Text('Notificação desligada: $audioInitError', style: const TextStyle(fontSize: 11, color: Xp.red)),
-                  ]),
-                ),
-                SeekBar(player: ps.player),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: GlossyBar(children: [
-                    GlossyButton(icon: Icons.shuffle, active: ps.shuffle, onTap: ps.toggleShuffle, tooltip: 'Aleatório'),
-                    GlossyButton(icon: Icons.skip_previous, onTap: ps.previous, tooltip: 'Anterior'),
-                    GlossyButton(icon: ps.playing ? Icons.pause : Icons.play_arrow, size: 64, onTap: ps.togglePlay),
-                    GlossyButton(icon: Icons.skip_next, onTap: ps.next, tooltip: 'Próxima'),
-                    GlossyButton(
-                      icon: ps.loop == LoopMode.one ? Icons.repeat_one : Icons.repeat,
-                      active: ps.loop != LoopMode.off,
-                      onTap: ps.cycleLoop,
-                      tooltip: 'Repetir',
+    return Column(
+      children: [
+        const XpTitleBar(title: 'Tocando agora'),
+        XpMenuBar([
+          (
+            'Arquivo',
+            [
+              XpMenuItem(
+                'Editar informações…',
+                t == null ? null : () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => EditTrackScreen(track: t))),
+              ),
+              XpMenuItem('Adicionar a uma playlist…', t == null ? null : () => pickPlaylistAndAdd(context, t)),
+              XpMenuItem(t?.favorite ?? false ? 'Tirar das favoritas' : 'Adicionar às favoritas', t == null ? null : () => app.toggleFavorite(t)),
+            ],
+          ),
+          (
+            'Exibir',
+            [
+              XpMenuItem('Fila de reprodução', t == null ? null : () => _Toolbar.showQueue(context)),
+              XpMenuItem('GIFs desta música…', t == null ? null : () => showGifManager(context, t)),
+            ],
+          ),
+          (
+            'Tocar',
+            [
+              XpMenuItem(ps.playing ? 'Pausar' : 'Tocar', t == null ? null : ps.togglePlay),
+              XpMenuItem('Anterior', t == null ? null : ps.previous),
+              XpMenuItem('Próxima', t == null ? null : ps.next),
+              XpMenuItem('Aleatório', ps.toggleShuffle, checked: ps.shuffle),
+              XpMenuItem('Repetir', ps.cycleLoop, checked: ps.loop != LoopMode.off),
+            ],
+          ),
+          (
+            'Mix',
+            [
+              XpMenuItem('Do mesmo artista', () => ps.setMixMode(MixMode.artist), checked: ps.mixMode == MixMode.artist),
+              XpMenuItem('Da mesma vibe', () => ps.setMixMode(MixMode.vibe), checked: ps.mixMode == MixMode.vibe),
+            ],
+          ),
+        ]),
+        Expanded(
+          child: t == null
+              ? const EmptyHint(Icons.music_off, 'Nada tocando.\nEscolha uma música na Biblioteca.')
+              : ListView(
+                  padding: EdgeInsets.zero,
+                  children: [
+                    GifCarousel(key: ValueKey(t.id), track: t),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      child: StreamBuilder<Duration>(
+                        stream: ps.player.positionStream,
+                        builder: (context, snap) => LcdPanel(
+                          lines: [
+                            ('Artista', t.artist),
+                            ('Faixa', t.title),
+                            ('Álbum', [t.album, if ((t.year ?? 0) > 0) '${t.year}'].join(' · ')),
+                          ],
+                          time: _clock(snap.data ?? Duration.zero),
+                          total: _clock(ps.player.duration ?? Duration(milliseconds: t.durationMs)),
+                          playing: ps.playing,
+                          note: audioInitError == null ? null : 'Notificação desligada: $audioInitError',
+                        ),
+                      ),
                     ),
-                  ]),
+                    SeekBar(player: ps.player),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      child: GlossyBar(
+                        children: [
+                          GlossyButton(icon: Icons.shuffle, size: 40, active: ps.shuffle, onTap: ps.toggleShuffle, tooltip: 'Aleatório'),
+                          GlossyButton(icon: Icons.skip_previous, size: 46, onTap: ps.previous, tooltip: 'Anterior'),
+                          GlossyButton(icon: ps.playing ? Icons.pause : Icons.play_arrow, size: 66, onTap: ps.togglePlay),
+                          GlossyButton(icon: Icons.skip_next, size: 46, onTap: ps.next, tooltip: 'Próxima'),
+                          GlossyButton(
+                            icon: ps.loop == LoopMode.one ? Icons.repeat_one : Icons.repeat,
+                            size: 40,
+                            active: ps.loop != LoopMode.off,
+                            onTap: ps.cycleLoop,
+                            tooltip: 'Repetir',
+                          ),
+                        ],
+                      ),
+                    ),
+                    _Toolbar(track: t),
+                    const _MixBox(),
+                    const SizedBox(height: 12),
+                  ],
                 ),
-                const _MixBox(),
-                _Toolbar(track: t),
-                const SizedBox(height: 16),
-              ]),
-      ),
-    ]);
+        ),
+        XpStatusBar([
+          t == null ? 'Pronto' : '${ps.playing ? 'Tocando' : 'Pausado'} · ${t.title}',
+          if (t != null) p.extension(t.path).replaceFirst('.', '').toUpperCase(),
+          'Mix: ${ps.mixMode == MixMode.artist ? 'artista' : 'vibe'}',
+        ]),
+      ],
+    );
   }
+
+  static String _clock(Duration d) => '${d.inMinutes.toString().padLeft(2, '0')}:${(d.inSeconds % 60).toString().padLeft(2, '0')}';
 }
 
 /// "Depois desta, tocar:" Do mesmo artista / Da mesma vibe, e as 3 próximas.
@@ -86,34 +146,35 @@ class _MixBox extends StatelessWidget {
       return Expanded(
         child: GestureDetector(
           onTap: () => ps.setMixMode(m),
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 9),
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: on ? const [Color(0xFF5D9BFF), Color(0xFF1650D6)] : const [Colors.white, Color(0xFFD7E2F5)],
+          child: Bevel(
+            sunken: on,
+            color: on ? const Color(0xFFE3E1D4) : Xp.beige,
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              Container(
+                width: 13,
+                height: 13,
+                decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.white, border: Border.all(color: const Color(0xFF1C5180))),
+                alignment: Alignment.center,
+                child: on ? Container(width: 6, height: 6, decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFF21A121))) : null,
               ),
-            ),
-            child: Text(label, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: on ? Colors.white : Xp.navy)),
+              const SizedBox(width: 6),
+              Text(label, style: TextStyle(fontWeight: on ? FontWeight.bold : FontWeight.normal, fontSize: 13)),
+            ]),
           ),
         ),
       );
     }
 
     return Container(
-      margin: const EdgeInsets.fromLTRB(14, 12, 14, 0),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(color: Colors.white, border: Border.all(color: const Color(0xFF7A96C9)), borderRadius: BorderRadius.circular(6)),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Depois desta, tocar:', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Xp.navy)),
-        const SizedBox(height: 8),
-        Container(
-          decoration: BoxDecoration(border: Border.all(color: const Color(0xFF2B4F9E)), borderRadius: BorderRadius.circular(5)),
-          clipBehavior: Clip.antiAlias,
-          child: Row(children: [seg('Do mesmo artista', MixMode.artist), seg('Da mesma vibe', MixMode.vibe)]),
-        ),
+      margin: const EdgeInsets.fromLTRB(10, 10, 10, 0),
+      child: Bevel(
+        sunken: true,
+        padding: const EdgeInsets.all(8),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Depois desta, tocar:', style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold, color: Color(0xFF1C3F94))),
+          const SizedBox(height: 7),
+          Row(children: [seg('Do mesmo artista', MixMode.artist), const SizedBox(width: 4), seg('Da mesma vibe', MixMode.vibe)]),
         if (ps.loop != LoopMode.off)
           const Padding(
             padding: EdgeInsets.only(top: 6),
@@ -127,7 +188,7 @@ class _MixBox extends StatelessWidget {
               padding: const EdgeInsets.symmetric(vertical: 5),
               decoration: const BoxDecoration(border: Border(top: BorderSide(color: Color(0xFFE3EAF6)))),
               child: Row(children: [
-                Container(width: 26, height: 26, color: colorFor(t.artist)),
+                CoverSquare(t, size: 28),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -139,7 +200,8 @@ class _MixBox extends StatelessWidget {
               ]),
             ),
         ],
-      ]),
+        ]),
+      ),
     );
   }
 }
@@ -151,34 +213,27 @@ class _Toolbar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final app = context.read<AppState>();
-    Widget item(IconData i, String label, VoidCallback onTap, {bool on = false}) => Expanded(
-          child: InkWell(
-            onTap: onTap,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: Column(children: [
-                Icon(i, size: 20, color: on ? Xp.red : Colors.black87),
-                const SizedBox(height: 2),
-                Text(label,
-                    style: TextStyle(fontSize: 11, color: on ? Xp.red : Colors.black87, fontWeight: on ? FontWeight.bold : FontWeight.normal)),
-              ]),
-            ),
-          ),
-        );
-    return Container(
-      margin: const EdgeInsets.fromLTRB(14, 14, 14, 0),
-      decoration: BoxDecoration(color: Xp.beige, border: Border.all(color: Xp.beigeBorder), borderRadius: BorderRadius.circular(4)),
-      child: Row(children: [
-        item(track.favorite ? Icons.favorite : Icons.favorite_border, 'Favorita', () => app.toggleFavorite(track), on: track.favorite),
-        item(Icons.gif_box_outlined, 'GIFs desta', () => showGifManager(context, track)),
-        item(Icons.playlist_add, 'Playlist', () => pickPlaylistAndAdd(context, track)),
-        item(Icons.queue_music, 'Fila', () => _showQueue(context)),
-        item(Icons.edit_outlined, 'Editar', () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => EditTrackScreen(track: track)))),
-      ]),
+    Widget item(XpIcons i, String label, VoidCallback onTap, {bool on = false}) => Expanded(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2),
+        child: BevelButton(icon: i, label: label, onTap: onTap, on: on),
+      ),
+    );
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 10, 8, 0),
+      child: Row(
+        children: [
+          item(XpIcons.heart, 'Favorita', () => app.toggleFavorite(track), on: track.favorite),
+          item(XpIcons.film, 'GIFs', () => showGifManager(context, track)),
+          item(XpIcons.plus, 'Playlist', () => pickPlaylistAndAdd(context, track)),
+          item(XpIcons.list, 'Fila', () => showQueue(context)),
+          item(XpIcons.edit, 'Editar', () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => EditTrackScreen(track: track)))),
+        ],
+      ),
     );
   }
 
-  void _showQueue(BuildContext context) {
+  static void showQueue(BuildContext context) {
     final ps = context.read<PlayerService>();
     showModalBottomSheet<void>(
       context: context,
@@ -363,8 +418,16 @@ class _GifCarouselState extends State<GifCarousel> {
         onLongPress: () => showGifManager(context, widget.track).then((_) => _load()),
         child: Container(
           margin: const EdgeInsets.fromLTRB(10, 10, 10, 6),
-          height: 250,
-          decoration: BoxDecoration(color: Colors.black, border: Border.all(color: const Color(0xFF0B2F7A), width: 2)),
+          height: 270,
+          decoration: const BoxDecoration(
+            color: Colors.black,
+            border: Border(
+              top: BorderSide(color: Color(0xFF808080), width: 2),
+              left: BorderSide(color: Color(0xFF808080), width: 2),
+              right: BorderSide(color: Colors.white, width: 2),
+              bottom: BorderSide(color: Colors.white, width: 2),
+            ),
+          ),
           child: Stack(fit: StackFit.expand, children: [
             if (_gifs.isNotEmpty)
               AnimatedSwitcher(
@@ -705,38 +768,32 @@ class SeekBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => StreamBuilder<Duration>(
-        stream: player.positionStream,
-        builder: (context, snap) {
-          final pos = snap.data ?? Duration.zero;
-          final dur = player.duration ?? Duration.zero;
-          final max = dur.inMilliseconds.toDouble().clamp(1.0, double.infinity);
-          return Padding(
-            padding: const EdgeInsets.fromLTRB(4, 6, 4, 6),
-            child: Column(children: [
-              SliderTheme(
-                data: SliderTheme.of(context).copyWith(
-                  activeTrackColor: Xp.navy,
-                  inactiveTrackColor: Colors.white,
-                  thumbColor: const Color(0xFFDCE6F7),
-                  trackHeight: 6,
-                ),
-                child: Slider(
-                  value: pos.inMilliseconds.toDouble().clamp(0, max),
-                  max: max,
-                  onChanged: (v) => player.seek(Duration(milliseconds: v.round())),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                  Text(fmtDuration(pos), style: const TextStyle(fontSize: 11, color: Xp.blueText)),
-                  Text(fmtDuration(dur), style: const TextStyle(fontSize: 11, color: Xp.blueText)),
-                ]),
-              ),
-            ]),
-          );
-        },
+    stream: player.positionStream,
+    builder: (context, snap) {
+      final pos = snap.data ?? Duration.zero;
+      final dur = player.duration ?? Duration.zero;
+      final max = dur.inMilliseconds.toDouble().clamp(1.0, double.infinity);
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(0, 4, 0, 4),
+        child: SliderTheme(
+          data: SliderTheme.of(context).copyWith(
+            activeTrackColor: const Color(0xFF1C56D0),
+            inactiveTrackColor: const Color(0xFFD4D0C8),
+            thumbColor: const Color(0xFFF4F6FB),
+            overlayColor: const Color(0x221C56D0),
+            trackHeight: 5,
+            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 9, elevation: 2),
+            trackShape: const RectangularSliderTrackShape(),
+          ),
+          child: Slider(
+            value: pos.inMilliseconds.toDouble().clamp(0, max),
+            max: max,
+            onChanged: (v) => player.seek(Duration(milliseconds: v.round())),
+          ),
+        ),
       );
+    },
+  );
 }
 
 /// Selo no canto do GIF: mostra o clima da música e abre a lista para trocar.
