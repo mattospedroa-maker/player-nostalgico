@@ -514,7 +514,8 @@ class GlossyButton extends StatelessWidget {
   }
 }
 
-/// Ícone do crossfade: uma curva descendo (a música que sai) cruzando com uma subindo (a que entra).
+/// Ícone do crossfade: duas ondas se cruzando, a da música que sai diminuindo (clarinha)
+/// e a da que entra crescendo.
 class CrossfadeGlyph extends StatelessWidget {
   final Color color;
   final double size;
@@ -531,25 +532,24 @@ class _CrossfadePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size s) {
     final w = s.width, h = s.height;
-    // gráfico do volume: a curva da música que sai desce, a da que entra sobe (com a linha de base embaixo)
-    final top = h * .14, bottom = h * .8, l = w * .06, r = w * .94;
-    final line = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = w * .075
-      ..strokeCap = StrokeCap.round;
-    final out = Path()..moveTo(l, top);
-    final inn = Path()..moveTo(l, bottom);
-    for (var i = 1; i <= 16; i++) {
-      final t = i / 16;
-      final x = l + (r - l) * t;
-      out.lineTo(x, bottom - (bottom - top) * cos(t * pi / 2));
-      inn.lineTo(x, bottom - (bottom - top) * sin(t * pi / 2));
+    for (final growing in [false, true]) {
+      final path = Path();
+      for (var i = 0; i <= 40; i++) {
+        final t = i / 40;
+        final amp = (growing ? t : 1 - t) * h * .32;
+        final x = w * .04 + t * w * .92;
+        final y = h / 2 + sin(t * pi * 5 + (growing ? pi : 0)) * amp;
+        i == 0 ? path.moveTo(x, y) : path.lineTo(x, y);
+      }
+      canvas.drawPath(
+          path,
+          Paint()
+            ..color = growing ? color : color.withValues(alpha: .4)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = w * .08
+            ..strokeCap = StrokeCap.round
+            ..strokeJoin = StrokeJoin.round);
     }
-    canvas.drawPath(Path.from(out)..lineTo(r, bottom)..lineTo(l, bottom)..close(), Paint()..color = color.withValues(alpha: .25));
-    canvas.drawPath(out, line);
-    canvas.drawPath(inn, line);
-    canvas.drawLine(Offset(l, h * .92), Offset(r, h * .92), line..strokeWidth = w * .05);
   }
 
   @override
