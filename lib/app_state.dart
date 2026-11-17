@@ -11,6 +11,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'artist_names.dart';
 import 'db.dart';
 import 'download_service.dart';
 import 'audio_handler.dart';
@@ -300,6 +301,7 @@ class AppState extends ChangeNotifier {
   /// e reler a pasta inteira a cada toque custava tempo à toa.
   Future<void> reload({bool rereadGifs = false}) async {
     tracks = await db.allTracks();
+    ArtistNames.current = ArtistNames.fromTracks(tracks);
     playlists = await db.playlists();
     if (rereadGifs) await gifs.refresh();
     notifyListeners();

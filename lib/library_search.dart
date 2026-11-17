@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'artist_names.dart';
 import 'models.dart';
 import 'mood.dart';
 import 'play_stats.dart';
@@ -213,7 +214,7 @@ class TrackFilter {
   int get count => [artist, album, genre, mood].where((x) => x != null).length + (favoritesOnly ? 1 : 0);
 
   bool matches(Track t) =>
-      (artist == null || t.artist == artist) &&
+      (artist == null || ArtistNames.current.same(t.artist, artist!)) &&
       (album == null || t.album == album) &&
       (genre == null || t.genre.toLowerCase() == genre!.toLowerCase()) &&
       (mood == null || t.effectiveMood == mood) &&

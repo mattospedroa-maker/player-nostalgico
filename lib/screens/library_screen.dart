@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
+import '../artist_names.dart';
 import '../library_search.dart';
 import '../models.dart';
 import '../mood.dart';
@@ -356,7 +357,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 label: 'Artista:',
                 value: f.artist ?? 'Todos',
                 set: f.artist != null,
-                onTap: () => pick('Artista', group((t) => t.artist, f.copyWith(artist: () => null)), f.artist, (v) => _filter = _filter.copyWith(artist: () => v)),
+                onTap: () => pick('Artista', group((t) => ArtistNames.current.main(t.artist), f.copyWith(artist: () => null)), f.artist, (v) => _filter = _filter.copyWith(artist: () => v)),
               ),
             ),
             const SizedBox(width: 8),
@@ -472,7 +473,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
 class _LibrarySummary {
   final List<Track> tracks;
   late final List<Track> recent = ([...tracks]..sort((a, b) => b.addedAt.compareTo(a.addedAt))).take(8).toList();
-  late final int artists = tracks.map((t) => t.artist).toSet().length;
+  late final int artists = tracks.map((t) => ArtistNames.current.key(t.artist)).toSet().length;
   late final int albums = tracks.map((t) => t.album).toSet().length;
   late final int genres = tracks.map((t) => t.genre).where((g) => g.isNotEmpty).toSet().length;
   late final int duplicates = duplicateExtraCount(tracks);
