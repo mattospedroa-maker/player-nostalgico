@@ -1,3 +1,4 @@
+import 'artist_names.dart';
 import 'models.dart';
 import 'mood.dart';
 
@@ -40,7 +41,7 @@ class Recommender {
   /// álbum 1,5, época (até 3 anos) 0,5.
   static double affinity(Track a, Track b) {
     var s = 0.0;
-    final sameArtist = _known(a.artist, unknownArtist) && a.artist == b.artist;
+    final sameArtist = _known(a.artist, unknownArtist) && ArtistNames.current.same(a.artist, b.artist);
     if (sameArtist) s += 3;
     if (sameArtist && _known(a.album, unknownAlbum) && a.album == b.album) s += 1.5;
     final ga = a.genre.toLowerCase(), gb = b.genre.toLowerCase();
@@ -64,7 +65,7 @@ class Recommender {
     final byArtist = <String, int>{}, byAlbum = <String, int>{};
     for (final r in ranked) {
       final t = r.track;
-      final a = _known(t.artist, unknownArtist) ? t.artist : null;
+      final a = _known(t.artist, unknownArtist) ? ArtistNames.current.key(t.artist) : null;
       final al = a != null && _known(t.album, unknownAlbum) ? '$a\u0000${t.album}' : null;
       if ((a != null && (byArtist[a] ?? 0) >= perArtist) || (al != null && (byAlbum[al] ?? 0) >= perAlbum)) {
         later.add(r);
@@ -106,14 +107,14 @@ class Recommender {
         skips[pl.trackId] = (skips[pl.trackId] ?? 0) + 1;
         if (pl.playedAt >= since) {
           // pulou: músicas do mesmo tipo também perdem pontos
-          skipArtist[t.artist] = (skipArtist[t.artist] ?? 0) + 1;
+          skipArtist[ArtistNames.current.key(t.artist)] = (skipArtist[ArtistNames.current.key(t.artist)] ?? 0) + 1;
           if (t.genre.isNotEmpty) skipGenre[t.genre] = (skipGenre[t.genre] ?? 0) + 1;
         }
       }
       if (pl.playedAt >= hourAgo) recent.add(pl.trackId);
       if (pl.playedAt >= dayAgo && !pl.skipped) today[pl.trackId] = (today[pl.trackId] ?? 0) + 1;
       if (pl.playedAt < since || pl.skipped) continue;
-      artistW[t.artist] = (artistW[t.artist] ?? 0) + 1;
+      artistW[ArtistNames.current.key(t.artist)] = (artistW[ArtistNames.current.key(t.artist)] ?? 0) + 1;
       if (t.genre.isNotEmpty) genreW[t.genre] = (genreW[t.genre] ?? 0) + 1;
       final m = t.effectiveMood;
       if (m != null) moodW[m] = (moodW[m] ?? 0) + 1;
@@ -122,7 +123,7 @@ class Recommender {
     }
     for (final t in tracks.where((t) => t.favorite)) {
       // curtiu: mais do mesmo artista, gênero e clima
-      artistW[t.artist] = (artistW[t.artist] ?? 0) + 2;
+      artistW[ArtistNames.current.key(t.artist)] = (artistW[ArtistNames.current.key(t.artist)] ?? 0) + 2;
       if (t.genre.isNotEmpty) genreW[t.genre] = (genreW[t.genre] ?? 0) + 2;
       final m = t.effectiveMood;
       if (m != null) moodW[m] = (moodW[m] ?? 0) + 1;
@@ -136,13 +137,13 @@ class Recommender {
       if (t.id == null || recent.contains(t.id)) continue;
       var s = 0.0;
       var reason = '';
-      final a = (artistW[t.artist] ?? 0) / maxA;
+      final a = (artistW[ArtistNames.current.key(t.artist)] ?? 0) / maxA;
       final g = t.genre.isEmpty ? 0.0 : (genreW[t.genre] ?? 0) / maxG;
       final mood = t.effectiveMood;
       final m = mood == null ? 0.0 : (moodW[mood] ?? 0) / maxM;
       if (a > 0) {
         s += 3 * a;
-        reason = 'porque você ouve ${t.artist}';
+        reason = 'porque você ouve ${ArtistNames.current.main(t.artist)}';
       }
       if (g > 0) {
         s += 1.5 * g;
@@ -169,7 +170,7 @@ class Recommender {
       }
       s -= .6 * (today[t.id] ?? 0).clamp(0, 3); // já tocou hoje: dá vez para outras
       s -= 1.5 * (skips[t.id] ?? 0);
-      s -= .4 * (skipArtist[t.artist] ?? 0).clamp(0, 5) + .25 * (skipGenre[t.genre] ?? 0).clamp(0, 5);
+      s -= .4 * (skipArtist[ArtistNames.current.key(t.artist)] ?? 0).clamp(0, 5) + .25 * (skipGenre[t.genre] ?? 0).clamp(0, 5);
       if (s > 0) out.add(Recommendation(t, s, reason));
     }
     out.sort((x, y) => y.score.compareTo(x.score));
@@ -219,7 +220,7 @@ class Recommender {
   }
 
   static String _reasonFor(Track seed, Track t) {
-    if (_known(t.artist, unknownArtist) && t.artist == seed.artist) return 'mesmo artista';
+    if (_known(t.artist, unknownArtist) && ArtistNames.current.same(t.artist, seed.artist)) return 'mesmo artista';
     if (t.genre.isNotEmpty && t.genre.toLowerCase() == seed.genre.toLowerCase()) return 'mesmo gênero';
     final m = t.effectiveMood;
     if (m != null && m == seed.effectiveMood) return 'mesmo clima (${m.label.toLowerCase()})';

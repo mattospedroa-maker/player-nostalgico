@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:audio_service/audio_service.dart';
 
+import 'artist_names.dart';
 import 'audio_handler.dart';
 import 'crossfade.dart';
 import 'db.dart';
@@ -266,7 +267,8 @@ class PlayerService extends ChangeNotifier {
     final pool = library.where((t) => t.id != seed.id && !exclude.contains(t.id)).toList()..shuffle(r);
     final out = <Track>[];
     if (mode == MixMode.artist && seed.artist != unknownArtist) {
-      out.addAll(pool.where((t) => t.artist == seed.artist).take(count));
+      final names = ArtistNames.current;
+      out.addAll(pool.where((t) => names.same(t.artist, seed.artist)).take(count));
     }
     if (out.length < count) {
       final seedMood = seed.effectiveMood;
@@ -289,14 +291,15 @@ class PlayerService extends ChangeNotifier {
       final scored = [for (final t in pool) if (!taken.contains(t)) (t, vibe(t))]..sort((a, b) => b.$2.compareTo(a.$2));
       final ranked = [for (final s in scored) s.$1];
       final perArtist = <String, int>{};
+      String who(Track t) => ArtistNames.current.key(t.artist);
       for (final t in out) {
-        perArtist[t.artist] = (perArtist[t.artist] ?? 0) + 1;
+        perArtist[who(t)] = (perArtist[who(t)] ?? 0) + 1;
       }
       for (final t in ranked) {
         if (out.length >= count) break;
-        final n = perArtist[t.artist] ?? 0;
+        final n = perArtist[who(t)] ?? 0;
         if (mode == MixMode.vibe && n >= 2) continue;
-        perArtist[t.artist] = n + 1;
+        perArtist[who(t)] = n + 1;
         out.add(t);
       }
     }
@@ -306,7 +309,7 @@ class PlayerService extends ChangeNotifier {
   /// Parecença entre duas músicas: mesmo artista pesa mais, depois gênero e álbum.
   static double similarity(Track a, Track b) {
     var s = 0.0;
-    if (a.artist.isNotEmpty && a.artist == b.artist && a.artist != unknownArtist) s += 2;
+    if (a.artist.isNotEmpty && a.artist != unknownArtist && ArtistNames.current.same(a.artist, b.artist)) s += 2;
     if (a.genre.isNotEmpty && a.genre.toLowerCase() == b.genre.toLowerCase()) s += 1;
     if (a.album.isNotEmpty && a.album == b.album && a.album != unknownAlbum) s += .5;
     return s;

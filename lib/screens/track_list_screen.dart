@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
+import '../artist_names.dart';
 import '../models.dart';
 import '../theme.dart';
 import '../thumbnails.dart';
@@ -179,7 +180,7 @@ class _GroupListScreenState extends State<GroupListScreen> {
   }
 
   String _keyOf(Track t, String root) => switch (kind) {
-    GroupKind.artist => t.artist,
+    GroupKind.artist => ArtistNames.current.main(t.artist),
     GroupKind.album => t.album,
     GroupKind.genre => t.genre.isEmpty ? 'Sem gênero' : t.genre,
     GroupKind.folder => p.relative(p.dirname(t.path), from: root),
