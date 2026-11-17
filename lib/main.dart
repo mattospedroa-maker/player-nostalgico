@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' show PlatformDispatcher;
 
 
 import 'package:flutter/services.dart';
@@ -10,7 +11,10 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'app_state.dart';
 import 'audio_handler.dart';
+import 'error_log.dart';
+import 'error_notice.dart';
 import 'screens/duplicates_screen.dart';
+import 'screens/event_log_screen.dart';
 import 'screens/favorites_screen.dart';
 import 'screens/library_screen.dart';
 import 'screens/now_playing_screen.dart';
@@ -24,6 +28,7 @@ import 'xp_icons.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  _catchEverything();
   runApp(const BootScreen());
   if (Platform.isWindows || Platform.isLinux) {
     sqfliteFfiInit();
@@ -42,10 +47,15 @@ Future<void> main() async {
     );
   } catch (e) {
     // desktop/testes: sem notificação. No Android, mostra o erro para dar para corrigir.
-    if (Platform.isAndroid) audioInitError = '$e';
+    if (Platform.isAndroid) {
+      audioInitError = '$e';
+      errorLog.fail('Notificação', 'Os controles na notificação não ligaram', error: e);
+    }
   }
   final app = await AppState.create(handler: handler);
+  await errorLog.open(app.dataDir);
   SkipNotice.attach(app.player);
+  ErrorNotice.attach(errorLog);
   runApp(
     MultiProvider(
       providers: [
@@ -57,6 +67,28 @@ Future<void> main() async {
       child: const PlayerApp(),
     ),
   );
+}
+
+/// Nada de erro sumir calado: o que escapar de todos os try/catch vai para o registro.
+/// Erro de tela ou inesperado = caixa vermelha (grave); falta de internet = só registro.
+void _catchEverything() {
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+    if (details.silent) {
+      errorLog.info('App', 'Aviso interno do Flutter', details.exception);
+      return;
+    }
+    errorLog.fail('App', 'Erro ao desenhar a tela${details.library == null ? '' : ' (${details.library})'}',
+        error: details.exception, stack: details.stack, severe: true);
+  };
+  PlatformDispatcher.instance.onError = (error, stack) {
+    if (ErrorLog.isNetwork(error)) {
+      errorLog.info('App', 'Conexão falhou em segundo plano', error);
+    } else {
+      errorLog.fail('App', 'Erro inesperado', error: error, stack: stack, severe: true);
+    }
+    return true;
+  };
 }
 
 /// Tela de abertura no estilo do boot do Windows XP, enquanto a biblioteca é lida.
@@ -277,6 +309,7 @@ class _HomeShellState extends State<HomeShell> {
                         setState(() => _startOpen = false);
                         chooseMusicFolder(context);
                       }),
+                      StartItem(XpIcons.warning, 'Registro de erros', () => _openTool(const EventLogScreen())),
                       null,
                       StartItem(XpIcons.power, 'Sair…', () => SystemNavigator.pop()),
                     ],
@@ -416,7 +449,7 @@ class _ClockState extends State<_Clock> {
     final n = DateTime.now();
     return Container(
       margin: const EdgeInsets.only(left: 4),
-      padding: const EdgeInsets.symmetric(horizontal: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 8),
       alignment: Alignment.center,
       decoration: const BoxDecoration(
         gradient: LinearGradient(
@@ -427,7 +460,10 @@ class _ClockState extends State<_Clock> {
         ),
         border: Border(left: BorderSide(color: Color(0xFF092E7A))),
       ),
-      child: Text('${n.hour.toString().padLeft(2, '0')}:${n.minute.toString().padLeft(2, '0')}', style: const TextStyle(color: Colors.white, fontSize: 13)),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        TrayErrorIcon(log: errorLog),
+        Text('${n.hour.toString().padLeft(2, '0')}:${n.minute.toString().padLeft(2, '0')}', style: const TextStyle(color: Colors.white, fontSize: 13)),
+      ]),
     );
   }
 }

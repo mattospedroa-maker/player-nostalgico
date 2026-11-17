@@ -4,6 +4,8 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
+import 'error_log.dart';
+
 /// Uma tag do Last.fm e quanto ela pesa (0 a 100, o Last.fm normaliza pela tag mais usada).
 class MusicTag {
   final String name;
@@ -132,7 +134,8 @@ class TagCache {
     if (_data != null) return _data!;
     try {
       _data = file.existsSync() ? (jsonDecode(file.readAsStringSync()) as Map).cast<String, dynamic>() : {};
-    } catch (_) {
+    } catch (e) {
+      errorLog.info('GIFs', 'Cache do Last.fm estava ilegível e foi recomeçado', e);
       _data = {};
     }
     return _data!;
@@ -159,6 +162,8 @@ class TagCache {
     try {
       file.parent.createSync(recursive: true);
       file.writeAsStringSync(jsonEncode(_map));
-    } catch (_) {}
+    } catch (e) {
+      errorLog.warn('GIFs', 'Não deu para salvar o cache do Last.fm', error: e);
+    }
   }
 }

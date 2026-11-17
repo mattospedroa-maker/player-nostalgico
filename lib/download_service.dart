@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'app_state.dart';
 import 'duplicates.dart';
+import 'error_log.dart';
 import 'models.dart';
 import 'organizer.dart';
 import 'youtube_names.dart';
@@ -107,7 +108,11 @@ class DownloadService extends ChangeNotifier {
   Future<void> _maybeUpdate() {
     final today = DateTime.now().toIso8601String().substring(0, 10);
     if (app.prefs.getString('ytdlpUpdated') == today) return Future.value();
-    return _updating ??= ytdlp.update().then((_) => app.prefs.setString('ytdlpUpdated', today)).catchError((_) => true).whenComplete(() => _updating = null);
+    return _updating ??= ytdlp.update().then((_) => app.prefs.setString('ytdlpUpdated', today)).catchError((Object e) {
+      // o download tenta com a versão que já tem; se o YouTube mudou, ele falha e diz o motivo
+      errorLog.warn('YouTube', 'Não deu para atualizar o yt-dlp', error: e);
+      return true;
+    }).whenComplete(() => _updating = null);
   }
 
   void warmUp() => unawaited(_maybeUpdate());
@@ -200,8 +205,9 @@ class DownloadService extends ChangeNotifier {
           e.names = YtNames(artist: found.artist, title: found.title, album: found.album);
           markExisting([e], uncheck: !identical(e, single));
         }
-      } catch (_) {
+      } catch (err) {
         // sem internet / MusicBrainz ocupado: fica o nome do vídeo
+        errorLog.info('YouTube', 'MusicBrainz não respondeu (álbum do vídeo)', err);
       }
       e.lookingUp = false;
       notifyListeners();
@@ -227,7 +233,8 @@ class DownloadService extends ChangeNotifier {
       final raw = app.prefs.getString('ytBaixados');
       if (raw == null) return {};
       return (jsonDecode(raw) as Map).map((k, v) => MapEntry('$k', '$v'));
-    } catch (_) {
+    } catch (e) {
+      errorLog.warn('YouTube', 'A lista de vídeos já baixados estava ilegível', error: e);
       return {};
     }
   }
@@ -376,7 +383,9 @@ class DownloadService extends ChangeNotifier {
         } finally {
           try {
             Directory(tmp).deleteSync(recursive: true);
-          } catch (_) {}
+          } catch (err) {
+            errorLog.info('YouTube', 'Não deu para limpar a pasta temporária do download', err);
+          }
         }
         notifyListeners();
       }
@@ -405,8 +414,9 @@ class DownloadService extends ChangeNotifier {
         m.setArtist(n.artist);
         m.setAlbum(n.album);
       });
-    } catch (_) {
+    } catch (e) {
       // sem tags: o nome do arquivo e as pastas já dizem tudo
+      errorLog.warn('YouTube', 'Não deu para gravar as tags em "${n.title}"', error: e);
     }
     var target = targetPathFor(root, mp3.path, n.artist, n.album, title: n.title);
     final base = p.withoutExtension(target);

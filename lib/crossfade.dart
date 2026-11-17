@@ -3,6 +3,8 @@ import 'dart:math';
 
 import 'package:just_audio/just_audio.dart';
 
+import 'error_log.dart';
+
 /// Duração da transição suave (crossfade). Mude aqui para ajustar em todo o app.
 const crossfadeDuration = Duration(seconds: 4);
 
@@ -126,7 +128,8 @@ class Crossfader {
     final tail = _tail ??= _makeTail();
     try {
       await tail.load(path, d - fade);
-    } catch (_) {
+    } catch (e) {
+      errorLog.info('Transição', 'Não deu para preparar a transição suave', e);
       _preparing = false;
       return; // não deu para abrir: a música termina do jeito normal
     }
@@ -169,7 +172,8 @@ class Crossfader {
       if (gen != _gen) return;
       await main.setVolume(0);
       await main.advance(); // a próxima entra pelo caminho normal da fila
-    } catch (_) {
+    } catch (e) {
+      errorLog.info('Transição', 'A transição suave foi cancelada no meio', e);
       if (gen == _gen) cancel();
       return;
     }

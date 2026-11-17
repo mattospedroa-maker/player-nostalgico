@@ -9,6 +9,7 @@ import 'artist_names.dart';
 import 'audio_handler.dart';
 import 'crossfade.dart';
 import 'db.dart';
+import 'error_log.dart';
 import 'models.dart';
 import 'mood.dart';
 import 'recommender.dart';
@@ -285,7 +286,9 @@ class PlayerService extends ChangeNotifier {
     try {
       await player.addAudioSources([for (final t in picks) _source(t)]);
       _autoAdded.addAll(picks.map((t) => t.id));
-    } catch (_) {}
+    } catch (e) {
+      errorLog.warn('Mix', 'Não deu para completar a fila com o mix automático', error: e);
+    }
     notifyListeners();
   }
 

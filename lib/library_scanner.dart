@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:path/path.dart' as p;
 
 import 'db.dart';
+import 'error_log.dart';
 import 'filename_parser.dart';
 import 'metadata.dart';
 import 'models.dart';
@@ -55,7 +56,8 @@ class LibraryScanner {
         final int mtime;
         try {
           mtime = f.statSync().modified.millisecondsSinceEpoch;
-        } catch (_) {
+        } catch (e) {
+          errorLog.info('Biblioteca', 'Um arquivo sumiu no meio da leitura', e);
           continue; // o arquivo sumiu no meio da leitura: segue com os outros
         }
         final old = known[f.path];
@@ -113,7 +115,8 @@ void removeEmptyParents(String root, Iterable<String> files) {
         }
         if (d.listSync().isNotEmpty) break;
         d.deleteSync();
-      } catch (_) {
+      } catch (e) {
+        errorLog.info('Biblioteca', 'Não deu para apagar uma pasta vazia', e);
         break;
       }
       d = d.parent;

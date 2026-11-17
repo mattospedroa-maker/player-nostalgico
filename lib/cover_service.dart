@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 
+import 'error_log.dart';
 import 'metadata.dart';
 import 'models.dart';
 import 'organizer.dart';
@@ -64,7 +65,8 @@ class CoverService {
             onEach?.call();
             continue;
           }
-        } catch (_) {
+        } catch (err) {
+          errorLog.info('Capas', 'MusicBrainz não respondeu', err);
           online = false; // sem internet / MusicBrainz ocupado: usa só as capas dos arquivos e tenta de novo depois
         }
       }
@@ -94,7 +96,8 @@ class CoverService {
       await File(p.join(dir, '$key.jpg')).writeAsBytes(res.bodyBytes, flush: true);
       _saved();
       return true;
-    } catch (_) {
+    } catch (e) {
+      errorLog.info('Capas', 'Cover Art Archive não respondeu', e);
       return false;
     }
   }

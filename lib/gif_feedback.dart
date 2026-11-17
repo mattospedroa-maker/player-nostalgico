@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'error_log.dart';
 import 'visual_tags.dart';
 
 /// O que o usuário ensinou sobre os GIFs, guardado em `GIFs/.preferencias.json` (vai junto com a pasta).
@@ -22,7 +23,8 @@ class GifFeedback {
     if (_data != null) return _data!;
     try {
       _data = file.existsSync() ? (jsonDecode(file.readAsStringSync()) as Map).cast<String, dynamic>() : {};
-    } catch (_) {
+    } catch (e) {
+      errorLog.warn('GIFs', 'Suas notas dos GIFs (👍/👎) estavam ilegíveis e foram recomeçadas', error: e);
       _data = {};
     }
     return _data!;
@@ -34,7 +36,9 @@ class GifFeedback {
     try {
       file.parent.createSync(recursive: true);
       file.writeAsStringSync(jsonEncode(_map));
-    } catch (_) {}
+    } catch (e) {
+      errorLog.warn('GIFs', 'Não deu para salvar suas notas dos GIFs (👍/👎)', error: e);
+    }
   }
 
   // ---------- rejeitados ----------

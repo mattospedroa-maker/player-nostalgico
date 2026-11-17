@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
+import '../error_log.dart';
 import '../models.dart';
 import '../organizer.dart';
 import '../theme.dart';
@@ -71,7 +72,8 @@ class _EditTrackScreenState extends State<EditTrackScreen> {
         if (genre != null && _genre.text.trim().isEmpty) _genre.text = genre;
         messenger.showSnackBar(SnackBar(content: Text('Preenchido pelo MusicBrainz (${info.score}% de certeza). Confira e salve.')));
       }
-    } catch (_) {
+    } catch (e) {
+      errorLog.info('Editar música', 'MusicBrainz não respondeu', e);
       messenger.showSnackBar(const SnackBar(content: Text('Sem resposta do MusicBrainz. Confira a internet.')));
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -119,7 +121,7 @@ class _EditTrackScreenState extends State<EditTrackScreen> {
       ),
     );
     if (ok != true) return;
-    await app.deleteTrack(widget.track);
+    if (!await app.deleteTrack(widget.track)) return; // o balão já explicou o motivo
     nav.pop();
   }
 

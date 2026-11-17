@@ -7,6 +7,8 @@ import 'dart:convert';
 import 'package:just_audio/just_audio.dart';
 import 'package:path/path.dart' as p;
 
+import 'error_log.dart';
+
 /// Erro ao ligar a notificação de mídia (aparece no Tocando agora, para dar para corrigir).
 String? audioInitError;
 
@@ -124,7 +126,8 @@ Future<String?> gifFrame(String gifPath, String cacheDir) async {
     await out.parent.create(recursive: true);
     await out.writeAsBytes(data.buffer.asUint8List(), flush: true);
     return out.path;
-  } catch (_) {
+  } catch (e) {
+    errorLog.info('Notificação', 'Não deu para fazer a imagem da notificação a partir do GIF', e);
     return null;
   }
 }
