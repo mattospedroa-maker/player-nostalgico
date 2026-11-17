@@ -41,7 +41,7 @@ class Recommender {
   /// álbum 1,5, época (até 3 anos) 0,5.
   static double affinity(Track a, Track b) {
     var s = 0.0;
-    final sameArtist = _known(a.artist, unknownArtist) && ArtistNames.current.same(a.artist, b.artist);
+    final sameArtist = _known(a.artist, unknownArtist) && ArtistNames.current.shares(a.artist, b.artist);
     if (sameArtist) s += 3;
     if (sameArtist && _known(a.album, unknownAlbum) && a.album == b.album) s += 1.5;
     final ga = a.genre.toLowerCase(), gb = b.genre.toLowerCase();
@@ -220,7 +220,7 @@ class Recommender {
   }
 
   static String _reasonFor(Track seed, Track t) {
-    if (_known(t.artist, unknownArtist) && ArtistNames.current.same(t.artist, seed.artist)) return 'mesmo artista';
+    if (_known(t.artist, unknownArtist) && ArtistNames.current.shares(t.artist, seed.artist)) return 'mesmo artista';
     if (t.genre.isNotEmpty && t.genre.toLowerCase() == seed.genre.toLowerCase()) return 'mesmo gênero';
     final m = t.effectiveMood;
     if (m != null && m == seed.effectiveMood) return 'mesmo clima (${m.label.toLowerCase()})';

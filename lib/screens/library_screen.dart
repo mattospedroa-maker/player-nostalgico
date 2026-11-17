@@ -332,13 +332,16 @@ class _LibraryScreenState extends State<LibraryScreen> {
     }
 
     // opções contam só as músicas que passam pelos outros filtros (assim nunca dá lista vazia)
-    List<(String?, String, int)> group(String Function(Track) key, TrackFilter others, {bool skipEmpty = false}) {
+    // a chave pode dar mais de um valor por música (parceria conta para cada artista)
+    List<(String?, String, int)> group(Object Function(Track) key, TrackFilter others, {bool skipEmpty = false}) {
       final m = <String, int>{};
       for (final t in app.tracks) {
         if (!others.matches(t)) continue;
-        final k = key(t);
-        if (skipEmpty && k.isEmpty) continue;
-        m[k] = (m[k] ?? 0) + 1;
+        final v = key(t);
+        for (final k in v is Iterable<String> ? v : ['$v']) {
+          if (skipEmpty && k.isEmpty) continue;
+          m[k] = (m[k] ?? 0) + 1;
+        }
       }
       final keys = m.keys.toList()..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
       return [(null, 'Todos', -1), for (final k in keys) (k, k, m[k]!)];
@@ -357,7 +360,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 label: 'Artista:',
                 value: f.artist ?? 'Todos',
                 set: f.artist != null,
-                onTap: () => pick('Artista', group((t) => ArtistNames.current.main(t.artist), f.copyWith(artist: () => null)), f.artist, (v) => _filter = _filter.copyWith(artist: () => v)),
+                onTap: () => pick('Artista', group((t) => ArtistNames.current.names(t.artist), f.copyWith(artist: () => null)), f.artist, (v) => _filter = _filter.copyWith(artist: () => v)),
               ),
             ),
             const SizedBox(width: 8),
@@ -473,7 +476,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
 class _LibrarySummary {
   final List<Track> tracks;
   late final List<Track> recent = ([...tracks]..sort((a, b) => b.addedAt.compareTo(a.addedAt))).take(8).toList();
-  late final int artists = tracks.map((t) => ArtistNames.current.key(t.artist)).toSet().length;
+  late final int artists = {for (final t in tracks) ...ArtistNames.current.names(t.artist)}.length;
   late final int albums = tracks.map((t) => t.album).toSet().length;
   late final int genres = tracks.map((t) => t.genre).where((g) => g.isNotEmpty).toSet().length;
   late final int duplicates = duplicateExtraCount(tracks);

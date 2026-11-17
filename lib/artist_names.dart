@@ -1,7 +1,8 @@
 import 'models.dart';
 
-/// Junta parcerias no artista principal: "MC VV & BOFE", "MC VV (ft. LAUNZERA)", "MC VV prod MC VV"
-/// e "MC VV, BOFE & JEAN XEROSO" viram todos "MC VV".
+/// Separa parcerias: "MC VV & BOFE", "MC VV (ft. LAUNZERA)", "MC VV prod MC VV" e
+/// "MC VV, BOFE & JEAN XEROSO" têm MC VV como artista principal ([main]); [names] dá todos os
+/// creditados (MC VV, BOFE, JEAN XEROSO...), para a música aparecer na página de cada um.
 ///
 /// Duas regras:
 /// * "feat.", "ft.", "featuring", "prod", "part." sempre separam (ninguém tem isso no nome da banda).
@@ -21,6 +22,12 @@ class ArtistNames {
   /// chave do artista principal -> nome mostrado (a grafia mais comum)
   final Map<String, String> _display = {};
 
+  /// texto original do artista -> todos os artistas creditados (chaves; o principal primeiro)
+  final Map<String, List<String>> _credits = {};
+
+  /// Produtor ("prod X") conta como artista da música? Por padrão não: só quem canta/toca.
+  static const includeProducers = false;
+
   ArtistNames._();
 
   /// Monta os grupos a partir das músicas da biblioteca.
@@ -29,7 +36,8 @@ class ArtistNames {
       if (t.artist != unknownArtist) t.artist,
   ]);
 
-  factory ArtistNames.from(Iterable<String> artists) {
+  factory ArtistNames.from(Iterable<String> source) {
+    final artists = source.toList();
     final g = ArtistNames._();
     final heads = <String>{};
     for (final a in artists) {
@@ -85,6 +93,15 @@ class ArtistNames {
       final shown = _cutTo(h, main);
       (votes[main] ??= {})[shown] = ((votes[main]![shown]) ?? 0) + 1;
     }
+    // parceiros: o resto da parceria depois do principal e quem vem no "feat."
+    final all = artists.toSet();
+    for (final a in all) {
+      final pieces = g._piecesOf(a);
+      g._credits[a] = [for (final p in pieces) p.$1];
+      for (final p in pieces.skip(1)) {
+        (votes[p.$1] ??= {})[p.$2] = ((votes[p.$1]![p.$2]) ?? 0) + 1;
+      }
+    }
     for (final e in votes.entries) {
       final best = e.value.entries.reduce((a, b) => b.value > a.value || (b.value == a.value && b.key.length < a.key.length) ? b : a);
       g._display[e.key] = best.key;
@@ -135,4 +152,78 @@ class ArtistNames {
   }
 
   bool same(String a, String b) => key(a) == key(b);
+
+  /// (chave, grafia original) de cada artista creditado: principal, resto da parceria, "feat.".
+  List<(String, String)> _piecesOf(String artist) {
+    final a = artist.replaceAll(RegExp(r'\s+'), ' ').trim();
+    final head = stripFeat(a);
+    final hk = _norm(head);
+    final mk = _keyOf(a);
+    final out = <(String, String)>[(mk, _cutTo(head, mk))];
+    final seen = {mk};
+    void add(String original) {
+      final o = original.replaceAll(RegExp(r'^[\s,&(\[.\-–]+|[\s,&)\].\-–]+$'), '').trim();
+      final k = _norm(o);
+      if (k.isEmpty || !seen.add(k)) return;
+      out.add((k, o));
+    }
+
+    void splitAll(String text) {
+      var last = 0;
+      for (final m in _weak.allMatches(text)) {
+        if (m.start == 0) continue;
+        add(text.substring(last, m.start));
+        last = m.end;
+      }
+      add(text.substring(last));
+    }
+
+    // resto da parceria: "MC VV, BOFE & JEAN XEROSO" -> BOFE, JEAN XEROSO
+    if (mk != hk && hk.startsWith(mk) && head.length == hk.length) {
+      final rest = head.substring(mk.length);
+      splitAll(rest);
+    }
+    // feat./ft./prod: "MC VV (ft. LAUNZERA)" -> LAUNZERA
+    final m = _strong.firstMatch(a);
+    if (m != null && m.start > 0) {
+      final kind = m.group(1)!.toLowerCase();
+      final isProd = kind.startsWith('prod');
+      if (!isProd || includeProducers) {
+        var tail = a.substring(m.end);
+        // um segundo marcador ("ft. X prod Y") corta o trecho
+        final next = _strong.firstMatch(tail);
+        if (next != null) {
+          final nk = next.group(1)!.toLowerCase();
+          final keepNext = !nk.startsWith('prod') || includeProducers;
+          if (!keepNext) tail = tail.substring(0, next.start);
+          if (keepNext) tail = tail.replaceRange(next.start, next.end, ',');
+        }
+        tail = tail.replaceAll(RegExp(r'[()\[\]]'), ' ');
+        splitAll(tail);
+      }
+    }
+    return out;
+  }
+
+  List<String> _creditKeys(String artist) {
+    if (artist == unknownArtist) return const [unknownArtist];
+    return _credits[artist] ?? (_credits[artist] = [for (final p in _piecesOf(artist)) p.$1]);
+  }
+
+  /// Todos os artistas da música, para mostrar: "MC VV & BOFE" -> ["MC VV", "BOFE"].
+  /// Usado só onde se procura por artista (tela Artistas, filtro Artista): a música aparece em cada um.
+  List<String> names(String artist) {
+    if (artist == unknownArtist) return [artist];
+    return [for (final k in _creditKeys(artist)) _display[k] ?? k];
+  }
+
+  /// A música tem esse artista entre os creditados? (nome como aparece em [names])
+  bool credits(String artist, String name) => _creditKeys(artist).contains(_norm(name)) || names(artist).contains(name);
+
+  /// As duas músicas têm algum artista em comum?
+  bool shares(String a, String b) {
+    if (a == unknownArtist || b == unknownArtist) return false;
+    final kb = _creditKeys(b);
+    return _creditKeys(a).any(kb.contains);
+  }
 }

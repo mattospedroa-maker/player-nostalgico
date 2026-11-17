@@ -239,7 +239,11 @@ class _GroupListScreenState extends State<GroupListScreen> {
     final root = app.sourceRoot ?? '';
     final groups = <String, List<Track>>{};
     for (final t in app.tracks) {
-      groups.putIfAbsent(_keyOf(t, root), () => []).add(t);
+      // parceria ("MC VV & BOFE") aparece na página de cada artista
+      final ks = kind == GroupKind.artist ? ArtistNames.current.names(t.artist) : [_keyOf(t, root)];
+      for (final k in ks) {
+        groups.putIfAbsent(k, () => []).add(t);
+      }
     }
     final keys = groups.keys.toList()..sort(compareForIndex);
     final grid = _grid(app);
