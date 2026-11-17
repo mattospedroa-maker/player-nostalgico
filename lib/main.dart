@@ -18,6 +18,7 @@ import 'screens/event_log_screen.dart';
 import 'screens/favorites_screen.dart';
 import 'screens/library_screen.dart';
 import 'screens/now_playing_screen.dart';
+import 'screens/options_screen.dart';
 import 'screens/organizer_screen.dart';
 import 'screens/playlists_screen.dart';
 import 'screens/youtube_screen.dart';
@@ -310,6 +311,7 @@ class _HomeShellState extends State<HomeShell> {
                         chooseMusicFolder(context);
                       }),
                       StartItem(XpIcons.warning, 'Registro de erros', () => _openTool(const EventLogScreen())),
+                      StartItem(XpIcons.gear, 'Opções…', () => _openTool(const OptionsScreen())),
                       null,
                       StartItem(XpIcons.power, 'Sair…', () => SystemNavigator.pop()),
                     ],

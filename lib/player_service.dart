@@ -21,7 +21,7 @@ enum MixMode { artist, vibe }
 /// Toca a fila de músicas e registra o histórico (usado pela recomendação).
 /// A fila mostrada vem sempre da lista real do player, e toda mudança na fila passa por uma fila única
 /// de operações, para a tela nunca mostrar uma música diferente da que está tocando.
-class PlayerService extends ChangeNotifier {
+class PlayerService extends ChangeNotifier implements CrossfadeSettings {
   final AppDb db;
   final AudioPlayer player = AudioPlayer();
   DateTime? _startedAt;
@@ -51,6 +51,7 @@ class PlayerService extends ChangeNotifier {
   /// Transição suave entre músicas (só no fim natural de cada uma).
   late final Crossfader crossfader;
   void Function(bool)? onCrossfadeChanged;
+  void Function(Duration out, Duration inn)? onCrossfadeTimesChanged;
 
   /// Avisado depois que uma música entra no histórico.
   void Function()? onPlayLogged;
@@ -136,13 +137,29 @@ class PlayerService extends ChangeNotifier {
 
   bool get playing => player.playing;
 
+  @override
   bool get crossfade => crossfader.enabled;
 
   /// Liga/desliga o crossfade na hora (desligar no meio de uma transição termina ela na hora).
+  @override
   void setCrossfade(bool on) {
     if (on == crossfader.enabled) return;
     crossfader.enabled = on;
     onCrossfadeChanged?.call(on);
+    notifyListeners();
+  }
+
+  @override
+  Duration get fadeOut => crossfader.fadeOut;
+  @override
+  Duration get fadeIn => crossfader.fadeIn;
+
+  /// Tempos da transição (Opções → Reprodução): quanto a que sai leva para sumir e a próxima para aparecer.
+  @override
+  void setCrossfadeTimes(Duration out, Duration inn) {
+    if (out == crossfader.fadeOut && inn == crossfader.fadeIn) return;
+    crossfader.setTimes(out, inn);
+    onCrossfadeTimesChanged?.call(out, inn);
     notifyListeners();
   }
   bool get shuffle => _shuffle;

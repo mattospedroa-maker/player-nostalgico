@@ -9,7 +9,6 @@ import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
-import '../crossfade.dart';
 import '../audio_handler.dart';
 import '../filename_parser.dart';
 import '../gif_fetcher.dart';
@@ -64,7 +63,7 @@ class NowPlayingScreen extends StatelessWidget {
               XpMenuItem('Próxima', t == null ? null : ps.next),
               XpMenuItem('Aleatório', ps.toggleShuffle, checked: ps.shuffle),
               XpMenuItem('Repetir', ps.cycleLoop, checked: ps.loop != LoopMode.off),
-              XpMenuItem('Transição suave (${crossfadeDuration.inSeconds}s)', () => ps.setCrossfade(!ps.crossfade), checked: ps.crossfade),
+              XpMenuItem('Transição suave (sai ${ps.fadeOut.inSeconds}s, entra ${ps.fadeIn.inSeconds}s)', () => ps.setCrossfade(!ps.crossfade), checked: ps.crossfade),
             ],
           ),
           (

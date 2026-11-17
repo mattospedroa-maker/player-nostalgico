@@ -265,4 +265,78 @@ void main() {
       expect(tail.loads, 0);
     });
   });
+
+  test('saída longa e entrada curta: a próxima chega ao máximo antes, a anterior continua sumindo', () {
+    fakeAsync((a) {
+      final (m, c) = setup(a);
+      c.setTimes(const Duration(seconds: 8), const Duration(seconds: 2));
+      m.play();
+      a.elapse(const Duration(seconds: 50));
+      expect(tail.loaded, isNull);
+      a.elapse(const Duration(milliseconds: 2200)); // 52,2s: começa 8s antes do fim
+      expect(tail.playing, isTrue);
+      expect(m.currentPath, '/b.mp3');
+      a.elapse(const Duration(seconds: 3)); // passou os 2s de entrada
+      expect(m.volume, closeTo(1, 1e-9), reason: 'a próxima já no volume cheio');
+      expect(tail.playing, isTrue, reason: 'a anterior ainda está sumindo');
+      expect(tail.volume, inInclusiveRange(.3, .95));
+      a.elapse(const Duration(seconds: 5));
+      expect(tail.playing, isFalse);
+      expect(c.fading, isFalse);
+      expect(m.advances, 1);
+    });
+  });
+
+  test('saída curta e entrada longa: a anterior para no fim dela e a próxima continua subindo', () {
+    fakeAsync((a) {
+      final (m, c) = setup(a);
+      c.setTimes(const Duration(seconds: 2), const Duration(seconds: 6));
+      m.play();
+      a.elapse(const Duration(milliseconds: 58200)); // começa 2s antes do fim
+      expect(tail.playing, isTrue);
+      a.elapse(const Duration(seconds: 2, milliseconds: 300));
+      expect(tail.playing, isFalse, reason: 'a anterior acabou');
+      expect(c.fading, isTrue);
+      expect(m.volume, inInclusiveRange(.3, .9));
+      a.elapse(const Duration(seconds: 4));
+      expect(c.fading, isFalse);
+      expect(m.volume, 1);
+    });
+  });
+
+  test('entrada 0: a próxima já entra no volume cheio', () {
+    fakeAsync((a) {
+      final (m, c) = setup(a);
+      c.setTimes(const Duration(seconds: 3), Duration.zero);
+      m.play();
+      a.elapse(const Duration(milliseconds: 57300));
+      expect(tail.playing, isTrue);
+      a.elapse(const Duration(milliseconds: 200));
+      expect(m.volume, 1);
+      expect(tail.volume, lessThan(1));
+    });
+  });
+
+  test('trocar os tempos com a transição já marcada remarca no horário novo', () {
+    fakeAsync((a) {
+      final (m, c) = setup(a);
+      m.play();
+      a.elapse(const Duration(seconds: 40));
+      c.setTimes(const Duration(seconds: 10), const Duration(seconds: 4));
+      a.elapse(const Duration(seconds: 8)); // 48s
+      expect(tail.loaded, isNull);
+      a.elapse(const Duration(milliseconds: 700)); // 48,7s
+      expect(tail.loaded, '/a.mp3', reason: 'prepara antes dos 10s finais');
+      a.elapse(const Duration(milliseconds: 1500)); // 50,2s
+      expect(tail.playing, isTrue);
+      expect(m.advances, 1);
+    });
+  });
+
+  test('curvas separadas: cada lado segue o próprio tempo', () {
+    final (o, i) = fadeVolumes(1, .5);
+    expect(o, closeTo(0, 1e-9));
+    expect(i, closeTo(.707, .01));
+    expect(fadeVolumes(0, 0), (1.0, 0.0));
+  });
 }

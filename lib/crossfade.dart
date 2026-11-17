@@ -1,18 +1,35 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart' show Listenable;
 import 'package:just_audio/just_audio.dart';
 
 import 'error_log.dart';
 
-/// Duração da transição suave (crossfade). Mude aqui para ajustar em todo o app.
-const crossfadeDuration = Duration(seconds: 4);
+/// Tempos padrão da transição suave (o usuário ajusta em Opções → Reprodução).
+const defaultFadeOut = Duration(seconds: 4);
+const defaultFadeIn = Duration(seconds: 4);
+
+/// Limites dos controles em Opções (em segundos). A saída precisa de pelo menos 1 s;
+/// a entrada pode ser 0 (a próxima já começa no volume cheio).
+const fadeOutRange = (1, 15);
+const fadeInRange = (0, 15);
 
 /// Curva de volume de potência constante: no meio as duas ficam em ~71%, então a soma não "afunda"
 /// nem estoura. [t] vai de 0 (começo) a 1 (fim). Devolve (volume da que sai, volume da que entra).
-(double, double) crossfadeVolumes(double t) {
-  final x = t.clamp(0.0, 1.0) * pi / 2;
-  return (cos(x), sin(x));
+(double, double) crossfadeVolumes(double t) => fadeVolumes(t, t);
+
+/// Volumes com saída e entrada de tamanhos diferentes: [tOut] é quanto da saída já passou (0 a 1)
+/// e [tIn] quanto da entrada. Cada um segue a mesma curva de potência constante.
+(double, double) fadeVolumes(double tOut, double tIn) => (cos(tOut.clamp(0.0, 1.0) * pi / 2), sin(tIn.clamp(0.0, 1.0) * pi / 2));
+
+/// O que a janela Opções mexe da transição (o PlayerService; um falso nos testes).
+abstract class CrossfadeSettings implements Listenable {
+  bool get crossfade;
+  Duration get fadeOut;
+  Duration get fadeIn;
+  void setCrossfade(bool on);
+  void setCrossfadeTimes(Duration out, Duration inn);
 }
 
 /// O player principal, visto pelo crossfade (dá para trocar por um falso nos testes).
@@ -47,10 +64,11 @@ abstract class TailDeck {
 
 /// Crossfade só no fim natural da música.
 ///
-/// Como funciona: pouco antes dos últimos [crossfadeDuration], o finalzinho da música atual é preparado
+/// Como funciona: pouco antes dos últimos [fadeOut], o finalzinho da música atual é preparado
 /// num segundo player (só esse arquivo, lido do disco aos poucos, sem carregar na memória). Na hora,
 /// o segundo player continua a música atual do ponto exato, o player principal já passa para a próxima
-/// faixa com volume 0, e os dois volumes se cruzam (um desce, o outro sobe) com as músicas tocando juntas.
+/// faixa com volume 0, e os dois volumes se cruzam com as músicas tocando juntas: a que sai desce em [fadeOut]
+/// e a que entra sobe em [fadeIn] (os dois começam no mesmo instante; podem ter tamanhos diferentes).
 /// No fim, o segundo player para e solta o arquivo; o principal segue normal, com a fila, a notificação
 /// e o histórico de sempre (a troca de faixa é a mesma de quando uma música termina).
 ///
@@ -59,7 +77,14 @@ abstract class TailDeck {
 class Crossfader {
   final FadeDeck main;
   final TailDeck Function() _makeTail;
-  final Duration fade;
+
+  /// Quanto tempo a música que acaba leva para sumir (a transição começa esse tempo antes do fim).
+  Duration fadeOut;
+
+  /// Quanto tempo a próxima leva para chegar ao volume cheio.
+  Duration fadeIn;
+
+  Duration get fade => fadeOut;
 
   /// Tempo para o segundo player abrir o arquivo antes da transição.
   static const _preload = Duration(milliseconds: 1500);
@@ -80,7 +105,7 @@ class Crossfader {
   /// Avisado quando uma transição começa ou termina.
   void Function()? onFadingChanged;
 
-  Crossfader(this.main, this._makeTail, {this.fade = crossfadeDuration}) {
+  Crossfader(this.main, this._makeTail, {this.fadeOut = defaultFadeOut, this.fadeIn = defaultFadeIn}) {
     _sub = main.changes.listen((_) => _schedule());
   }
 
@@ -95,6 +120,17 @@ class Crossfader {
     } else {
       cancel(); // desligou no meio: termina na hora, sem sobrar som
     }
+  }
+
+  /// Troca os tempos. Se uma transição já está acontecendo, ela termina com os tempos antigos;
+  /// se só estava marcada (ou preparando), é marcada de novo com os novos.
+  void setTimes(Duration out, Duration inn) {
+    if (out == fadeOut && inn == fadeIn) return;
+    fadeOut = out;
+    fadeIn = inn;
+    if (_fading) return;
+    if (_timer != null || _preparing) cancel();
+    _schedule();
   }
 
   /// Marca o próximo momento da transição (ou desmarca, se não cabe).
@@ -178,17 +214,24 @@ class Crossfader {
       return;
     }
     if (gen != _gen) return;
-    final steps = fade.inMilliseconds / _tick.inMilliseconds;
+    final outMs = fadeOut.inMilliseconds, inMs = fadeIn.inMilliseconds;
+    var tailOn = true;
     _ramp = Timer.periodic(_tick, (timer) {
       if (gen != _gen) return;
-      final t = timer.tick / steps;
-      final (out, inn) = crossfadeVolumes(t);
-      if (t >= 1) {
+      final ms = timer.tick * _tick.inMilliseconds;
+      final tOut = ms / outMs, tIn = inMs == 0 ? 1.0 : ms / inMs;
+      final (out, inn) = fadeVolumes(tOut, tIn);
+      if (tOut >= 1 && tIn >= 1) {
         _finish();
+        return;
+      }
+      if (tOut >= 1) {
+        if (tailOn) unawaited(tail.stop()); // a que saía acabou; a próxima ainda está subindo
+        tailOn = false;
       } else {
         unawaited(tail.setVolume(out));
-        unawaited(main.setVolume(inn));
       }
+      unawaited(main.setVolume(inn));
     });
   }
 
