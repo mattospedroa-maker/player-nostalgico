@@ -313,7 +313,10 @@ class XpMenuBar extends StatelessWidget {
 /// Barra de status no rodapé da janela ("Pronto", contagens…).
 class XpStatusBar extends StatelessWidget {
   final List<String> parts;
-  const XpStatusBar(this.parts, {super.key});
+
+  /// Quando há, a primeira parte vira um aviso amarelo com ⚠ (ex.: "2 músicas não abriram").
+  final bool warn;
+  const XpStatusBar(this.parts, {super.key, this.warn = false});
 
   @override
   Widget build(BuildContext context) => Container(
@@ -331,20 +334,28 @@ class XpStatusBar extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 6),
               alignment: Alignment.centerLeft,
-              decoration: const BoxDecoration(
-                border: Border(
+              decoration: BoxDecoration(
+                color: warn && i == 0 ? const Color(0xFFFFF6C8) : null,
+                border: const Border(
                   top: BorderSide(color: Xp.beigeBorder),
                   left: BorderSide(color: Xp.beigeBorder),
                   right: BorderSide(color: Colors.white),
                   bottom: BorderSide(color: Colors.white),
                 ),
               ),
-              child: Text(
-                parts[i],
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 12, color: Color(0xFF222222)),
-              ),
+              child: Row(mainAxisSize: i == 0 ? MainAxisSize.max : MainAxisSize.min, children: [
+                if (warn && i == 0) ...[const XpIcon(XpIcons.warning, size: 14), const SizedBox(width: 5)],
+                Flexible(
+                  child: Text(
+                    parts[i],
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: warn && i == 0
+                        ? const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF7A4B00))
+                        : const TextStyle(fontSize: 12, color: Color(0xFF222222)),
+                  ),
+                ),
+              ]),
             ),
           ),
         ],

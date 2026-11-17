@@ -1,7 +1,9 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:player_nostalgico/models.dart';
 import 'package:player_nostalgico/skip_guard.dart';
+import 'package:player_nostalgico/skip_notice.dart';
 
 void main() {
   group('SkipGuard', () {
@@ -96,6 +98,21 @@ void main() {
       expect(PlaybackFailure.reasonFor('${dir.path}/sumiu.mp3'), FailReason.missing);
       expect(PlaybackFailure.reasonFor(broken.path), FailReason.broken);
       expect(PlaybackFailure(broken.path, FailReason.broken).reasonText, 'arquivo com defeito');
+    });
+  });
+
+  group('Balão de música pulada', () {
+    Track t(String title) => Track(path: '/m/$title.mp3', title: title, artist: 'X', album: '', addedAt: 0, modifiedAt: 0);
+    test('uma música: diz qual e o motivo', () {
+      final (title, body) = SkipNotice.balloonText([(t('Ritual'), PlaybackFailure('/m/Ritual.mp3', FailReason.missing))]);
+      expect(title, 'Música pulada');
+      expect(body, contains('"Ritual" não abriu (arquivo apagado)'));
+    });
+    test('várias seguidas viram um balão só', () {
+      final f = PlaybackFailure('/x', FailReason.broken);
+      final (title, body) = SkipNotice.balloonText([for (final n in ['A', 'B', 'C', 'D', 'E']) (t(n), f)]);
+      expect(title, '5 músicas puladas');
+      expect(body, startsWith('A, B, C e mais 2 não abriram.'));
     });
   });
 }
