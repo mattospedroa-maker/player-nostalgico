@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:player_nostalgico/artist_names.dart';
+import 'package:player_nostalgico/library_search.dart';
 import 'package:player_nostalgico/models.dart';
 import 'package:player_nostalgico/player_service.dart';
 
@@ -73,5 +74,41 @@ void main() {
     ArtistNames.current = ArtistNames.fromTracks(lib);
     final picks = PlayerService.pickMix(lib.first, lib, mode: MixMode.artist, count: 2);
     expect(picks.map((t) => t.id).toSet(), {2, 3});
+  });
+
+  test('parceria aparece em cada artista: MC VV & BOFE -> MC VV e BOFE', () {
+    const lib = [
+      'MC VV & BOFE',
+      'MC VV & PREDO',
+      'MC VV (ft. LAUNZERA)',
+      'MC VV prod MC VV',
+      'MC VV, BOFE & JEAN XEROSO',
+      'BOFE',
+      'Simon & Garfunkel',
+      'Anitta feat. Cardi B & Ludmilla',
+      'Kanye West (prod. Mike Dean)',
+    ];
+    final g = ArtistNames.from(lib);
+    expect(g.names('MC VV & BOFE'), ['MC VV', 'BOFE']);
+    expect(g.names('MC VV & PREDO'), ['MC VV', 'PREDO']);
+    expect(g.names('MC VV (ft. LAUNZERA)'), ['MC VV', 'LAUNZERA']);
+    expect(g.names('MC VV prod MC VV'), ['MC VV']);
+    expect(g.names('MC VV, BOFE & JEAN XEROSO'), ['MC VV', 'BOFE', 'JEAN XEROSO']);
+    expect(g.names('Simon & Garfunkel'), ['Simon & Garfunkel']);
+    expect(g.names('Anitta feat. Cardi B & Ludmilla'), ['Anitta', 'Cardi B', 'Ludmilla']);
+    expect(g.names('Kanye West (prod. Mike Dean)'), ['Kanye West'], reason: 'produtor não conta como artista');
+    expect(g.credits('MC VV, BOFE & JEAN XEROSO', 'BOFE'), isTrue);
+    expect(g.credits('MC VV & PREDO', 'BOFE'), isFalse);
+    expect(g.shares('BOFE', 'MC VV & BOFE'), isTrue);
+    expect(g.shares('BOFE', 'MC VV & PREDO'), isFalse);
+  });
+
+  test('filtro de artista: BOFE acha as parcerias, e a música não se repete', () {
+    final lib = [_t(1, 'MC VV & BOFE'), _t(2, 'MC VV & PREDO'), _t(3, 'BOFE'), _t(4, 'MC VV')];
+    ArtistNames.current = ArtistNames.fromTracks(lib);
+    final bofe = lib.where(const TrackFilter(artist: 'BOFE').matches).map((t) => t.id).toList();
+    expect(bofe, [1, 3]);
+    final vv = lib.where(const TrackFilter(artist: 'MC VV').matches).map((t) => t.id).toList();
+    expect(vv, [1, 2, 4]);
   });
 }

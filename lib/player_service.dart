@@ -340,7 +340,7 @@ class PlayerService extends ChangeNotifier {
     final out = <Track>[];
     if (mode == MixMode.artist && seed.artist != unknownArtist) {
       final names = ArtistNames.current;
-      out.addAll(pool.where((t) => names.same(t.artist, seed.artist)).take(count));
+      out.addAll(pool.where((t) => names.shares(t.artist, seed.artist)).take(count));
     }
     if (out.length < count) {
       final seedMood = seed.effectiveMood;
@@ -381,7 +381,7 @@ class PlayerService extends ChangeNotifier {
   /// Parecença entre duas músicas: mesmo artista pesa mais, depois gênero e álbum.
   static double similarity(Track a, Track b) {
     var s = 0.0;
-    if (a.artist.isNotEmpty && a.artist != unknownArtist && ArtistNames.current.same(a.artist, b.artist)) s += 2;
+    if (a.artist.isNotEmpty && a.artist != unknownArtist && ArtistNames.current.shares(a.artist, b.artist)) s += 2;
     if (a.genre.isNotEmpty && a.genre.toLowerCase() == b.genre.toLowerCase()) s += 1;
     if (a.album.isNotEmpty && a.album == b.album && a.album != unknownAlbum) s += .5;
     return s;
