@@ -4,6 +4,8 @@ import 'dart:typed_data';
 
 import 'package:audio_metadata_reader/audio_metadata_reader.dart' as amr;
 
+import 'error_log.dart';
+
 class TagInfo {
   final String title;
   final String artist;
@@ -32,7 +34,8 @@ class FileMetadataReader implements MetadataReader {
     if (paths.isEmpty) return const [];
     try {
       return await Isolate.run(() => [for (final p in paths) readTagsSync(p)]);
-    } catch (_) {
+    } catch (e) {
+      errorLog.info('Biblioteca', 'Leitura das tags em segundo plano falhou; lendo do jeito lento', e);
       return [for (final p in paths) readTagsSync(p)]; // sem isolate: lê aqui mesmo, como antes
     }
   }
@@ -60,7 +63,9 @@ class FileMetadataReader implements MetadataReader {
     try {
       final m = amr.readMetadata(File(path), getImage: true);
       if (m.pictures.isNotEmpty) return m.pictures.first.bytes;
-    } catch (_) {}
+    } catch (e) {
+      errorLog.info('Capas', 'Não deu para ler a capa de ${path.split(Platform.pathSeparator).last}', e);
+    }
     // capa da pasta (cover.jpg / folder.jpg)
     final dir = File(path).parent;
     for (final n in const ['cover.jpg', 'folder.jpg', 'cover.png', 'folder.png', 'Cover.jpg', 'Folder.jpg']) {

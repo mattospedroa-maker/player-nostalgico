@@ -3,6 +3,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
+import '../error_log.dart';
 import '../gif_fetcher.dart';
 import '../gif_providers.dart';
 import '../lastfm.dart';
@@ -109,6 +110,7 @@ class _GifVibeScreenState extends State<GifVibeScreen> {
           g.pager = null;
         }
       } on GiphyException catch (e) {
+        errorLog.info('GIFs', 'GIPHY: ${e.message}');
         if (mounted) setState(() => _error = e.error.name);
         if (e.error == GiphyError.noKey || e.error == GiphyError.invalidKey) {
           if (mounted) setState(() => g.loading = false);
@@ -150,7 +152,8 @@ class _GifVibeScreenState extends State<GifVibeScreen> {
         app.likedWeb(widget.track, r); // o termo que achou esse GIF ganha força
         messenger.showSnackBar(const SnackBar(content: Text('GIF salvo na música. Ele já entra na roda do Tocando agora.')));
       }
-    } catch (_) {
+    } catch (e) {
+      errorLog.info('GIFs', 'Falhou ao baixar um GIF do GIPHY', e);
       messenger.showSnackBar(const SnackBar(content: Text('Falhou ao baixar. Confira a internet.')));
     } finally {
       if (mounted) setState(() => _downloading.remove(id));

@@ -4,6 +4,8 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 
+import 'error_log.dart';
+
 /// Resultado de uma execução do yt-dlp.
 class YtRun {
   final int exitCode;
@@ -106,7 +108,9 @@ class YtDlp {
     if (!Platform.isAndroid) return;
     try {
       await _channel.invokeMethod<void>('notify', {'title': title, 'text': text, 'progress': progress, 'done': done});
-    } catch (_) {}
+    } catch (e) {
+      errorLog.info('YouTube', 'Não deu para atualizar a notificação do download', e);
+    }
   }
 
   /// Informações do vídeo ou da playlist (JSON do -J).

@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'error_log.dart';
 import 'gif_feedback.dart';
 import 'gif_providers.dart';
 import 'visual_tags.dart';
@@ -128,6 +129,7 @@ class PlayerVisuals {
         lists.add(page.take(per).toList());
       } on GiphyException catch (e) {
         if (e.error == GiphyError.noKey || e.error == GiphyError.invalidKey) rethrow;
+        errorLog.info('GIFs', 'GIPHY não respondeu para "${q.text}"', e);
         lists.add(const []);
       }
     }

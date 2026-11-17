@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
+import 'error_log.dart';
 import 'visual_tags.dart';
 
 /// O que a Wikipédia conta sobre o videoclipe da música.
@@ -50,7 +51,8 @@ class ClipInfoClient {
       }
       final j = jsonDecode(utf8.decode(res.bodyBytes));
       return j is Map<String, dynamic> ? j : null;
-    } catch (_) {
+    } catch (e) {
+      errorLog.info('GIFs', 'Wikipédia não respondeu (cenas do clipe)', e);
       reached = false;
       return null;
     }
@@ -148,7 +150,8 @@ class ClipCache {
     if (_data != null) return _data!;
     try {
       _data = file.existsSync() ? (jsonDecode(file.readAsStringSync()) as Map).cast<String, dynamic>() : {};
-    } catch (_) {
+    } catch (e) {
+      errorLog.info('GIFs', 'Cache das cenas de clipe estava ilegível e foi recomeçado', e);
       _data = {};
     }
     return _data!;
@@ -173,6 +176,8 @@ class ClipCache {
     try {
       file.parent.createSync(recursive: true);
       file.writeAsStringSync(jsonEncode(_map));
-    } catch (_) {}
+    } catch (e) {
+      errorLog.warn('GIFs', 'Não deu para salvar o cache das cenas de clipe', error: e);
+    }
   }
 }

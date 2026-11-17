@@ -3,6 +3,7 @@ import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
+import '../error_log.dart';
 import '../organizer.dart';
 import '../theme.dart';
 import '../xp_icons.dart';
@@ -55,7 +56,8 @@ class _OrganizerScreenState extends State<OrganizerScreen> {
         _plan = plan;
         _step = _Step.review;
       });
-    } catch (e) {
+    } catch (e, st) {
+      errorLog.fail('Organizador', 'A busca de músicas novas parou no meio', error: e, stack: st);
       if (mounted) {
         setState(() {
           _step = _Step.intro;
@@ -77,7 +79,8 @@ class _OrganizerScreenState extends State<OrganizerScreen> {
           _step = _Step.done;
         });
       }
-    } catch (e) {
+    } catch (e, st) {
+      errorLog.fail('Organizador', 'Erro ao mover as músicas', error: e, stack: st);
       if (mounted) {
         setState(() {
           _step = _Step.review;

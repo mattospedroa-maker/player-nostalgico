@@ -8,15 +8,16 @@ import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 
 import 'clip_info.dart';
+import 'error_log.dart';
 import 'filename_parser.dart';
 import 'gif_feedback.dart';
 import 'gif_providers.dart';
-import 'visual_search.dart';
 import 'gif_service.dart';
 import 'lastfm.dart';
 import 'models.dart';
 import 'mood.dart';
 import 'organizer.dart' show safeFolderName;
+import 'visual_search.dart';
 import 'visual_tags.dart';
 
 /// Máximo de GIFs por música (para não ocupar espaço demais).
@@ -188,7 +189,8 @@ class GifFetcher {
     if (r == null) {
       try {
         r = await LastFmClient(client, lastFmKey()).topTags(artist, title);
-      } catch (_) {
+      } catch (e) {
+        errorLog.info('GIFs', 'Last.fm não respondeu', e);
         r = const TagResult(TagStatus.badResponse);
       }
       _tagCache?.put(artist, title, r);
@@ -212,7 +214,8 @@ class GifFetcher {
     ClipInfo? info;
     try {
       info = await c.lookup(artist, title);
-    } catch (_) {
+    } catch (e) {
+      errorLog.info('GIFs', 'Wikipédia não respondeu (cenas do clipe)', e);
       return null;
     }
     _clipCache?.put(artist, title, info, reached: c.reached);
@@ -293,7 +296,9 @@ class GifFetcher {
     try {
       final f = File(path);
       if (f.existsSync()) m = (jsonDecode(f.readAsStringSync()) as Map).cast<String, dynamic>();
-    } catch (_) {}
+    } catch (e) {
+      errorLog.info('GIFs', 'Registro de buscas de GIF ilegível (${p.basename(path)}), recomeçado', e);
+    }
     return _json[path] = m;
   }
 
@@ -303,7 +308,9 @@ class GifFetcher {
       File(path)
         ..parent.createSync(recursive: true)
         ..writeAsStringSync(jsonEncode(m));
-    } catch (_) {}
+    } catch (e) {
+      errorLog.warn('GIFs', 'Não deu para salvar ${p.basename(path)} na pasta de GIFs', error: e);
+    }
   }
 
   /// Versão da regra de escolha. Músicas buscadas com uma regra antiga são refeitas.
@@ -364,8 +371,9 @@ class GifFetcher {
               for (final c in await prov.search(q, limit: 15)) {
                 if (seenUrls.add(c.url)) out.add(c);
               }
-            } catch (_) {
+            } catch (e) {
               // sem internet ou fonte fora do ar: tenta a próxima
+              errorLog.info('GIFs', 'Busca de GIFs falhou em ${prov.runtimeType}', e);
             }
           }
           if (out.length >= 8) break;
@@ -403,7 +411,9 @@ class GifFetcher {
             for (final c in await nekos.random(cat, amount: 5)) {
               if (seenUrls.add(c.url)) animeC.add(c);
             }
-          } catch (_) {}
+          } catch (e) {
+            errorLog.info('GIFs', 'nekos.best não respondeu', e);
+          }
         }
         animeC.shuffle(rnd);
       }
@@ -489,7 +499,12 @@ class GifFetcher {
     for (final g in pinned.where((g) => _autoName.hasMatch(p.basename(g)) && p.isWithin(root, g))) {
       await gifs.db.unpinGif(t.id!, g);
       // o arquivo só sai do celular se nenhuma outra música usa
-      if (await gifs.db.gifUsers(g) == 0) await File(g).delete().catchError((_) => File(g));
+      if (await gifs.db.gifUsers(g) == 0) {
+        await File(g).delete().catchError((Object e) {
+          errorLog.warn('GIFs', 'Não deu para apagar um GIF antigo', error: e);
+          return File(g);
+        });
+      }
     }
   }
 
@@ -541,12 +556,16 @@ class GifFetcher {
               saved++;
             }
           }
-        } catch (_) {
+        } catch (e) {
           // sem internet ou limite do GIPHY: segue com o anime
+          errorLog.info('GIFs', 'GIPHY não respondeu para "$w"', e);
         }
       }
     }
-    saved += await fetchFor(t, force: true).catchError((_) => 0);
+    saved += await fetchFor(t, force: true).catchError((Object e) {
+      errorLog.info('GIFs', 'Busca automática de GIFs falhou', e);
+      return 0;
+    });
     return saved;
   }
 
@@ -565,7 +584,8 @@ class GifFetcher {
       // confere que é mesmo um GIF ("GIF87a"/"GIF89a")
       if (bytes.length < 6 || ascii.decode(bytes.sublist(0, 3), allowInvalid: true) != 'GIF') return null;
       return bytes;
-    } catch (_) {
+    } catch (e) {
+      errorLog.info('GIFs', 'Download de um GIF falhou', e);
       return null;
     }
   }

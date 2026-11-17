@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
 import 'db.dart';
+import 'error_log.dart';
 import 'models.dart';
 import 'organizer.dart' show safeFolderName;
 
@@ -55,7 +56,9 @@ class GifService extends ChangeNotifier {
       return;
     }
     final files = <File>[];
-    await for (final e in d.list(recursive: true, followLinks: false).handleError((_) {})) {
+    await for (final e in d.list(recursive: true, followLinks: false).handleError((Object e) {
+      errorLog.info('GIFs', 'Uma subpasta de GIFs não pôde ser lida', e);
+    })) {
       if (e is File && gifExtensions.contains(p.extension(e.path).toLowerCase())) files.add(e);
     }
     // limpa imagens vazias salvas da web por versões antigas
@@ -66,7 +69,9 @@ class GifService extends ChangeNotifier {
           await f.delete();
           files.remove(f);
         }
-      } catch (_) {}
+      } catch (e) {
+        errorLog.info('GIFs', 'Não deu para limpar uma imagem vazia antiga', e);
+      }
     }
     if (gifRoot != root) return; // trocou de pasta no meio da leitura
     _cache = files;
@@ -91,7 +96,8 @@ class GifService extends ChangeNotifier {
     if (f == null || !f.existsSync()) return Map.of(defaultExtras);
     try {
       return (jsonDecode(f.readAsStringSync()) as Map).map((k, v) => MapEntry('$k', '$v'));
-    } catch (_) {
+    } catch (e) {
+      errorLog.warn('GIFs', 'GIFs/palavras.json está com defeito; usando as palavras padrão', error: e);
       return Map.of(defaultExtras);
     }
   }

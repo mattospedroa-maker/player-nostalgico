@@ -12,17 +12,18 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'artist_names.dart';
-import 'db.dart';
-import 'download_service.dart';
 import 'audio_handler.dart';
 import 'cover_service.dart';
+import 'db.dart';
+import 'download_service.dart';
+import 'error_log.dart';
 import 'filename_parser.dart';
 import 'gif_fetcher.dart';
+import 'gif_providers.dart';
 import 'gif_service.dart';
 import 'library_scanner.dart';
 import 'metadata.dart';
 import 'models.dart';
-import 'gif_providers.dart';
 import 'mood.dart';
 import 'organizer.dart';
 import 'play_stats.dart';
@@ -61,7 +62,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     // a música que está tocando já ganha os GIFs pelas tags
     final t = player.current == null ? null : byId(player.current!.id);
-    if (t != null && autoGifs) unawaited(gifFetcher.fetchFor(t).catchError((_) => 0));
+    if (t != null && autoGifs) unawaited(gifFetcher.fetchFor(t).catchError(_gifFetchFailed));
   }
 
   /// Chave da API do GIPHY (só no celular). Vazia = sem GIPHY, só anime.
@@ -127,7 +128,8 @@ class AppState extends ChangeNotifier {
           _writeVisualsDisk(key, picks);
         }
         return picks;
-      } catch (_) {
+      } catch (e) {
+        errorLog.info('GIFs', 'GIPHY não respondeu (roda do Tocando agora)', e);
         _visualsFailedAt[key] = DateTime.now();
         return const <VisualResult>[]; // sem internet ou chave ruim: a roda fica só com os de anime
       } finally {
@@ -200,7 +202,8 @@ class AppState extends ChangeNotifier {
     if (_visualsDisk != null) return _visualsDisk!;
     try {
       _visualsDisk = _visualsFile.existsSync() ? (jsonDecode(_visualsFile.readAsStringSync()) as Map).cast<String, dynamic>() : {};
-    } catch (_) {
+    } catch (e) {
+      errorLog.info('GIFs', 'Cache da roda do GIPHY estava ilegível e foi recomeçado', e);
       _visualsDisk = {};
     }
     return _visualsDisk!;
@@ -234,7 +237,9 @@ class AppState extends ChangeNotifier {
     };
     try {
       _visualsFile.writeAsStringSync(jsonEncode(_visualsMap));
-    } catch (_) {}
+    } catch (e) {
+      errorLog.warn('GIFs', 'Não deu para salvar o cache da roda do GIPHY', error: e);
+    }
   }
 
   /// Download em massa ("Baixar GIFs para todas"): progresso feito/total, null = parado.
@@ -248,6 +253,17 @@ class AppState extends ChangeNotifier {
   double scanProgress = 0;
 
   AppState._(this.db, this.prefs, this.player, this.gifs, this.dataDir);
+
+  /// Busca automática de GIFs falhou (rede ou pasta): só registra, a música segue com o que tem.
+  static int _gifFetchFailed(Object e) {
+    errorLog.add(ErrorLog.isNetwork(e) ? LogLevel.info : LogLevel.warning, 'GIFs', 'Busca automática de GIFs falhou', error: e);
+    return 0;
+  }
+
+  static int _coversFailed(Object e) {
+    errorLog.add(ErrorLog.isNetwork(e) ? LogLevel.info : LogLevel.warning, 'Capas', 'Busca de capas parou no meio', error: e);
+    return 0;
+  }
 
   static Future<AppState> create({PlayerAudioHandler? handler}) async {
     final dir = await getApplicationSupportDirectory();
@@ -269,9 +285,14 @@ class AppState extends ChangeNotifier {
     };
     await s.reload(rereadGifs: true);
     // capas que faltam (inclusive as que falharam antes), em segundo plano
-    unawaited(Future<void>.delayed(const Duration(seconds: 5), () => s.fetchMissingCovers()).catchError((_) {}));
+    unawaited(Future<void>.delayed(const Duration(seconds: 5), () => s.fetchMissingCovers()).catchError(_coversFailed));
     // Android 13+: a notificação com os controles precisa desta permissão
-    if (Platform.isAndroid) unawaited(Permission.notification.request().catchError((_) => PermissionStatus.denied));
+    if (Platform.isAndroid) {
+      unawaited(Permission.notification.request().catchError((Object e) {
+        errorLog.warn('Notificação', 'Não deu para pedir a permissão de notificação', error: e);
+        return PermissionStatus.denied;
+      }));
+    }
     return s;
   }
 
@@ -338,8 +359,11 @@ class AppState extends ChangeNotifier {
 
   /// Primeiro descobre os gêneros que faltam (a regra dos GIFs usa o gênero), depois baixa os GIFs das novas.
   Future<void> _afterScan(List<Track> added) async {
-    await fillMissingGenres().catchError((_) => 0);
-    unawaited(fetchMissingCovers().catchError((_) => 0));
+    await fillMissingGenres().catchError((Object e) {
+      errorLog.warn('Biblioteca', 'Não deu para completar os gêneros pelo MusicBrainz', error: e);
+      return 0;
+    });
+    unawaited(fetchMissingCovers().catchError(_coversFailed));
     if (added.isEmpty || !autoGifs) return;
     final ids = added.map((t) => t.id).toSet();
     await fetchGifsForAll(only: tracks.where((t) => ids.contains(t.id)).toList());
@@ -380,7 +404,8 @@ class AppState extends ChangeNotifier {
         String? genre;
         try {
           genre = await mb.artistGenre(e.key);
-        } catch (_) {
+        } catch (err) {
+          errorLog.info('Biblioteca', 'MusicBrainz não respondeu (gênero do artista)', err);
           break; // sem internet: tenta na próxima leitura
         }
         tried.add(e.key);
@@ -413,8 +438,9 @@ class AppState extends ChangeNotifier {
           m.setGenres(genre.isEmpty ? const [] : [genre]);
           if (year != null) m.setYear(DateTime(year));
         });
-      } catch (_) {
+      } catch (e) {
         warning = 'Salvo no app, mas não deu para gravar nas tags deste arquivo.';
+        errorLog.warn('Editar música', 'Tags não gravadas em ${p.basename(path)}', error: e);
       }
     }
     await db.editTrack(t.id!, title: title, artist: artist, album: album, genre: genre, year: year);
@@ -436,23 +462,32 @@ class AppState extends ChangeNotifier {
     // a releitura não deve achar que mudou
     try {
       await db.db.update('tracks', {'modified_at': File(path).statSync().modified.millisecondsSinceEpoch}, where: 'id = ?', whereArgs: [t.id]);
-    } catch (_) {}
+    } catch (e) {
+      errorLog.info('Editar música', 'Não deu para anotar a data nova de ${p.basename(path)} (a próxima leitura relê o arquivo)', e);
+    }
     await reload();
     final updated = byId(t.id);
     if (updated != null) player.replaceTrack(updated);
-    unawaited(fetchMissingCovers().catchError((_) => 0)); // álbum novo: busca a capa
+    unawaited(fetchMissingCovers().catchError(_coversFailed)); // álbum novo: busca a capa
     return warning;
   }
 
   /// Apaga a música do celular (e as pastas de álbum/artista que ficarem vazias).
-  Future<void> deleteTrack(Track t) async {
-    if (player.current?.id == t.id) await player.next();
+  /// Devolve false (e avisa no balão) se o Android não deixou apagar o arquivo.
+  Future<bool> deleteTrack(Track t) async {
+    if (player.current?.id == t.id) await player.next(); // solta o arquivo antes de apagar
     final f = File(t.path);
-    if (f.existsSync()) await f.delete();
+    try {
+      if (f.existsSync()) await f.delete();
+    } on FileSystemException catch (e) {
+      errorLog.warn('Apagar música', 'Não deu para apagar "${p.basename(t.path)}"', error: e, balloon: true);
+      return false;
+    }
     await db.deleteTrack(t.id!);
     final root = sourceRoot;
     if (root != null) removeEmptyParents(root, [t.path]);
     await reload();
+    return true;
   }
 
   /// Limpa músicas repetidas: para cada grupo, fica [keep] e as outras cópias são apagadas do celular.
@@ -472,8 +507,10 @@ class AppState extends ChangeNotifier {
         try {
           final f = File(t.path);
           if (f.existsSync()) await f.delete();
-        } catch (_) {
-          continue; // não deu para apagar o arquivo: deixa no banco também
+        } catch (e) {
+          // não deu para apagar o arquivo: deixa no banco também e avisa
+          errorLog.warn('Repetidas', 'Não apagou ${p.basename(t.path)}', error: e, balloon: true);
+          continue;
         }
         await db.deleteTrack(t.id!);
         if (root != null) removeEmptyParents(root, [t.path]);
@@ -514,10 +551,12 @@ class AppState extends ChangeNotifier {
     final fresh = byId(t.id) ?? t;
     player.handler?.setFavorite(fresh.favorite);
     // arte inicial = primeiro GIF da música (depois o carrossel avisa a cada troca)
-    gifs.gifsFor(fresh).then((g) => nowShowingGif(fresh, g.isEmpty ? null : g.first)).catchError((_) {}); // arte é secundária: nunca derruba o player
+    gifs.gifsFor(fresh).then((g) => nowShowingGif(fresh, g.isEmpty ? null : g.first)).catchError((Object e) {
+      errorLog.info('Notificação', 'Não deu para trocar a imagem da notificação', e); // arte é secundária: nunca derruba o player
+    });
     if (!autoGifs || t.id == _lastAutoFetchId) return;
     _lastAutoFetchId = t.id;
-    gifFetcher.fetchFor(fresh).catchError((_) => 0);
+    gifFetcher.fetchFor(fresh).catchError(_gifFetchFailed);
   }
 
   /// O carrossel avisa qual GIF está passando; ele vira a arte da notificação e da tela de bloqueio.
@@ -543,7 +582,7 @@ class AppState extends ChangeNotifier {
     try {
       for (var i = 0; i < list.length; i++) {
         if (_cancelBulk) break;
-        total += await gifFetcher.fetchFor(list[i], bulk: true).catchError((_) => 0);
+        total += await gifFetcher.fetchFor(list[i], bulk: true).catchError(_gifFetchFailed);
         bulkGifProgress = (i + 1, list.length);
         notifyListeners();
       }
@@ -593,7 +632,7 @@ class AppState extends ChangeNotifier {
     if (updated == null) return;
     player.replaceTrack(updated);
     if (player.mixSeedId == id) unawaited(player.refreshMix());
-    unawaited(gifFetcher.refetchFor(updated).catchError((_) => 0));
+    unawaited(gifFetcher.refetchFor(updated).catchError(_gifFetchFailed));
   }
 
   Playlist? _playlistNamed(String name) {

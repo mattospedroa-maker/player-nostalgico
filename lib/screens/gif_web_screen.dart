@@ -7,6 +7,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 
 import '../app_state.dart';
+import '../error_log.dart';
 import '../gif_fetcher.dart';
 import '../models.dart';
 import '../theme.dart';
@@ -83,14 +84,14 @@ class _GifWebScreenState extends State<GifWebScreen> {
     if (platform is AndroidWebViewController) {
       AndroidWebViewCookieManager(const PlatformWebViewCookieManagerCreationParams())
           .setAcceptThirdPartyCookies(platform, true)
-          .catchError((_) {});
+          .catchError((Object e) => errorLog.info('GIFs', 'Navegador: não deu para aceitar cookies de login', e));
     }
     _open();
   }
 
   void _open() => _web.loadRequest(_sites[_site].url(_q.text.trim()));
 
-  Future<void> _inject() => _web.runJavaScript(_saveModeJs.replaceAll('SAVE', '$_saveMode')).catchError((_) {});
+  Future<void> _inject() => _web.runJavaScript(_saveModeJs.replaceAll('SAVE', '$_saveMode')).catchError((Object e) => errorLog.info('GIFs', 'Navegador: não deu para ligar o modo salvar', e));
 
   Future<void> _save(String src) async {
     if (_busy) return;
@@ -118,7 +119,8 @@ class _GifWebScreenState extends State<GifWebScreen> {
             ? 'GIF salvo na música ($_saved).'
             : 'Salvo, mas é uma imagem parada. Abra o GIF maior para pegar o animado.')));
       }
-    } catch (_) {
+    } catch (e) {
+      errorLog.info('GIFs', 'Falhou ao baixar uma imagem da web', e);
       messenger.showSnackBar(const SnackBar(content: Text('Falhou ao baixar. Confira a internet.')));
     } finally {
       if (mounted) setState(() => _busy = false);

@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 
+import 'error_log.dart';
 import 'filename_parser.dart';
 import 'metadata.dart';
 import 'models.dart';
@@ -306,6 +307,7 @@ class Organizer {
         plan.add(PlanItem(sourcePath: f.path, targetPath: target, info: info, status: PlanStatus.move));
       } catch (e) {
         plan.add(PlanItem(sourcePath: f.path, status: PlanStatus.error, message: '$e'));
+        errorLog.warn('Organizador', 'Não deu para analisar ${p.basename(f.path)}', error: e);
       }
     }
     onProgress?.call(files.length, files.length, '');
@@ -373,7 +375,9 @@ class Organizer {
       ..sort((a, b) => b.path.length.compareTo(a.path.length))) {
       try {
         if (d.listSync().isEmpty) d.deleteSync();
-      } catch (_) {}
+      } catch (e) {
+        errorLog.info('Organizador', 'Não deu para apagar uma pasta vazia', e);
+      }
     }
   }
 }

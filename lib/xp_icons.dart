@@ -30,6 +30,7 @@ enum XpIcons {
   bin,
   doc,
   check,
+  error,
 }
 
 const _svg = <XpIcons, String>{
@@ -66,6 +67,7 @@ const _svg = <XpIcons, String>{
       '<path d="M7 9h18l-2 20H9z" fill="#c9d6e8" stroke="#3d5577"/><rect x="5" y="6" width="22" height="4" fill="#e5edf7" stroke="#3d5577"/><path d="M12 13v13M16 13v13M20 13v13" stroke="#3d5577"/>',
   XpIcons.doc:
       '<path d="M7 3h13l6 6v20H7z" fill="#fff" stroke="#555"/><path d="M20 3v6h6" fill="#ddd" stroke="#555"/><path d="M11 20h10M11 24h10" stroke="#3b8cf5" stroke-width="2"/><circle cx="13" cy="13" r="3" fill="#3b8cf5"/>',
+  XpIcons.error: '<circle cx="16" cy="16" r="14" fill="#e0342a" stroke="#7a1010"/><circle cx="12" cy="11" r="5" fill="#ff8a7a" opacity=".55"/><path d="M10.5 10.5l11 11M21.5 10.5l-11 11" stroke="#fff" stroke-width="3.6"/>',
   XpIcons.check: '<circle cx="16" cy="16" r="14" fill="#3aa83a" stroke="#1b5e1b"/><path d="M9 16l5 5 9-10" fill="none" stroke="#fff" stroke-width="3.5"/>',
 };
 
