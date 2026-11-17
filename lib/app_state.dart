@@ -14,6 +14,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'artist_names.dart';
 import 'audio_handler.dart';
 import 'cover_service.dart';
+import 'crossfade.dart';
 import 'db.dart';
 import 'download_service.dart';
 import 'error_log.dart';
@@ -277,7 +278,15 @@ class AppState extends ChangeNotifier {
       ..mixMode = MixMode.values.asNameMap()[prefs.getString('mixMode')] ?? MixMode.vibe
       ..onMixModeChanged = ((m) => prefs.setString('mixMode', m.name))
       ..onCrossfadeChanged = ((on) => prefs.setBool('crossfade', on))
+      ..onCrossfadeTimesChanged = ((out, inn) {
+        prefs.setInt('crossfadeOut', out.inSeconds);
+        prefs.setInt('crossfadeIn', inn.inSeconds);
+      })
       ..onPlayLogged = s._invalidateStats;
+    s.player.crossfader.setTimes(
+      Duration(seconds: (prefs.getInt('crossfadeOut') ?? defaultFadeOut.inSeconds).clamp(fadeOutRange.$1, fadeOutRange.$2)),
+      Duration(seconds: (prefs.getInt('crossfadeIn') ?? defaultFadeIn.inSeconds).clamp(fadeInRange.$1, fadeInRange.$2)),
+    );
     s.player.crossfader.enabled = prefs.getBool('crossfade') ?? false;
     handler?.onFavorite = () async {
       final t = s.player.current == null ? null : s.byId(s.player.current!.id);
