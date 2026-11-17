@@ -17,6 +17,7 @@ import '../gif_service.dart';
 import '../models.dart';
 import '../mood.dart';
 import '../player_service.dart';
+import '../skip_guard.dart';
 import '../theme.dart';
 import '../visual_search.dart';
 import '../widgets.dart';
@@ -244,14 +245,17 @@ class _Toolbar extends StatelessWidget {
     );
   }
 
-  static void showQueue(BuildContext context) {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Xp.beige,
-      builder: (ctx) => DraggableScrollableSheet(expand: false, initialChildSize: .75, maxChildSize: .95, builder: (ctx, sc) => _QueueWindow(scroll: sc)),
-    );
-  }
+  static void showQueue(BuildContext context) => showQueueWindow(context);
+}
+
+/// Abre a Lista de reprodução (a fila) por baixo da tela.
+void showQueueWindow(BuildContext context) {
+  showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Xp.beige,
+    builder: (ctx) => DraggableScrollableSheet(expand: false, initialChildSize: .75, maxChildSize: .95, builder: (ctx, sc) => _QueueWindow(scroll: sc)),
+  );
 }
 
 /// A fila como a "Lista de reprodução" do WMP 9: visor, lista numerada e botões em relevo.
@@ -275,6 +279,40 @@ class _QueueWindowState extends State<_QueueWindow> {
     await app.db.setPlaylistOrder(id, [for (final t in q) if (t.id != null) t.id!]);
     await app.reload();
     messenger.showSnackBar(SnackBar(content: Text('Playlist "$name" criada com ${q.length} músicas.')));
+  }
+
+  /// Segurar uma música que não abriu: tentar de novo, tirar da fila ou apagar do celular.
+  void _failedMenu(PlayerService ps, Track t, int i, Offset at) {
+    showXpContextMenu(context, header: '${t.title} — ${t.artist}', at: at, items: [
+      XpMenuEntry('Tentar de novo', () {
+        ps.retry(t);
+        Navigator.pop(context);
+      }, icon: XpIcons.play),
+      XpMenuEntry('Tirar da fila', i == ps.player.currentIndex ? null : () => ps.removeAt(i), icon: XpIcons.bin),
+      null,
+      XpMenuEntry('Apagar do celular…', () => _confirmDelete(ps, t), icon: XpIcons.warning),
+    ]);
+  }
+
+  Future<void> _confirmDelete(PlayerService ps, Track t) async {
+    final app = context.read<AppState>();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => XpAlertDialog(
+        icon: XpIcons.warning,
+        title: const Text('Apagar música?'),
+        content: Text('"${t.title}" será apagada do celular e sai da biblioteca. Não dá para desfazer.'),
+        actions: [
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Apagar')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final i = ps.queue.indexWhere((q) => q.path == t.path);
+    if (i >= 0) await ps.removeAt(i);
+    final known = app.byId(t.id);
+    if (known != null) await app.deleteTrack(known);
   }
 
   @override
@@ -324,6 +362,8 @@ class _QueueWindowState extends State<_QueueWindow> {
                     final t = q[i];
                     final on = i == cur;
                     final picked = i == sel;
+                    final bad = ps.failureOf(t);
+                    if (bad != null && !on) return _failedRow(ps, t, i, bad, picked);
                     return InkWell(
                       onTap: () => setState(() => _sel = i),
                       onDoubleTap: () {
@@ -364,10 +404,14 @@ class _QueueWindowState extends State<_QueueWindow> {
       Padding(
         padding: const EdgeInsets.all(8),
         child: Row(children: [
-          act(XpIcons.play, 'Tocar', sel == null
+          act(XpIcons.play, sel != null && ps.failureOf(q[sel]) != null ? 'De novo' : 'Tocar', sel == null
               ? null
               : () {
-                  ps.jumpTo(sel);
+                  if (ps.failureOf(q[sel]) != null) {
+                    ps.retry(q[sel]);
+                  } else {
+                    ps.jumpTo(sel);
+                  }
                   Navigator.pop(context);
                 }),
           act(XpIcons.bin, 'Tirar', sel == null || sel == cur ? null : () => ps.removeAt(sel).then((_) => mounted ? setState(() => _sel = null) : null)),
@@ -375,12 +419,49 @@ class _QueueWindowState extends State<_QueueWindow> {
           act(XpIcons.plus, 'Salvar', q.isEmpty ? null : () => _save(q)),
         ]),
       ),
-      XpStatusBar([
-        sel == null ? 'Toque numa música para escolher; dois toques para tocar' : 'Escolhida: ${q[sel].title}',
-        cur == null ? '' : 'Tocando ${cur + 1} de ${q.length}',
-      ]),
+      Builder(builder: (_) {
+        final failed = q.where((t) => ps.failureOf(t) != null).length;
+        return XpStatusBar(warn: failed > 0, [
+          if (failed > 0)
+            failed == 1 ? '1 música não abriu · segure para ver opções' : '$failed músicas não abriram · segure para ver opções'
+          else
+            sel == null ? 'Toque numa música para escolher; dois toques para tocar' : 'Escolhida: ${q[sel].title}',
+          cur == null ? '' : 'Tocando ${cur + 1} de ${q.length}',
+        ]);
+      }),
     ]);
   }
+
+  /// Música que não abriu: cinza, riscada, com ⚠ e o motivo embaixo. Segurar abre as opções.
+  Widget _failedRow(PlayerService ps, Track t, int i, PlaybackFailure bad, bool picked) => GestureDetector(
+        onLongPressStart: (d) => _failedMenu(ps, t, i, d.globalPosition),
+        child: InkWell(
+          onTap: () => setState(() => _sel = i),
+          child: Container(
+            decoration: BoxDecoration(
+              color: picked ? const Color(0xFFDCE7FB) : const Color(0xFFFAFAFA),
+              border: Border(bottom: const BorderSide(color: Color(0xFFF0F0F0)), left: BorderSide(color: picked ? Xp.select : Colors.transparent, width: 3)),
+            ),
+            padding: const EdgeInsets.only(right: 8),
+            child: Row(children: [
+              SizedBox(width: 34, child: Text('${i + 1}', textAlign: TextAlign.right, style: const TextStyle(fontSize: 13, color: Color(0xFFAAAAAA)))),
+              const SizedBox(width: 6),
+              const XpIcon(XpIcons.warning, size: 16),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('${t.title}  ${t.artist}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 13.5, color: Color(0xFF9A9A9A), decoration: TextDecoration.lineThrough, decorationColor: Color(0xFF9A9A9A))),
+                  Text('Não abre · ${bad.reasonText}', style: const TextStyle(fontSize: 11, color: Xp.red)),
+                ]),
+              ),
+              const Text('--:--', style: TextStyle(fontSize: 12.5, color: Color(0xFFAAAAAA))),
+            ]),
+          ),
+        ),
+      );
 }
 
 /// A "capa" do Tocando agora: vários GIFs que se alternam a cada 8 s.

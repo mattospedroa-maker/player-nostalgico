@@ -12,6 +12,7 @@ import 'db.dart';
 import 'models.dart';
 import 'mood.dart';
 import 'recommender.dart';
+import 'skip_guard.dart';
 
 /// O que tocar quando a fila acaba.
 enum MixMode { artist, vibe }
@@ -53,6 +54,22 @@ class PlayerService extends ChangeNotifier {
   /// Avisado depois que uma música entra no histórico.
   void Function()? onPlayLogged;
 
+  /// Músicas que não abriram (caminho -> falha). Continuam na fila, marcadas, até a fila mudar.
+  final Map<String, PlaybackFailure> _failed = {};
+  final _guard = SkipGuard();
+
+  /// Avisado quando uma música não abre e o player pula para a próxima.
+  void Function(Track track, PlaybackFailure failure)? onTrackFailed;
+
+  /// Avisado quando nenhuma música da fila abriu e o player parou.
+  void Function(List<Track> failed)? onAllFailed;
+
+  /// Músicas da fila que não abriram (na ordem em que falharam).
+  List<PlaybackFailure> get failures => _failed.values.toList();
+
+  /// A música não abriu nesta fila.
+  PlaybackFailure? failureOf(Track t) => _failed[t.path];
+
   PlayerService(this.db, {this.handler, TailDeck Function()? tail}) {
     crossfader = Crossfader(JustAudioDeck(player), tail ?? JustAudioTail.new);
     handler
@@ -77,7 +94,11 @@ class PlayerService extends ChangeNotifier {
       _publishMediaItem();
       notifyListeners();
     }));
-    _subs.add(player.playerStateStream.listen((_) => notifyListeners()));
+    _subs.add(player.playerStateStream.listen((s) {
+      if (s.processingState == ProcessingState.ready) _guard.onReady();
+      notifyListeners();
+    }));
+    _subs.add(player.errorStream.listen((e) => unawaited(_serial(() => _skipBroken(e.index))), onError: (_, _) {}));
     _subs.add(player.loopModeStream.listen((_) => notifyListeners()));
   }
 
@@ -147,8 +168,14 @@ class PlayerService extends ChangeNotifier {
       }
       _autoAdded.clear();
       _overrides.clear();
+      _failed.clear();
+      _guard.reset();
       mixSeedId = list[first].id;
-      await player.setAudioSources([for (final t in list) _source(t)], initialIndex: first);
+      try {
+        await player.setAudioSources([for (final t in list) _source(t)], initialIndex: first);
+      } on PlayerException {
+        // a primeira não abriu: o aviso de erro do player chega também e [_skipBroken] pula para a próxima
+      }
       _startedAt = DateTime.now();
       _startedTrackId = current?.id;
       _publishMediaItem();
@@ -198,11 +225,13 @@ class PlayerService extends ChangeNotifier {
   Future<void> jumpTo(int index) async {
     if (index < 0 || index >= player.sequence.length) return;
     crossfader.cancel();
+    _guard.reset(); // escolha do usuário: se falhar de novo, conta do zero
     await player.seek(Duration.zero, index: index);
   }
 
   Future<void> next() async {
     crossfader.cancel(); // avanço manual: nunca com transição
+    _guard.reset();
     final skipped = current;
     _logCurrent(skipped: true);
     // garante que existe uma próxima (o mix completa a fila antes de avançar)
@@ -250,13 +279,53 @@ class PlayerService extends ChangeNotifier {
     if (seed == null || player.loopMode != LoopMode.off) return;
     final q = queue;
     if (!force && q.length - _nextPos >= 3) return;
-    final picks = pickMix(seed, library(), mode: mixMode, exclude: q.map((t) => t.id).toSet(), count: 10, rnd: _rnd);
+    final failedIds = {for (final t in library()) if (_failed.containsKey(t.path)) t.id};
+    final picks = pickMix(seed, library(), mode: mixMode, exclude: {...q.map((t) => t.id), ...failedIds}, count: 10, rnd: _rnd);
     if (picks.isEmpty) return;
     try {
       await player.addAudioSources([for (final t in picks) _source(t)]);
       _autoAdded.addAll(picks.map((t) => t.id));
     } catch (_) {}
     notifyListeners();
+  }
+
+  /// A música da posição [index] não abriu: marca, avisa e pula para a próxima que ainda não falhou.
+  /// Se todas falharam, para e avisa uma vez só (nunca fica pulando em loop). Só roda dentro de [_serial].
+  Future<void> _skipBroken(int? index) async {
+    final seq = player.sequence;
+    final i = index ?? _index;
+    if (i == null || i < 0 || i >= seq.length) return;
+    final t = _display(seq[i].tag as Track);
+    final failure = _failed[t.path] ??= PlaybackFailure(t.path, PlaybackFailure.reasonFor(t.path));
+    if (t.id == _startedTrackId) _startedTrackId = null; // não entra no histórico
+    // sem músicas suficientes na frente, o mix completa a fila antes de decidir
+    if (player.loopMode == LoopMode.off && seq.length - i - 1 < 3) await _extendMix();
+    final q = queue;
+    final to = _guard.onError(i, q.length,
+        wrap: player.loopMode == LoopMode.all, failed: (j) => _failed.containsKey(q[j].path));
+    if (to == -1) return;
+    if (to == null) {
+      await player.pause();
+      notifyListeners();
+      onAllFailed?.call([for (final s in q) if (_failed.containsKey(s.path)) s]);
+      return;
+    }
+    notifyListeners();
+    onTrackFailed?.call(t, failure);
+    try {
+      await player.seek(Duration.zero, index: to);
+      unawaited(player.play());
+    } catch (_) {
+      // a próxima também não abriu: o aviso de erro dela chega e passa por aqui de novo
+    }
+  }
+
+  /// Tenta tocar de novo uma música que não abriu (ex.: o cartão de memória voltou).
+  Future<void> retry(Track t) async {
+    _failed.remove(t.path);
+    final i = queue.indexWhere((q) => q.path == t.path);
+    notifyListeners();
+    if (i >= 0) await jumpTo(i);
   }
 
   /// Escolhe músicas para o mix. "Do mesmo artista": só o artista (se acabar, completa com a vibe).

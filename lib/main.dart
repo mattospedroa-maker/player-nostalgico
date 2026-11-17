@@ -17,6 +17,7 @@ import 'screens/now_playing_screen.dart';
 import 'screens/organizer_screen.dart';
 import 'screens/playlists_screen.dart';
 import 'screens/youtube_screen.dart';
+import 'skip_notice.dart';
 import 'theme.dart';
 import 'widgets.dart';
 import 'xp_icons.dart';
@@ -44,6 +45,7 @@ Future<void> main() async {
     if (Platform.isAndroid) audioInitError = '$e';
   }
   final app = await AppState.create(handler: handler);
+  SkipNotice.attach(app.player);
   runApp(
     MultiProvider(
       providers: [
@@ -157,6 +159,8 @@ class PlayerApp extends StatelessWidget {
   Widget build(BuildContext context) => MaterialApp(
         title: 'Nostalgic MPlayer',
         debugShowCheckedModeBanner: false,
+        scaffoldMessengerKey: appMessengerKey,
+        navigatorKey: appNavigatorKey,
         theme: Xp.theme(),
         home: const HomeShell(),
       );
