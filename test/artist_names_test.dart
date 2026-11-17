@@ -60,6 +60,14 @@ void main() {
     expect(g.main('Teto'), 'Teto');
   });
 
+  test('parceria em que o OUTRO nome existe sozinho: fica o primeiro', () {
+    final g = ArtistNames.from(const ['Anitta & Ludmilla', 'Ludmilla', 'Henrique & Juliano', 'Simon & Garfunkel']);
+    expect(g.main('Anitta & Ludmilla'), 'Anitta');
+    expect(g.main('Ludmilla'), 'Ludmilla');
+    expect(g.main('Henrique & Juliano'), 'Henrique & Juliano');
+    expect(g.main('Simon & Garfunkel'), 'Simon & Garfunkel');
+  });
+
   test('"Do mesmo artista" no mix pega as parcerias', () {
     final lib = [_t(1, 'MC VV'), _t(2, 'MC VV & BOFE'), _t(3, 'MC VV (ft. LAUNZERA)'), _t(4, 'Outro Cara'), _t(5, 'Outra Banda')];
     ArtistNames.current = ArtistNames.fromTracks(lib);

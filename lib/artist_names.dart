@@ -68,6 +68,18 @@ class ArtistNames {
           }
         }
       }
+      // 3º: algum dos outros nomes da parceria existe sozinho na biblioteca ("Anitta & Ludmilla" com
+      // "Ludmilla" sozinha) -> é parceria, fica o primeiro nome
+      if (main == null && pres.length > 1) {
+        final ms = _weak.allMatches(k).where((m) => m.start > 0).toList();
+        for (var i = 0; i < ms.length; i++) {
+          final end = i + 1 < ms.length ? ms[i + 1].start : k.length;
+          if (standalone.contains(k.substring(ms[i].end, end).trim())) {
+            main = pres.first;
+            break;
+          }
+        }
+      }
       main ??= k;
       g._mainKey[k] = main;
       final shown = _cutTo(h, main);
