@@ -12,6 +12,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'artist_names.dart';
+import 'artist_photos.dart';
 import 'audio_handler.dart';
 import 'cover_service.dart';
 import 'crossfade.dart';
@@ -46,6 +47,20 @@ class AppState extends ChangeNotifier {
   late final CoverService covers = CoverService(dataDir, metadata);
   late final GifFetcher gifFetcher = GifFetcher(gifs, client: http.Client())..lastFmKey = (() => lastFmKey);
   int? _lastAutoFetchId;
+  late final ArtistPhotoService artistPhotos = ArtistPhotoService(dataDir);
+
+  /// Imagens extras da roda de GIFs (sempre, sozinhas como os GIFs): capa do álbum e fotos do artista
+  /// principal (parcerias contam no principal). Os GIFs continuam todos.
+  List<String> gifExtrasFor(Track t) {
+    return [?covers.fileFor(t)?.path, ...artistPhotos.photosFor(ArtistNames.current.main(t.artist))];
+  }
+
+  /// O caminho é a capa ou uma foto de artista (não um GIF)? Para o selo da roda.
+  String? extraLabel(Track t, String path) {
+    if (artistPhotos.isPhoto(path)) return 'Foto · ${ArtistNames.current.main(t.artist)}';
+    if (p.isWithin(covers.dir, path)) return 'Capa do álbum';
+    return null;
+  }
   late final DownloadService downloads = DownloadService(this);
 
   /// Baixar GIFs sozinho quando uma música começa a tocar.
@@ -562,6 +577,14 @@ class AppState extends ChangeNotifier {
     // arte inicial = primeiro GIF da música (depois o carrossel avisa a cada troca)
     gifs.gifsFor(fresh).then((g) => nowShowingGif(fresh, g.isEmpty ? null : g.first)).catchError((Object e) {
       errorLog.info('Notificação', 'Não deu para trocar a imagem da notificação', e); // arte é secundária: nunca derruba o player
+    });
+    // fotos do artista: baixadas sozinhas, como os GIFs
+    artistPhotos.fetch(ArtistNames.current.main(fresh.artist)).then((n) {
+      if (n == 0) return;
+      visualsEpoch++; // a roda do Tocando agora ganha as fotos novas
+      notifyListeners();
+    }).catchError((Object e) {
+      errorLog.info('Fotos', 'Busca de fotos do artista falhou', e);
     });
     if (!autoGifs || t.id == _lastAutoFetchId) return;
     _lastAutoFetchId = t.id;

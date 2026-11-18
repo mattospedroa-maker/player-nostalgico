@@ -15,7 +15,7 @@ import 'organizer.dart';
 import 'youtube_names.dart';
 import 'ytdlp.dart';
 
-enum YtStatus { ready, queued, downloading, converting, done, failed, canceled }
+enum YtStatus { ready, queued, downloading, converting, updating, done, failed, canceled }
 
 /// Um vídeo da tela "Baixar do YouTube".
 class YtEntry {
@@ -117,6 +117,85 @@ class DownloadService extends ChangeNotifier {
 
   void warmUp() => unawaited(_maybeUpdate());
 
+  // ---------- plano B: yt-dlp velho ----------
+
+  /// Atualizando o yt-dlp agora porque o YouTube mudou (para a tela mostrar).
+  bool updatingYtDlp = false;
+
+  /// Versão do yt-dlp antes da atualização forçada (para a tela: "versão 2026.08.12 → …").
+  String? versionBefore;
+  DateTime? _forcedAt;
+  String? _forcedResult;
+  Future<String?>? _forcing;
+
+  /// Depois de uma atualização forçada, outra só depois disso (se ainda falha, a versão nova não resolve).
+  static const forceAgainAfter = Duration(minutes: 15);
+
+  /// Roda [run]; se falhar com cara de yt-dlp velho, atualiza na hora (mesmo que já tenha atualizado hoje)
+  /// e tenta de novo uma vez. [entry] mostra "Atualizando yt-dlp" na fila enquanto isso.
+  Future<T> withFreshYtDlp<T>(Future<T> Function() run, {YtEntry? entry}) async {
+    try {
+      return await run();
+    } on YtDlpException catch (err) {
+      if (!err.outdated || _cancelAll) rethrow;
+      final r = await _forceUpdate(entry);
+      if (r == null) {
+        throw const YtDlpException('O YouTube mudou e o yt-dlp precisa de atualização, mas não deu para atualizar agora '
+            '(sem internet ou o GitHub não respondeu). Tente de novo mais tarde.');
+      }
+      if (r != 'DONE') throw const YtDlpException(stillBroken);
+      if (entry != null) entry.status = YtStatus.downloading;
+      notifyListeners();
+      try {
+        return await run();
+      } on YtDlpException catch (again) {
+        if (again.outdated) throw const YtDlpException(stillBroken);
+        rethrow;
+      }
+    }
+  }
+
+  static const stillBroken = 'O YouTube mudou e nem a versão mais nova do yt-dlp funciona ainda. '
+      'Costuma sair conserto em poucos dias; tente de novo depois.';
+
+  /// Atualiza o yt-dlp agora. "DONE" = atualizou; "ALREADY_UP_TO_DATE" = já era a mais nova; null = não deu.
+  Future<String?> _forceUpdate(YtEntry? entry) {
+    final at = _forcedAt;
+    if (at != null && DateTime.now().difference(at) < forceAgainAfter) {
+      // acabou de atualizar e ainda falha: a versão nova também não resolve
+      return Future.value(_forcedResult == null ? null : 'ALREADY_UP_TO_DATE');
+    }
+    return _forcing ??= () async {
+      final prev = entry?.status;
+      entry?.status = YtStatus.updating;
+      updatingYtDlp = true;
+      versionBefore = await ytdlp.version().catchError((Object _) => '');
+      notifyListeners();
+      try {
+        final r = await ytdlp.update();
+        final after = await ytdlp.version().catchError((Object _) => '');
+        await app.prefs.setString('ytdlpUpdated', DateTime.now().toIso8601String().substring(0, 10));
+        errorLog.info(
+            'YouTube',
+            r == 'DONE'
+                ? 'O YouTube mudou: yt-dlp atualizado na hora (${versionBefore ?? '?'} → $after) e o download tentado de novo'
+                : 'O YouTube mudou, mas o yt-dlp já estava na versão mais nova ($after)');
+        _forcedResult = r;
+        return r;
+      } catch (e) {
+        errorLog.warn('YouTube', 'O yt-dlp precisa de atualização, mas não deu para atualizar', error: e, balloon: true);
+        _forcedResult = null;
+        return null;
+      } finally {
+        _forcedAt = DateTime.now();
+        updatingYtDlp = false;
+        if (entry != null && entry.status == YtStatus.updating) entry.status = prev ?? YtStatus.downloading;
+        notifyListeners();
+      }
+    }()
+        .whenComplete(() => _forcing = null);
+  }
+
   static String normalizeUrl(String raw) {
     var s = raw.trim();
     final m = RegExp(r'https?://\S+').firstMatch(s); // texto compartilhado com o link no meio
@@ -152,7 +231,7 @@ class DownloadService extends ChangeNotifier {
     notifyListeners();
     try {
       await _maybeUpdate();
-      final info = await ytdlp.info(url, playlist: false);
+      final info = await withFreshYtDlp(() => ytdlp.info(url, playlist: false));
       single = YtEntry.fromInfo(info);
       markExisting([single!], uncheck: false);
       notifyListeners();
@@ -175,7 +254,7 @@ class DownloadService extends ChangeNotifier {
     notifyListeners();
     try {
       await _maybeUpdate();
-      final info = await ytdlp.info(url, playlist: true);
+      final info = await withFreshYtDlp(() => ytdlp.info(url, playlist: true));
       final entries = (info['entries'] as List?)?.whereType<Map>().map((m) => YtEntry.fromInfo(m.cast<String, dynamic>())).toList() ?? [];
       if (entries.isEmpty) throw const YtDlpException('Não achei vídeos nesse link. É mesmo uma playlist?');
       playlistTitle = '${info['title'] ?? 'Playlist'}';
@@ -357,7 +436,8 @@ class DownloadService extends ChangeNotifier {
         notifyListeners();
         final tmp = p.join(tmpBase, e.id.isEmpty ? '${DateTime.now().millisecondsSinceEpoch}' : e.id);
         try {
-          final mp3 = await ytdlp.downloadMp3(e.url, tmp, id: e.id, onProgress: (prog, line) {
+          // plano B: se o YouTube mudou, atualiza o yt-dlp e tenta esta música de novo
+          final mp3 = await withFreshYtDlp(entry: e, () => ytdlp.downloadMp3(e.url, tmp, id: e.id, onProgress: (prog, line) {
             final converting = line.contains('ExtractAudio') || line.contains('EmbedThumbnail') || line.contains('Metadata');
             e.status = converting ? YtStatus.converting : YtStatus.downloading;
             if (prog >= 0) e.progress = (prog / 100).clamp(0, 1);
@@ -366,7 +446,7 @@ class DownloadService extends ChangeNotifier {
               lastNotify = DateTime.now();
               unawaited(ytdlp.notify('Baixando ${doneCount + 1} de ${queue.length}', e.names.title, progress: prog.round()));
             }
-          });
+          }));
           e.status = YtStatus.converting;
           notifyListeners();
           e.savedPath = await _saveToLibrary(File(mp3), e.names, root);

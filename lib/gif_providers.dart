@@ -2,12 +2,16 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import 'service_health.dart';
+
 /// Um GIF encontrado numa fonte online.
 class GifCandidate {
   final String url;
   final String source; // "openverse", "wikimedia"
   final String credit; // autor + licença, para o arquivo de créditos
-  const GifCandidate({required this.url, required this.source, this.credit = ''});
+  /// Categoria do clima de anime ("dance"), quando veio de uma; serve para emprestar GIFs guardados depois.
+  final String? category;
+  const GifCandidate({required this.url, required this.source, this.credit = '', this.category});
 }
 
 abstract class GifProvider {
@@ -107,9 +111,15 @@ class WikimediaProvider extends GifProvider {
   }
 }
 
+/// Fonte de GIFs de anime por categoria de clima ("dance", "cry"...). Se a primeira cair, a próxima entra.
+abstract class AnimeMoodSource {
+  String get name;
+  Future<List<GifCandidate>> random(String category, {int amount = 5});
+}
+
 /// nekos.best: GIFs de anime (busca pelo nome do anime). Termos: só uso pessoal, sem download em massa,
 /// 7 buscas a cada 5 s. Por isso só é usada música a música, nunca no "Baixar para todas".
-class NekosBestProvider extends GifProvider {
+class NekosBestProvider extends GifProvider implements AnimeMoodSource {
   final http.Client client;
   final Duration minInterval;
   DateTime _last = DateTime.fromMillisecondsSinceEpoch(0);
@@ -131,15 +141,18 @@ class NekosBestProvider extends GifProvider {
     _last = DateTime.now();
     final uri = Uri.https('nekos.best', '/api/v2/search', {'query': query, 'type': '2', 'amount': '${limit.clamp(1, 20)}'});
     final res = await client.get(uri, headers: {'User-Agent': 'PlayerNostalgico (app pessoal offline)'}).timeout(const Duration(seconds: 20));
-    if (res.statusCode != 200) return const [];
+    if (res.statusCode == 404) return const [];
+    if (res.statusCode != 200) throw ServiceDown(name, res.statusCode);
     return parse(jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>);
   }
 
   /// GIFs aleatórios de uma categoria (ex.: "punch", "dance"), para combinar com o clima da música.
+  @override
   Future<List<GifCandidate>> random(String category, {int amount = 5}) async {
     final uri = Uri.https('nekos.best', '/api/v2/$category', {'amount': '${amount.clamp(1, 20)}'});
     final res = await client.get(uri, headers: {'User-Agent': 'PlayerNostalgico (app pessoal offline)'}).timeout(const Duration(seconds: 20));
-    if (res.statusCode != 200) return const [];
+    if (res.statusCode == 404) return const []; // categoria que não existe
+    if (res.statusCode != 200) throw ServiceDown(name, res.statusCode);
     return parse(jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>);
   }
 
@@ -148,6 +161,46 @@ class NekosBestProvider extends GifProvider {
           if (r['url'] is String)
             GifCandidate(url: r['url'] as String, source: 'nekos.best', credit: '${r['anime_name'] ?? 'anime'} · via nekos.best · ${r['url']}'),
       ];
+}
+
+/// waifu.pics: reserva de GIFs de anime quando o nekos.best cai. Só tem categorias (não busca por nome),
+/// então entra só nos GIFs do clima. Os nomes das categorias são um pouco diferentes: [categoryFor] traduz.
+class WaifuPicsProvider implements AnimeMoodSource {
+  final http.Client client;
+  WaifuPicsProvider(this.client);
+
+  @override
+  String get name => 'waifu.pics';
+
+  /// Categorias do nekos.best -> as mais parecidas do waifu.pics (null = não tem nada parecido).
+  static const _map = {
+    'dance': 'dance', 'happy': 'happy', 'smile': 'smile', 'wave': 'wave', 'wink': 'wink', 'hug': 'hug',
+    'cuddle': 'cuddle', 'kiss': 'kiss', 'handhold': 'handhold', 'blush': 'blush', 'cry': 'cry', 'pat': 'pat',
+    'highfive': 'highfive', 'kick': 'kick', 'slap': 'slap', 'yeet': 'yeet', 'smug': 'smug', 'bite': 'bite',
+    'poke': 'poke', 'punch': 'bonk', 'angry': 'bully', 'shoot': 'yeet', 'laugh': 'happy', 'clap': 'happy',
+    'thumbsup': 'smile', 'nod': 'smile', 'run': 'glomp', 'sleep': 'cuddle', 'yawn': 'cuddle', 'pout': 'cry',
+  };
+
+  static String? categoryFor(String nekosCategory) => _map[nekosCategory];
+
+  @override
+  Future<List<GifCandidate>> random(String category, {int amount = 5}) async {
+    final cat = categoryFor(category);
+    if (cat == null) return const [];
+    final res = await client
+        .post(Uri.https('api.waifu.pics', '/many/sfw/$cat'),
+            headers: {'User-Agent': _ua, 'Content-Type': 'application/json'}, body: '{"exclude":[]}')
+        .timeout(const Duration(seconds: 20));
+    if (res.statusCode == 404) return const [];
+    if (res.statusCode != 200) throw ServiceDown(name, res.statusCode);
+    return parse(jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>, category, amount: amount);
+  }
+
+  /// Só os .gif (a categoria mistura imagens paradas). [category] é a do nekos.best, para lembrar o clima.
+  static List<GifCandidate> parse(Map<String, dynamic> json, String category, {int amount = 5}) => [
+        for (final u in (json['files'] as List? ?? const []).whereType<String>())
+          if (u.toLowerCase().endsWith('.gif')) GifCandidate(url: u, source: 'waifu.pics', credit: 'anime · via waifu.pics · $u', category: category),
+      ].take(amount).toList();
 }
 
 /// Um resultado do GIPHY: miniatura leve para a grade e o GIF inteiro para baixar.
