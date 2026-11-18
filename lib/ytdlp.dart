@@ -16,7 +16,13 @@ class YtRun {
 
 class YtDlpException implements Exception {
   final String message;
-  const YtDlpException(this.message);
+
+  /// O erro tem cara de yt-dlp velho (o YouTube mudou): vale atualizar e tentar de novo.
+  final bool outdated;
+  const YtDlpException(this.message, {this.outdated = false});
+
+  /// Monta a exceção a partir do texto do yt-dlp: mensagem em português e se parece versão velha.
+  factory YtDlpException.from(String raw) => YtDlpException(YtDlp.friendly(raw), outdated: YtDlp.looksOutdated(raw));
   @override
   String toString() => message;
 }
@@ -52,7 +58,7 @@ class YtDlp {
         return YtRun((r?['exitCode'] as int?) ?? -1, '${r?['out'] ?? ''}', '${r?['err'] ?? ''}');
       } on PlatformException catch (e) {
         if (e.code == 'canceled') throw const YtDlpException('Cancelado');
-        throw YtDlpException(_friendly(e.message ?? e.code));
+        throw YtDlpException.from(e.message ?? e.code);
       } finally {
         if (id != null) _listeners.remove(id);
       }
@@ -92,9 +98,39 @@ class YtDlp {
   }
 
   /// Atualiza o yt-dlp embarcado (o YouTube muda e versões velhas param de funcionar).
+  /// Devolve "DONE" (atualizou) ou "ALREADY_UP_TO_DATE" (já era a mais nova).
   Future<String> update() async {
-    if (!Platform.isAndroid) return '';
+    if (!Platform.isAndroid) {
+      // no PC: o próprio yt-dlp se atualiza (se foi instalado de um jeito que permite)
+      final r = await _runDesktop(['-U']);
+      if (r.exitCode != 0) throw YtDlpException(friendly(r.err.isNotEmpty ? r.err : r.out));
+      return r.out.toLowerCase().contains('up to date') ? 'ALREADY_UP_TO_DATE' : 'DONE';
+    }
     return await _channel.invokeMethod<String>('update') ?? '';
+  }
+
+  /// Sinais de que o yt-dlp ficou velho para o YouTube de hoje (e não de vídeo privado, sem internet etc.).
+  static bool looksOutdated(String raw) {
+    final l = raw.toLowerCase();
+    if (l.contains('private video') || l.contains('video unavailable') || l.contains('has been removed')) return false;
+    if (l.contains('sign in to confirm') || l.contains('age-restricted')) return false;
+    if (l.contains('failed to resolve') || l.contains('network is unreachable') || l.contains('timed out')) return false;
+    return const [
+      'confirm you are on the latest version',
+      'yt-dlp -u',
+      'unable to extract',
+      'nsig extraction failed',
+      'signature extraction failed',
+      'failed to extract any player response',
+      'precondition check failed',
+      'http error 403',
+      'requested format is not available',
+      'only images are available',
+      'some formats may be missing',
+      'page needs to be reloaded',
+      'unsupported js',
+      'n challenge',
+    ].any(l.contains);
   }
 
   Future<String> version() async {
@@ -122,7 +158,7 @@ class YtDlp {
       url,
     ]);
     final start = r.out.indexOf('{');
-    if (r.exitCode != 0 || start < 0) throw YtDlpException(_friendly(r.err.isNotEmpty ? r.err : r.out));
+    if (r.exitCode != 0 || start < 0) throw YtDlpException.from(r.err.isNotEmpty ? r.err : r.out);
     return jsonDecode(r.out.substring(start)) as Map<String, dynamic>;
   }
 
@@ -144,12 +180,12 @@ class YtDlp {
     await Directory(outDir).create(recursive: true);
     final r = await run(mp3Args(url, outDir), id: id, download: true, onProgress: onProgress);
     final mp3s = Directory(outDir).listSync().whereType<File>().where((f) => f.path.toLowerCase().endsWith('.mp3')).toList();
-    if (mp3s.isEmpty) throw YtDlpException(_friendly(r.err.isNotEmpty ? r.err : 'O yt-dlp terminou sem gerar o .mp3 (código ${r.exitCode}).'));
+    if (mp3s.isEmpty) throw YtDlpException.from(r.err.isNotEmpty ? r.err : 'O yt-dlp terminou sem gerar o .mp3 (código ${r.exitCode}).');
     return mp3s.first.path;
   }
 
   /// Mensagens do yt-dlp em português, para os erros mais comuns.
-  static String _friendly(String raw) {
+  static String friendly(String raw) {
     final s = raw.trim();
     final l = s.toLowerCase();
     if (l.contains('private video')) return 'Vídeo privado.';

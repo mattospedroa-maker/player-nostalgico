@@ -12,6 +12,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'artist_names.dart';
+import 'artist_photos.dart';
 import 'audio_handler.dart';
 import 'cover_service.dart';
 import 'crossfade.dart';
@@ -36,7 +37,13 @@ import 'visual_search.dart';
 /// Suba quando a leitura de nomes/tags mudar, para reler a biblioteca toda.
 const scanVersion = 2;
 
-class AppState extends ChangeNotifier {
+/// A chave "capa e fotos entre os GIFs" (separada para a janela Opções poder ser testada sem o app inteiro).
+abstract class GifDisplaySettings {
+  bool get photosInGifs;
+  Future<void> setPhotosInGifs(bool v);
+}
+
+class AppState extends ChangeNotifier implements GifDisplaySettings {
   final AppDb db;
   final SharedPreferences prefs;
   final PlayerService player;
@@ -46,6 +53,30 @@ class AppState extends ChangeNotifier {
   late final CoverService covers = CoverService(dataDir, metadata);
   late final GifFetcher gifFetcher = GifFetcher(gifs, client: http.Client())..lastFmKey = (() => lastFmKey);
   int? _lastAutoFetchId;
+  late final ArtistPhotoService artistPhotos = ArtistPhotoService(dataDir);
+
+  /// Capa do álbum e fotos do artista aparecem entre os GIFs do Tocando agora (os GIFs continuam todos).
+  @override
+  bool get photosInGifs => prefs.getBool('photosInGifs') ?? true;
+  @override
+  Future<void> setPhotosInGifs(bool v) async {
+    await prefs.setBool('photosInGifs', v);
+    visualsEpoch++;
+    notifyListeners();
+  }
+
+  /// Imagens extras da roda de GIFs: capa do álbum e fotos do artista principal (parcerias contam no principal).
+  List<String> gifExtrasFor(Track t) {
+    if (!photosInGifs) return const [];
+    return [?covers.fileFor(t)?.path, ...artistPhotos.photosFor(ArtistNames.current.main(t.artist))];
+  }
+
+  /// O caminho é a capa ou uma foto de artista (não um GIF)? Para o selo da roda.
+  String? extraLabel(Track t, String path) {
+    if (artistPhotos.isPhoto(path)) return 'Foto · ${ArtistNames.current.main(t.artist)}';
+    if (p.isWithin(covers.dir, path)) return 'Capa do álbum';
+    return null;
+  }
   late final DownloadService downloads = DownloadService(this);
 
   /// Baixar GIFs sozinho quando uma música começa a tocar.
@@ -563,6 +594,15 @@ class AppState extends ChangeNotifier {
     gifs.gifsFor(fresh).then((g) => nowShowingGif(fresh, g.isEmpty ? null : g.first)).catchError((Object e) {
       errorLog.info('Notificação', 'Não deu para trocar a imagem da notificação', e); // arte é secundária: nunca derruba o player
     });
+    if (photosInGifs) {
+      artistPhotos.fetch(ArtistNames.current.main(fresh.artist)).then((n) {
+        if (n == 0) return;
+        visualsEpoch++; // a roda do Tocando agora ganha as fotos novas
+        notifyListeners();
+      }).catchError((Object e) {
+        errorLog.info('Fotos', 'Busca de fotos do artista falhou', e);
+      });
+    }
     if (!autoGifs || t.id == _lastAutoFetchId) return;
     _lastAutoFetchId = t.id;
     gifFetcher.fetchFor(fresh).catchError(_gifFetchFailed);

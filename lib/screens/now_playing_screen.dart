@@ -9,6 +9,7 @@ import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
+import '../artist_photos.dart';
 import '../audio_handler.dart';
 import '../filename_parser.dart';
 import '../gif_fetcher.dart';
@@ -131,12 +132,19 @@ class NowPlayingScreen extends StatelessWidget {
                   ],
                 ),
         ),
-        XpStatusBar([
-          t == null ? 'Pronto' : '${ps.playing ? 'Tocando' : 'Pausado'} · ${t.title}',
-          if (t != null) p.extension(t.path).replaceFirst('.', '').toUpperCase(),
-          'Mix: ${ps.mixMode == MixMode.artist ? 'artista' : 'vibe'}',
-          ps.crossfade ? 'Transição: ligada' : 'Transição: desligada',
-        ]),
+        // plano B dos GIFs: a barra diz qual serviço caiu e o que entrou no lugar
+        ListenableBuilder(
+          listenable: Listenable.merge([app.gifs, app.gifFetcher.health]),
+          builder: (_, _) {
+            final outage = t == null ? null : app.gifFetcher.statusFor(t);
+            return XpStatusBar([
+              outage != null ? '🌐 $outage' : (t == null ? 'Pronto' : '${ps.playing ? 'Tocando' : 'Pausado'} · ${t.title}'),
+              if (t != null) p.extension(t.path).replaceFirst('.', '').toUpperCase(),
+              'Mix: ${ps.mixMode == MixMode.artist ? 'artista' : 'vibe'}',
+              ps.crossfade ? 'Transição: ligada' : 'Transição: desligada',
+            ]);
+          },
+        ),
       ],
     );
   }
@@ -474,7 +482,12 @@ class GifCarousel extends StatefulWidget {
 
 class _GifCarouselState extends State<GifCarousel> {
   static const interval = Duration(seconds: 8);
+  /// O que passa na roda: GIFs com a capa e as fotos do artista no meio.
   List<String> _gifs = const [];
+
+  /// Só os GIFs (salvos, emprestados do mesmo clima e do GIPHY), sem as fotos.
+  List<String> _base = const [];
+  List<String> _extras = const [];
   Uint8List? _cover;
   int _i = 0;
   Timer? _timer;
@@ -515,9 +528,11 @@ class _GifCarouselState extends State<GifCarousel> {
   }
 
   int _lastCount = -1;
+  int _lastBorrowed = -1;
   void _onGifsChanged() {
-    // recarrega quando chegam GIFs novos (download em segundo plano)
-    if (_gifService.count != _lastCount) {
+    // recarrega quando chegam GIFs novos (download em segundo plano) ou GIFs emprestados (plano B)
+    final borrowed = context.read<AppState>().gifFetcher.borrowed[widget.track.id]?.length ?? 0;
+    if (_gifService.count != _lastCount || borrowed != _lastBorrowed) {
       _load();
     } else if (mounted) {
       setState(() {});
@@ -527,17 +542,27 @@ class _GifCarouselState extends State<GifCarousel> {
   Future<void> _load() async {
     final app = context.read<AppState>();
     _lastCount = app.gifs.count;
-    final gifs = await app.gifs.gifsFor(widget.track);
+    final own = await app.gifs.gifsFor(widget.track);
+    // plano B: serviço de GIFs fora do ar -> completa com GIFs guardados do mesmo clima
+    final lend = app.gifFetcher.borrowed[widget.track.id] ?? const <String>[];
+    _lastBorrowed = lend.length;
+    final gifs = [...own, ...lend.where((g) => !own.contains(g))].take(maxGifsPerTrack).toList();
+    final extras = app.gifExtrasFor(widget.track);
     Uint8List? cover;
-    if (gifs.isEmpty) cover = await app.covers.fileFor(widget.track)?.readAsBytes() ?? await app.metadata.cover(widget.track.path);
+    if (gifs.isEmpty && extras.isEmpty) cover = await app.covers.fileFor(widget.track)?.readAsBytes() ?? await app.metadata.cover(widget.track.path);
     if (!mounted) return;
+    final showing = _gifs.isEmpty ? null : _gifs[_i.clamp(0, _gifs.length - 1)];
     setState(() {
-      _gifs = gifs;
+      _base = gifs;
+      _extras = extras;
+      _gifs = mixExtras(gifs, extras);
       _cover = cover;
-      _i = 0;
-      _shownAt = DateTime.now();
+      // continua no mesmo GIF quando a roda só ganhou itens novos
+      final k = showing == null ? -1 : _gifs.indexOf(showing);
+      _i = k < 0 ? 0 : k;
+      if (k < 0) _shownAt = DateTime.now();
     });
-    app.nowShowingGif(widget.track, gifs.isEmpty ? null : gifs.first);
+    app.nowShowingGif(widget.track, _gifs.isEmpty ? null : _gifs[_i]);
     _restartTimer();
     _addWeb(gifs);
   }
@@ -553,7 +578,7 @@ class _GifCarouselState extends State<GifCarousel> {
     }
     final urls = [for (final r in web) r.gif.url];
     // usa os salvos que estão na roda agora (podem ter chegado GIFs novos enquanto o GIPHY respondia)
-    local = [for (final g in _gifs) if (!_isWeb(g)) g];
+    local = [for (final g in _base) if (!_isWeb(g)) g];
     final merged = switch (app.gifSource) {
       GifSource.anime => local,
       GifSource.giphy => interleave([urls, local]),
@@ -561,8 +586,9 @@ class _GifCarouselState extends State<GifCarousel> {
     };
     final showing = _gifs.isEmpty ? null : _gifs[_i];
     setState(() {
-      _gifs = merged;
-      final k = showing == null ? -1 : merged.indexOf(showing);
+      _base = merged;
+      _gifs = mixExtras(merged, _extras);
+      final k = showing == null ? -1 : _gifs.indexOf(showing);
       _i = k < 0 ? 0 : k;
     });
     _restartTimer();
@@ -667,6 +693,16 @@ class _GifCarouselState extends State<GifCarousel> {
                   child: const Text('Baixando GIFs...', style: TextStyle(color: Colors.white, fontSize: 11)),
                 ),
               ),
+            if (_gifs.isNotEmpty && app.extraLabel(widget.track, _gifs[_i]) != null)
+              Positioned(
+                left: 6,
+                bottom: 6,
+                child: Container(
+                  color: Colors.black54,
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  child: Text(app.extraLabel(widget.track, _gifs[_i])!, style: const TextStyle(color: Colors.white, fontSize: 10)),
+                ),
+              ),
             if (_gifs.isNotEmpty && _isWeb(_gifs[_i]))
               Positioned(
                 left: 6,
@@ -686,7 +722,7 @@ class _GifCarouselState extends State<GifCarousel> {
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   child: ValueListenableBuilder<int>(
                     valueListenable: _tick,
-                    builder: (_, _, _) => Text('GIF ${_i + 1} de ${_gifs.length} · troca em ${remaining()} s',
+                    builder: (_, _, _) => Text('${_i + 1} de ${_gifs.length} · troca em ${remaining()} s',
                         style: const TextStyle(color: Colors.white, fontSize: 11)),
                   ),
                 ),

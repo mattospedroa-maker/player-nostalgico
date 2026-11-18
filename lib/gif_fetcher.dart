@@ -17,6 +17,7 @@ import 'lastfm.dart';
 import 'models.dart';
 import 'mood.dart';
 import 'organizer.dart' show safeFolderName;
+import 'service_health.dart';
 import 'visual_search.dart';
 import 'visual_tags.dart';
 
@@ -79,8 +80,36 @@ class GifFetcher {
     return name.length >= 2 ? name : null;
   }
 
-  GifFetcher(this.gifs, {required this.client, List<GifProvider>? providers, this.maxBytes = 8 * 1024 * 1024, this.retryAfter = const Duration(days: 3)})
-      : providers = providers ?? [NekosBestProvider(client)]; // só GIFs de anime (pedido do usuário)
+  /// Fontes de GIF de anime por clima, em ordem: se a primeira cai, a próxima entra (plano B).
+  final List<AnimeMoodSource> moodSources;
+
+  /// Quais serviços caíram agora.
+  final ServiceHealth health;
+
+  GifFetcher(this.gifs,
+      {required this.client,
+      List<GifProvider>? providers,
+      List<AnimeMoodSource>? moodSources,
+      ServiceHealth? health,
+      this.maxBytes = 8 * 1024 * 1024,
+      this.retryAfter = const Duration(days: 3)})
+      : providers = providers ?? [NekosBestProvider(client)], // só GIFs de anime (pedido do usuário)
+        health = health ?? ServiceHealth(),
+        moodSources = moodSources ??
+            [
+              ...(providers ?? const []).whereType<AnimeMoodSource>(),
+              if (providers == null) ...[NekosBestProvider(client), WaifuPicsProvider(client)],
+            ];
+
+  /// Aviso da barra de status do Tocando agora, por música (ex.: "nekos.best fora do ar · usando GIFs guardados").
+  /// Null quando está tudo normal.
+  final Map<int?, String> outageStatus = {};
+
+  /// GIFs guardados de outras músicas do mesmo clima, mostrados enquanto a fonte está fora do ar.
+  /// Não são fixados na música: quando o serviço volta, ela ganha os dela.
+  final Map<int?, List<String>> borrowed = {};
+
+  String? statusFor(Track t) => outageStatus[t.id];
 
   bool isFetching(Track t) => _running.contains(t.id);
 
@@ -362,18 +391,27 @@ class GifFetcher {
       final plan = plan0;
       final seenUrls = <String>{};
       final usable = providers.where((pr) => (!bulk || pr.allowBulk) && (!pr.animeOnly || plan.anime)).toList();
+      // plano B: quais fontes de anime falharam e se alguma respondeu
+      final moodFailures = <String, Object>{};
+      final moodUsed = <String>{};
 
       Future<List<GifCandidate>> collect(List<String> queries, {required bool anime}) async {
         final out = <GifCandidate>[];
         for (final q in queries) {
           for (final prov in usable.where((pr) => pr.animeOnly == anime)) {
+            if (health.isDown(prov.name)) continue; // caiu há pouco: nem tenta
             try {
               for (final c in await prov.search(q, limit: 15)) {
                 if (seenUrls.add(c.url)) out.add(c);
               }
+              health.up(prov.name);
             } catch (e) {
               // sem internet ou fonte fora do ar: tenta a próxima
-              errorLog.info('GIFs', 'Busca de GIFs falhou em ${prov.runtimeType}', e);
+              errorLog.info('GIFs', 'Busca de GIFs falhou em ${prov.name}', e);
+              if (prov is AnimeMoodSource) {
+                health.down(prov.name, e);
+                moodFailures[prov.name] = e;
+              }
             }
           }
           if (out.length >= 8) break;
@@ -389,8 +427,10 @@ class GifFetcher {
       final artistC = (await collect(plan.artist, anime: false))..shuffle(rnd); // varia entre as músicas do artista
       final genreC = (await collect(plan.genre, anime: false))..shuffle(rnd);
       final animeC = <GifCandidate>[];
-      final nekos = usable.whereType<NekosBestProvider>().firstOrNull;
-      if (nekos != null && plan.moods.isNotEmpty) {
+      // em massa as fontes de anime não entram (termos do nekos.best); música a música, sim
+      final sources = bulk ? const <AnimeMoodSource>[] : moodSources;
+      final climas = _readClimas();
+      if (sources.isNotEmpty && plan.moods.isNotEmpty) {
         // categorias que o usuário marcou como "não combina" para esta música saem da lista
         final fb = feedback;
         final cats = plan.moods.where((c) => fb == null || fb.weight(artist0, title0, 'anime:$c') > 0.4).toList();
@@ -406,13 +446,26 @@ class GifFetcher {
             ..addAll(rest);
         }
         for (final cat in cats.take(4)) {
-          try {
-            // pede mais do que precisa: sobra para pular os que outras músicas já usam
-            for (final c in await nekos.random(cat, amount: 5)) {
-              if (seenUrls.add(c.url)) animeC.add(c);
+          // a primeira fonte que responder vale; se ela caiu, a próxima (waifu.pics) entra no lugar
+          for (final src in sources) {
+            if (health.isDown(src.name)) continue;
+            try {
+              // pede mais do que precisa: sobra para pular os que outras músicas já usam
+              final got = await src.random(cat, amount: 5);
+              health.up(src.name);
+              if (got.isEmpty) continue;
+              moodUsed.add(src.name);
+              for (final c in got) {
+                if (!seenUrls.add(c.url)) continue;
+                animeC.add(c);
+                if (c.category != null && nekosCategory(c.url) == null) climas[c.url] = c.category;
+              }
+              break;
+            } catch (e) {
+              errorLog.info('GIFs', '${src.name} não respondeu', e);
+              health.down(src.name, e);
+              moodFailures[src.name] = e;
             }
-          } catch (e) {
-            errorLog.info('GIFs', 'nekos.best não respondeu', e);
           }
         }
         animeC.shuffle(rnd);
@@ -485,13 +538,74 @@ class GifFetcher {
         await File(p.join(dest.path, 'creditos.txt')).writeAsString('${credits.join('\n')}\n', mode: FileMode.append);
       }
       _writeIndex(index);
-      log[key] = {'v': planVersion, 't': DateTime.now().toIso8601String(), 'anime': animeDone || !bulk, 'lfm': tagAnime.isNotEmpty};
-      _writeLog(log);
+      _writeClimas(climas);
+      final primary = sources.firstOrNull?.name;
+      final outage = primary != null && plan.moods.isNotEmpty && health.wasDown(primary);
+      if (outage) {
+        // a internet funciona se alguma fonte respondeu ou se o serviço respondeu com erro (ex.: 503)
+        final online = moodUsed.isNotEmpty ||
+            moodFailures.values.any((e) => e is ServiceDown) ||
+            health.reason(primary) is ServiceDown;
+        final backup = moodUsed.where((n) => n != primary).firstOrNull;
+        final lend = saved < need
+            ? await _borrow(t, plan.moods, exclude: {...pinned, ...(await gifs.db.pinnedGifs(t.id!))}, max: need - saved)
+            : const <String>[];
+        borrowed[t.id] = lend;
+        final what = backup != null
+            ? 'GIFs do $backup no lugar'
+            : (lend.isNotEmpty ? 'usando GIFs guardados' : 'sem GIFs guardados desse clima');
+        outageStatus[t.id] = online ? '$primary fora do ar · $what' : 'Sem internet · $what';
+        health.announce(primary, online: online, fallback: backup != null ? 'trazendo GIFs do $backup no lugar' : 'mostrando GIFs guardados no celular');
+      } else {
+        outageStatus.remove(t.id);
+        borrowed.remove(t.id);
+      }
+      // nenhuma fonte de anime respondeu: não marca como buscada, para tentar de novo quando a música tocar
+      if (!(outage && moodUsed.isEmpty)) {
+        log[key] = {'v': planVersion, 't': DateTime.now().toIso8601String(), 'anime': animeDone || !bulk, 'lfm': tagAnime.isNotEmpty};
+        _writeLog(log);
+      }
     } finally {
       _running.remove(t.id);
       await gifs.refresh();
     }
     return saved;
+  }
+
+  /// Clima de cada GIF de anime que não diz o clima no endereço (waifu.pics): `GIFs/.climas.json`.
+  Map<String, dynamic> _readClimas() {
+    final root = gifs.gifRoot;
+    return root == null ? {} : _readJson(p.join(root, '.climas.json'));
+  }
+
+  void _writeClimas(Map<String, dynamic> m) {
+    final root = gifs.gifRoot;
+    if (root == null || m.isEmpty) return;
+    _writeJson(p.join(root, '.climas.json'), m);
+  }
+
+  /// Categoria de clima de um GIF de anime baixado (pelo endereço de onde veio).
+  String? categoryOf(String url) => nekosCategory(url) ?? _readClimas()[url] as String?;
+
+  /// Plano B: GIFs de anime já guardados (de outras músicas) com o mesmo clima, sem baixar nada.
+  Future<List<String>> _borrow(Track t, List<String> moods, {required Set<String> exclude, required int max}) async {
+    if (max <= 0) return const [];
+    final (title, artist) = namesFor(t);
+    final rejected = feedback?.rejected(artist, title) ?? const <String>{};
+    final want = moods.toSet();
+    final seen = exclude.map((g) => p.basename(g)).toSet();
+    final found = <String>[];
+    for (final e in _readIndex().entries) {
+      final path = e.value;
+      if (path is! String) continue;
+      final cat = categoryOf(e.key);
+      if (cat == null || !want.contains(cat)) continue;
+      if (rejected.contains(p.basenameWithoutExtension(path)) || rejected.contains(e.key)) continue;
+      if (!seen.add(p.basename(path)) || !File(path).existsSync()) continue;
+      found.add(path);
+    }
+    found.shuffle(Random(t.path.hashCode ^ DateTime.now().day));
+    return found.take(max).toList();
   }
 
   /// Apaga só os GIFs que o app baixou sozinho (os escolhidos à mão ficam).

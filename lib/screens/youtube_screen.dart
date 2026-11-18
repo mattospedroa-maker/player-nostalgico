@@ -257,7 +257,12 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
   Widget _loading(String? error, bool loading) => Padding(
         padding: const EdgeInsets.all(12),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          if (loading) ...[const Text('Lendo o link…', style: TextStyle(fontSize: 13)), const SizedBox(height: 6), const XpProgress(height: 14)],
+          if (loading) ...[
+            Text(context.read<DownloadService>().updatingYtDlp ? 'O YouTube mudou: atualizando o yt-dlp e tentando de novo…' : 'Lendo o link…',
+                style: const TextStyle(fontSize: 13)),
+            const SizedBox(height: 6),
+            const XpProgress(height: 14),
+          ],
           if (error != null) _error(error),
         ]),
       );
@@ -509,7 +514,7 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
 
   Widget _queueView(DownloadService ds) {
     final q = ds.queue;
-    final cur = q.where((e) => e.status == YtStatus.downloading || e.status == YtStatus.converting).firstOrNull;
+    final cur = q.where((e) => e.status == YtStatus.downloading || e.status == YtStatus.converting || e.status == YtStatus.updating).firstOrNull;
     final waiting = q.where((e) => e.status == YtStatus.queued).length;
     final root = context.read<AppState>().sourceRoot;
     final folder = root == null ? 'Música' : p.basename(root);
@@ -524,13 +529,25 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
           if (cur != null) ...[
             Text('${cur.names.title}.mp3', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
             Text("De 'youtube.com' para '$folder\\${cur.names.artist}'", maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
-            const SizedBox(height: 6),
-            XpProgress(value: cur.status == YtStatus.converting ? null : cur.progress),
-            const SizedBox(height: 4),
-            Text(
-              cur.status == YtStatus.converting ? 'Convertendo para MP3…' : 'Baixando… ${(cur.progress * 100).round()}%',
-              style: const TextStyle(fontSize: 13, color: Color(0xFF333333)),
-            ),
+            if (cur.status == YtStatus.updating) ...[
+              // plano B: o YouTube mudou, o app atualiza o yt-dlp e tenta de novo sozinho
+              const Text('O YouTube mudou e o yt-dlp ficou velho.', style: TextStyle(fontSize: 13)),
+              const Text('Atualizando o yt-dlp e tentando de novo…', style: TextStyle(fontSize: 13, color: Color(0xFF1C3F94))),
+              const SizedBox(height: 6),
+              const XpProgress(value: null),
+              if ((ds.versionBefore ?? '').isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text('Versão atual: ${ds.versionBefore}', style: const TextStyle(fontSize: 12, color: Color(0xFF555555))),
+              ],
+            ] else ...[
+              const SizedBox(height: 6),
+              XpProgress(value: cur.status == YtStatus.converting ? null : cur.progress),
+              const SizedBox(height: 4),
+              Text(
+                cur.status == YtStatus.converting ? 'Convertendo para MP3…' : 'Baixando… ${(cur.progress * 100).round()}%',
+                style: const TextStyle(fontSize: 13, color: Color(0xFF333333)),
+              ),
+            ],
           ] else ...[
             Text(ds.running ? 'Preparando…' : 'Pronto!', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
             const SizedBox(height: 6),
@@ -574,11 +591,12 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
   }
 
   Widget _queueRow(YtEntry e) {
-    final active = e.status == YtStatus.downloading || e.status == YtStatus.converting;
+    final active = e.status == YtStatus.downloading || e.status == YtStatus.converting || e.status == YtStatus.updating;
     final (text, color) = switch (e.status) {
       YtStatus.queued => ('Aguardando', const Color(0xFF777777)),
       YtStatus.downloading => ('Baixando ${(e.progress * 100).round()}%', Colors.white),
       YtStatus.converting => ('Convertendo', Colors.white),
+      YtStatus.updating => ('Atualizando yt-dlp', Colors.white),
       YtStatus.done => ('Concluído', const Color(0xFF1D7A2A)),
       YtStatus.failed => (e.error ?? 'Erro', Xp.red),
       YtStatus.canceled => ('Cancelado', const Color(0xFF888888)),
