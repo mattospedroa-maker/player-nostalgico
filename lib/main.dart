@@ -22,6 +22,7 @@ import 'screens/options_screen.dart';
 import 'screens/organizer_screen.dart';
 import 'screens/playlists_screen.dart';
 import 'screens/youtube_screen.dart';
+import 'share_intake.dart';
 import 'skip_notice.dart';
 import 'theme.dart';
 import 'widgets.dart';
@@ -254,6 +255,21 @@ class _HomeShellState extends State<HomeShell> {
     observers: [_keepRoots[i]],
     onGenerateRoute: (s) => MaterialPageRoute<void>(settings: s, builder: (_) => _roots[i]),
   );
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(ShareIntake.attach(_openShared));
+  }
+
+  /// Link compartilhado de outro app: fecha o que estiver aberto por cima e abre "Baixar do YouTube" já buscando.
+  void _openShared(String text) {
+    if (!mounted) return;
+    setState(() => _startOpen = false);
+    final nav = Navigator.of(context);
+    nav.popUntil((r) => r.isFirst);
+    nav.push(MaterialPageRoute<void>(builder: (_) => YoutubeScreen(sharedLink: text)));
+  }
 
   void _openTool(Widget screen) {
     setState(() => _startOpen = false);

@@ -12,7 +12,9 @@ import '../xp_icons.dart';
 /// "Baixar do YouTube (MP3)" no jeito da janela "Copiando…" do Windows XP: um campo só
 /// (reconhece vídeo ou playlist pelo link), as notinhas indo do globo para a pasta e a fila no modo Detalhes.
 class YoutubeScreen extends StatefulWidget {
-  const YoutubeScreen({super.key});
+  /// Link que veio do menu "Compartilhar": já entra no campo certo (vídeo ou playlist) e busca.
+  final String? sharedLink;
+  const YoutubeScreen({super.key, this.sharedLink});
 
   @override
   State<YoutubeScreen> createState() => _YoutubeScreenState();
@@ -36,6 +38,25 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
   void initState() {
     super.initState();
     context.read<DownloadService>().warmUp();
+    final shared = widget.sharedLink;
+    if (shared != null) WidgetsBinding.instance.addPostFrameCallback((_) => _openShared(shared));
+  }
+
+  /// Playlist vai para o campo Playlist; vídeo (ou vídeo aberto dentro de uma playlist) vai para o campo Vídeo,
+  /// e nesse caso a playlist também fica no campo de baixo, a um "Buscar" de distância.
+  void _openShared(String text) {
+    if (!mounted) return;
+    final url = DownloadService.normalizeUrl(text);
+    if (url.isEmpty) return;
+    final kind = DownloadService.linkKind(url);
+    if (kind == LinkKind.playlist) {
+      _playlistLink.text = url;
+      _search(playlist: true);
+    } else {
+      _videoLink.text = url;
+      if (kind == LinkKind.both) _playlistLink.text = url;
+      _search(playlist: false);
+    }
   }
 
   @override
