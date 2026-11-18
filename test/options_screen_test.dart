@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
-import 'package:player_nostalgico/app_state.dart';
 import 'package:player_nostalgico/crossfade.dart';
 import 'package:player_nostalgico/screens/options_screen.dart';
 import 'package:player_nostalgico/theme.dart';
@@ -26,13 +25,6 @@ class FakeSettings extends ChangeNotifier implements CrossfadeSettings {
     saves++;
     notifyListeners();
   }
-}
-
-class FakeGifSettings implements GifDisplaySettings {
-  @override
-  bool photosInGifs = true;
-  @override
-  Future<void> setPhotosInGifs(bool v) async => photosInGifs = v;
 }
 
 void main() {
@@ -92,21 +84,5 @@ void main() {
     await g.up();
     await t.pump();
     expect(find.textContaining(RegExp(r'sumindo\): (7|8|9) s$'), findRichText: true), findsOneWidget);
-  });
-
-  testWidgets('aba GIFs: desligar capa e fotos entre os GIFs só vale ao Aplicar', (t) async {
-    t.view.physicalSize = const Size(400, 760);
-    t.view.devicePixelRatio = 1;
-    addTearDown(t.view.reset);
-    final g = FakeGifSettings();
-    await t.pumpWidget(MaterialApp(theme: Xp.theme(), home: OptionsScreen(settings: FakeSettings(), gifSettings: g)));
-    await t.tap(find.text('GIFs'));
-    await t.pump();
-    await t.tap(find.byKey(const Key('options-photos')));
-    await t.pump();
-    expect(g.photosInGifs, isTrue, reason: 'ainda não aplicou');
-    await t.tap(find.byKey(const Key('options-apply')));
-    await t.pump();
-    expect(g.photosInGifs, isFalse);
   });
 }

@@ -1,7 +1,6 @@
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
-import '../app_state.dart';
 import '../crossfade.dart';
 import '../player_service.dart';
 import '../theme.dart';
@@ -12,10 +11,7 @@ import '../xp_icons.dart';
 class OptionsScreen extends StatefulWidget {
   /// Só para testes; no app vem o PlayerService.
   final CrossfadeSettings? settings;
-
-  /// Só para testes; no app vem o AppState. Sem ele, a aba GIFs não aparece.
-  final GifDisplaySettings? gifSettings;
-  const OptionsScreen({super.key, this.settings, this.gifSettings});
+  const OptionsScreen({super.key, this.settings});
 
   @override
   State<OptionsScreen> createState() => _OptionsScreenState();
@@ -23,25 +19,13 @@ class OptionsScreen extends StatefulWidget {
 
 class _OptionsScreenState extends State<OptionsScreen> {
   late final CrossfadeSettings _ps = widget.settings ?? context.read<PlayerService>();
-  late final GifDisplaySettings? _gs = widget.gifSettings ?? _appOrNull();
   late bool _on;
   late int _out;
   late int _in;
-  late bool _photos;
-  int _tab = 0;
-
-  GifDisplaySettings? _appOrNull() {
-    try {
-      return context.read<AppState>();
-    } on ProviderNotFoundException {
-      return null;
-    }
-  }
 
   @override
   void initState() {
     super.initState();
-    _photos = _gs?.photosInGifs ?? true;
     _on = _ps.crossfade;
     _out = _ps.fadeOut.inSeconds;
     _in = _ps.fadeIn.inSeconds;
@@ -59,11 +43,9 @@ class _OptionsScreenState extends State<OptionsScreen> {
     super.dispose();
   }
 
-  bool get _changed =>
-      _on != _ps.crossfade || _out != _ps.fadeOut.inSeconds || _in != _ps.fadeIn.inSeconds || (_gs != null && _photos != _gs.photosInGifs);
+  bool get _changed => _on != _ps.crossfade || _out != _ps.fadeOut.inSeconds || _in != _ps.fadeIn.inSeconds;
 
   void _apply() {
-    if (_gs != null && _photos != _gs.photosInGifs) _gs.setPhotosInGifs(_photos);
     _ps.setCrossfadeTimes(Duration(seconds: _out), Duration(seconds: _in));
     _ps.setCrossfade(_on);
     setState(() {});
@@ -87,13 +69,10 @@ class _OptionsScreenState extends State<OptionsScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      XpTabs(labels: ['Reprodução', if (_gs != null) 'GIFs'], current: _tab, onTap: (i) => setState(() => _tab = i)),
+                      XpTabs(labels: const ['Reprodução'], current: 0, onTap: (_) {}),
                       Expanded(
                         child: XpTabPage(
-                          child: ListView(
-                            padding: EdgeInsets.zero,
-                            children: _tab == 1 ? [_photosGroup()] : [_fadeGroup(), _previewGroup()],
-                          ),
+                          child: ListView(padding: EdgeInsets.zero, children: [_fadeGroup(), _previewGroup()]),
                         ),
                       ),
                       Padding(
@@ -157,29 +136,6 @@ class _OptionsScreenState extends State<OptionsScreen> {
         const Text(
           'Separado: a música que sai pode demorar mais para sumir do que a próxima para aparecer. '
           'As duas começam juntas; a transição só acontece quando a música chega ao fim sozinha.',
-          style: TextStyle(fontSize: 12, color: Color(0xFF555555)),
-        ),
-      ],
-    ),
-  );
-
-  Widget _photosGroup() => XpGroupBox(
-    title: 'Tocando agora',
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        CheckboxListTile(
-          key: const Key('options-photos'),
-          dense: true,
-          contentPadding: EdgeInsets.zero,
-          controlAffinity: ListTileControlAffinity.leading,
-          value: _photos,
-          onChanged: (v) => setState(() => _photos = v ?? true),
-          title: const Text('Mostrar a capa do álbum e fotos do artista entre os GIFs', style: TextStyle(fontSize: 14)),
-        ),
-        const Text(
-          'Os GIFs continuam todos; a capa e até 2 fotos do artista (ou da banda) entram a cada 3 GIFs. '
-          'As fotos vêm do Deezer e da Wikipédia na primeira vez que o artista toca e depois ficam no celular.',
           style: TextStyle(fontSize: 12, color: Color(0xFF555555)),
         ),
       ],
