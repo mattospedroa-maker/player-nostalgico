@@ -71,7 +71,9 @@ void main() {
     expect(t.autoMood, Mood.triste);
     final cats = GifFetcher.moodsFor(t, tagAnime: ['stare', 'punch', 'cry']);
     expect(cats.first, Mood.triste.categories.first);
-    expect(cats.take(2), ['cry', 'stare']);
+    // só o triste com folga (o gênero metal vira Ação, que briga com ele e sai): as categorias dele, depois as das tags
+    expect(cats.take(5), Mood.triste.categories);
+    expect(cats.last, 'stare');
     expect(cats, isNot(contains('punch'))); // soco briga com música melancólica
     expect(cats, containsAll(Mood.triste.categories));
   });

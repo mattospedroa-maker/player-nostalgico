@@ -188,6 +188,30 @@ class MoodClues {
     return MoodGuess(ok ? best.key : null, scores, reasons);
   }
 
+  /// Andamento fora disso é erro de tag: conta como ausente.
+  static int? validBpm(int? bpm) => bpm == null || bpm < 40 || bpm > 220 ? null : bpm;
+
+  /// Multiplicador de andamento por clima (sem análise de áudio: só o BPM da tag/Last.fm e a energia, se vierem).
+  /// Lento (BPM < 80 ou energia < 0.35): triste, calmo e romântico sobem; festa e ação descem.
+  /// Rápido (BPM > 125 ou energia > 0.7): festa, ação e épico sobem; calmo desce. Senão, nada muda.
+  static Map<Mood, double> tempoFactors({int? bpm, double? energy}) {
+    final b = validBpm(bpm);
+    final e = energy == null || energy < 0 || energy > 1 ? null : energy;
+    if ((b != null && b < 80) || (e != null && e < 0.35)) {
+      return {_t: 1.4, _c: 1.4, _r: 1.4, _f: 0.45, _a: 0.45};
+    }
+    if ((b != null && b > 125) || (e != null && e > 0.7)) {
+      return {_f: 1.3, _a: 1.3, _e: 1.3, _c: 0.5};
+    }
+    return const {};
+  }
+
+  /// Pontos do clima com o andamento aplicado (cópia; o original não muda).
+  static Map<Mood, double> withTempo(Map<Mood, double> scores, {int? bpm, double? energy}) {
+    final f = tempoFactors(bpm: bpm, energy: energy);
+    return {for (final MapEntry(key: m, value: v) in scores.entries) m: v * (f[m] ?? 1)};
+  }
+
   /// Tag (normalizada) -> climas. Igual vale inteiro; tag composta que contém a palavra ("sad songs") vale 70%.
   static Map<Mood, double> _tagHits(String n) {
     final exact = _tagWords[n];

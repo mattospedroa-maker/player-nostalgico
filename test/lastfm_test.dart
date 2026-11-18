@@ -181,7 +181,7 @@ void main() {
       final lfm = <String>[];
       final client = MockClient((req) async {
         if (req.url.host == 'ws.audioscrobbler.com') {
-          lfm.add(req.url.queryParameters['track']!);
+          if (req.url.queryParameters['method'] == 'track.gettoptags') lfm.add(req.url.queryParameters['track']!);
           return http.Response(lastFmBody, 200);
         }
         if (req.url.host == 'nekos.best' && req.url.path != '/api/v2/search') {
@@ -209,7 +209,7 @@ void main() {
       await f.fetchFor(t);
       expect(f.tagStatus[t.id], TagStatus.ok);
       expect(cats, isNot(contains('kick'))); // o gênero "metal" daria luta
-      expect(cats, contains('stare'));
+      expect(cats.first, 'cry'); // tags tristes: o clima triste vem primeiro
       // segunda vez: usa o cache, não consulta de novo
       await f.fetchFor(t, force: true);
       expect(lfm, ['Zeit']);
@@ -239,7 +239,7 @@ void main() {
       final (f2, cats, _) = await fetcher(zeitJson);
       await f2.fetchFor(t);
       final after = (await db.pinnedGifs(t.id!)).toSet();
-      expect(cats, contains('stare'));
+      expect(cats, contains('cry'));
       expect(after, isNot(before));
     });
   });
