@@ -131,8 +131,10 @@ class AppDb {
           where: 'id = ?', whereArgs: [id]);
 
   /// Gênero descoberto automaticamente (só onde estava vazio).
-  Future<void> fillGenre(int id, String genre) =>
-      db.update('tracks', {'genre': genre}, where: "id = ? AND genre = ''", whereArgs: [id]);
+  /// Preenche o gênero achado na internet só se ainda estiver como estava ([current]: '' ou um genérico tipo "Music")
+  /// (vale até para música editada: "Music" vinha preenchido na tela de edição, ninguém escolheu).
+  Future<void> fillGenre(int id, String genre, {String current = ''}) =>
+      db.update('tracks', {'genre': genre}, where: 'id = ? AND genre = ?', whereArgs: [id, current]);
 
   Future<void> setMood(int id, String mood) => db.update('tracks', {'mood': mood}, where: 'id = ?', whereArgs: [id]);
 

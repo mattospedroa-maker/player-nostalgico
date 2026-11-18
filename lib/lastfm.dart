@@ -66,12 +66,32 @@ class LastFmClient {
     final key = apiKey?.trim() ?? '';
     if (key.isEmpty) return const TagResult(TagStatus.noKey);
     if (artist.trim().isEmpty || track.trim().isEmpty) return const TagResult(TagStatus.notFound);
+    return _fetch(urlFor(artist, track, key));
+  }
+
+  static Uri artistUrlFor(String artist, String key) => Uri.https('ws.audioscrobbler.com', '/2.0/', {
+        'method': 'artist.gettoptags',
+        'artist': artist,
+        'autocorrect': '1',
+        'api_key': key,
+        'format': 'json',
+      });
+
+  /// Tags do artista (`artist.getTopTags`, mesmo formato de resposta). Usado para descobrir o gênero.
+  Future<TagResult> artistTopTags(String artist) async {
+    final key = apiKey?.trim() ?? '';
+    if (key.isEmpty) return const TagResult(TagStatus.noKey);
+    if (artist.trim().isEmpty) return const TagResult(TagStatus.notFound);
+    return _fetch(artistUrlFor(artist, key));
+  }
+
+  Future<TagResult> _fetch(Uri uri) async {
     final wait = minInterval - DateTime.now().difference(_last);
     if (wait > Duration.zero) await Future<void>.delayed(wait);
     _last = DateTime.now();
     try {
       final res = await client
-          .get(urlFor(artist, track, key), headers: {'User-Agent': 'PlayerNostalgico/1.0 (app pessoal offline)'})
+          .get(uri, headers: {'User-Agent': 'PlayerNostalgico/1.0 (app pessoal offline)'})
           .timeout(const Duration(seconds: 15));
       return parse(res.statusCode, res.body);
     } on TimeoutException {

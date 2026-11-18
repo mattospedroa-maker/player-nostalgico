@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:audio_metadata_reader/audio_metadata_reader.dart' as amr;
 
 import 'error_log.dart';
+import 'genre.dart';
 
 class TagInfo {
   final String title;
@@ -49,7 +50,7 @@ class FileMetadataReader implements MetadataReader {
         title: clean(m.title),
         artist: artist,
         album: clean(m.album),
-        genre: m.genres.isEmpty ? '' : clean(m.genres.first),
+        genre: realGenre(m.genres), // "Music" (categoria do YouTube) e afins contam como vazio
         year: m.year?.year,
         duration: m.duration,
       );

@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 
 import 'error_log.dart';
 import 'filename_parser.dart';
+import 'genre.dart';
 import 'metadata.dart';
 import 'models.dart';
 import 'youtube_names.dart';
@@ -121,24 +122,17 @@ class MusicBrainzClient {
     return null;
   }
 
-  static final _genreWords = RegExp(
-      r'rock|metal|pop|punk|rap|hip.?hop|trap|jazz|blues|soul|funk|disco|r&b|rnb|electr|techno|house|trance|dubstep|drum|edm|synth|ambient|'
-      r'classical|folk|country|reggae|ska|samba|bossa|mpb|sertanejo|forr|pagode|ax[eé]|gospel|indie|alternative|grunge|emo|core\b|'
-      r'industrial|gothic|wave|lo.?fi|chill|vocaloid|anime|j-?pop|k-?pop|j-?rock|soundtrack|latin|reggaeton|cumbia|swing|opera|instrumental|dance|idm|shoegaze|ballad',
-      caseSensitive: false);
-
   static String? parseArtistGenre(Map<String, dynamic> json, String artist) {
     String norm(String x) => x.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '');
     final artists = (json['artists'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
     for (final a in artists) {
       if (((a['score'] as num?) ?? 0) < 85 && norm('${a['name']}') != norm(artist)) continue;
       final tags = ((a['tags'] as List?)?.cast<Map<String, dynamic>>() ?? const [])
-          .where((t) => _genreWords.hasMatch('${t['name']}'))
+          .where((t) => genreWords.hasMatch('${t['name']}') && !isGenericGenre('${t['name']}'))
           .toList()
         ..sort((x, y) => ((y['count'] as num?) ?? 0).compareTo((x['count'] as num?) ?? 0));
       if (tags.isEmpty) continue;
-      final name = '${tags.first['name']}'.trim();
-      return name.split(' ').map((w) => w.isEmpty ? w : w[0].toUpperCase() + w.substring(1)).join(' ');
+      return titleCaseGenre('${tags.first['name']}');
     }
     return null;
   }

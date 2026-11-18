@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'app_state.dart';
 import 'duplicates.dart';
 import 'error_log.dart';
+import 'metadata.dart';
 import 'models.dart';
 import 'organizer.dart';
 import 'youtube_names.dart';
@@ -489,10 +490,13 @@ class DownloadService extends ChangeNotifier {
   /// Grava as tags com o nome corrigido e move para Fonte/Artista/Álbum/Título.mp3.
   Future<String> _saveToLibrary(File mp3, YtNames n, String root) async {
     try {
+      // o yt-dlp grava a categoria do vídeo ("Music") como gênero: tira, o gênero real vem do MusicBrainz/Last.fm
+      final genre = FileMetadataReader.readTagsSync(mp3.path)?.genre ?? '';
       updateMetadata(mp3, (m) {
         m.setTitle(n.title);
         m.setArtist(n.artist);
         m.setAlbum(n.album);
+        m.setGenres(genre.isEmpty ? const [] : [genre]);
       });
     } catch (e) {
       // sem tags: o nome do arquivo e as pastas já dizem tudo

@@ -24,6 +24,9 @@ import 'filename_parser.dart';
 import 'gif_fetcher.dart';
 import 'gif_providers.dart';
 import 'gif_service.dart';
+import 'genre.dart';
+import 'genre_finder.dart';
+import 'lastfm.dart';
 import 'library_scanner.dart';
 import 'metadata.dart';
 import 'models.dart';
@@ -450,43 +453,75 @@ class AppState extends ChangeNotifier {
 
   bool fillingGenres = false;
 
-  /// Gênero/subgênero automático: pergunta ao MusicBrainz uma vez por artista (só onde está vazio).
+  /// Gênero real automático, uma vez por artista: MusicBrainz e, se não achar, tags do Last.fm.
+  /// Conta como vazio o gênero genérico que vem no arquivo ("Music" é a categoria do vídeo no YouTube).
+  /// O gênero achado fica guardado por artista: músicas novas do mesmo artista recebem sem consultar de novo.
   Future<int> fillMissingGenres() async {
     if (fillingGenres) return 0;
-    final tried = (prefs.getStringList('genreTried') ?? const []).toSet();
-    final byArtist = <String, List<Track>>{};
-    for (final t in tracks) {
-      if (t.genre.isEmpty && t.artist != unknownArtist && t.artist.trim().isNotEmpty && !tried.contains(t.artist)) {
-        (byArtist[t.artist] ??= []).add(t);
-      }
-    }
-    if (byArtist.isEmpty) return 0;
     fillingGenres = true;
-    notifyListeners();
-    var n = 0;
-    final mb = MusicBrainzClient();
+    // v2: as versões antigas não procuravam onde estava "Music" e não tinham o Last.fm como segunda opção
+    final tried = (prefs.getStringList('genreTried2') ?? const []).toSet();
+    final known = _artistGenres();
+    final byArtist = <String, List<Track>>{};
+    var n = 0, changed = false;
     try {
-      for (final e in byArtist.entries) {
-        String? genre;
-        try {
-          genre = await mb.artistGenre(e.key);
-        } catch (err) {
-          errorLog.info('Biblioteca', 'MusicBrainz não respondeu (gênero do artista)', err);
-          break; // sem internet: tenta na próxima leitura
+      for (final t in tracks) {
+        if (!isGenericGenre(t.genre)) continue;
+        var current = t.genre;
+        if (current.isNotEmpty) {
+          // "Music", "Other"...: some da tela mesmo que não ache o gênero real
+          await db.fillGenre(t.id!, '', current: current);
+          current = '';
+          changed = true;
         }
-        tried.add(e.key);
-        if (genre == null) continue;
-        for (final t in e.value) {
-          await db.fillGenre(t.id!, genre);
+        if (t.artist == unknownArtist || t.artist.trim().isEmpty) continue;
+        final g = known[t.artist.toLowerCase()];
+        if (g != null) {
+          await db.fillGenre(t.id!, g);
           n++;
+        } else if (!tried.contains(t.artist)) {
+          (byArtist[t.artist] ??= []).add(t);
+        }
+      }
+      if (byArtist.isNotEmpty) {
+        notifyListeners();
+        final mb = MusicBrainzClient();
+        final finder = GenreFinder(
+          musicBrainz: mb.artistGenre,
+          lastFmArtist: (a) => LastFmClient(gifFetcher.client, lastFmKey).artistTopTags(a),
+          cachedTrackTags: gifFetcher.cachedTags,
+        );
+        for (final e in byArtist.entries) {
+          final r = await finder.find(e.key, e.value);
+          if (!r.reached) {
+            errorLog.info('Biblioteca', 'Sem resposta do MusicBrainz/Last.fm (gênero de ${e.key}); tenta na próxima leitura');
+            break; // sem internet: tenta na próxima leitura
+          }
+          tried.add(e.key);
+          final genre = r.genre;
+          if (genre == null) continue;
+          known[e.key.toLowerCase()] = genre;
+          for (final t in e.value) {
+            await db.fillGenre(t.id!, genre);
+            n++;
+          }
         }
       }
     } finally {
-      await prefs.setStringList('genreTried', tried.toList());
+      await prefs.setStringList('genreTried2', tried.toList());
+      await prefs.setString('artistGenres', jsonEncode(known));
       fillingGenres = false;
-      await reload();
+      if (n > 0 || changed || byArtist.isNotEmpty) await reload();
     }
     return n;
+  }
+
+  Map<String, String> _artistGenres() {
+    try {
+      return (jsonDecode(prefs.getString('artistGenres') ?? '{}') as Map).map((k, v) => MapEntry('$k', '$v'));
+    } catch (_) {
+      return {};
+    }
   }
 
   /// Salva a tela "Editar música": banco, tags do arquivo (opcional) e pasta (opcional).
