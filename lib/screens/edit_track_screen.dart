@@ -57,6 +57,7 @@ class _EditTrackScreenState extends State<EditTrackScreen> {
   }
 
   Future<void> _fromMusicBrainz() async {
+    if (_busy) return;
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _busy = true);
     try {
@@ -80,7 +81,20 @@ class _EditTrackScreenState extends State<EditTrackScreen> {
     }
   }
 
+  /// Fecha só esta janela, e só se ela ainda estiver aberta. Antes, tocar duas vezes em OK
+  /// (ou voltar enquanto salvava) fechava também a tela de baixo e o "Tocando agora" sumia.
+  void _close(NavigatorState nav) {
+    final route = ModalRoute.of(context);
+    if (route == null || !route.isActive) return;
+    if (route.isCurrent) {
+      nav.pop();
+    } else {
+      nav.removeRoute(route);
+    }
+  }
+
   Future<void> _save() async {
+    if (_busy) return; // já está salvando (dois toques em OK)
     final app = context.read<AppState>();
     final nav = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
@@ -90,22 +104,30 @@ class _EditTrackScreenState extends State<EditTrackScreen> {
       return;
     }
     setState(() => _busy = true);
-    final warning = await app.editTrack(
-      widget.track,
-      title: title,
-      artist: _artist.text.trim().isEmpty ? unknownArtist : _artist.text.trim(),
-      album: _album.text.trim().isEmpty ? unknownAlbum : _album.text.trim(),
-      genre: _genre.text.trim(),
-      year: int.tryParse(_year.text.trim()),
-      writeTags: _writeTags,
-      move: _move,
-    );
-    if (!mounted) return;
+    final String? warning;
+    try {
+      warning = await app.editTrack(
+        widget.track,
+        title: title,
+        artist: _artist.text.trim().isEmpty ? unknownArtist : _artist.text.trim(),
+        album: _album.text.trim().isEmpty ? unknownAlbum : _album.text.trim(),
+        genre: _genre.text.trim(),
+        year: int.tryParse(_year.text.trim()),
+        writeTags: _writeTags,
+        move: _move,
+      );
+    } catch (e) {
+      errorLog.warn('Editar música', 'Não deu para salvar "${widget.track.title}"', error: e, balloon: true);
+      if (mounted) setState(() => _busy = false);
+      return;
+    }
     messenger.showSnackBar(SnackBar(content: Text(warning ?? 'Música atualizada.')));
-    nav.pop();
+    if (!mounted) return;
+    _close(nav);
   }
 
   Future<void> _delete() async {
+    if (_busy) return;
     final app = context.read<AppState>();
     final nav = Navigator.of(context);
     final ok = await showDialog<bool>(
@@ -121,8 +143,12 @@ class _EditTrackScreenState extends State<EditTrackScreen> {
       ),
     );
     if (ok != true) return;
-    if (!await app.deleteTrack(widget.track)) return; // o balão já explicou o motivo
-    nav.pop();
+    setState(() => _busy = true);
+    final deleted = await app.deleteTrack(widget.track);
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (!deleted) return; // o balão já explicou o motivo
+    _close(nav);
   }
 
   Widget _field(String label, TextEditingController c, {TextInputType? type, double labelWidth = 62}) => Padding(

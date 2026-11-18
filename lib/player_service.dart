@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -91,6 +92,7 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
       _publishMediaItem();
       notifyListeners();
       unawaited(_serial(_extendMix));
+      if (_overrides.isNotEmpty) unawaited(_serial(_relinkMoved).catchError((Object e) => errorLog.info('Fila', 'Não deu para trocar o caminho de uma música movida', e)));
     }));
     _subs.add(player.sequenceStream.listen((_) {
       _publishMediaItem();
@@ -316,6 +318,18 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
     final i = index ?? _index;
     if (i == null || i < 0 || i >= seq.length) return;
     final t = _display(seq[i].tag as Track);
+    if (t.path != _sourcePath(i) && File(t.path).existsSync()) {
+      // a música foi movida (editar, organizar): abre do lugar novo em vez de dar como quebrada
+      await player.removeAudioSourceAt(i);
+      await player.insertAudioSource(i, _source(t));
+      try {
+        await player.seek(Duration.zero, index: i);
+        unawaited(player.play());
+      } catch (_) {
+        // se nem assim abrir, o aviso de erro chega de novo e aí ela é marcada
+      }
+      return;
+    }
     final failure = _failed[t.path] ??= PlaybackFailure(t.path, PlaybackFailure.reasonFor(t.path));
     if (t.id == _startedTrackId) _startedTrackId = null; // não entra no histórico
     // sem músicas suficientes na frente, o mix completa a fila antes de decidir
@@ -495,11 +509,48 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
       });
 
   /// Atualiza caminhos na fila depois que o organizador moveu arquivos.
+  /// A música mudou (nome, artista, pasta...). Se o arquivo mudou de lugar, a fila passa a tocar
+  /// o caminho novo: as que estão na fila são trocadas na hora; a que está tocando continua (o
+  /// arquivo aberto segue tocando) e é trocada assim que a fila sair dela ou se ela precisar abrir de novo.
   void replaceTrack(Track updated) {
-    if (!queue.any((t) => t.id == updated.id)) return;
+    if (!player.sequence.any((s) => (s.tag as Track).id == updated.id)) return;
     _overrides[updated.id] = updated;
     if (current?.id == updated.id) _publishMediaItem();
     notifyListeners();
+    unawaited(_serial(_relinkMoved).catchError((Object e) {
+      errorLog.warn('Fila', 'Não deu para atualizar a fila com o caminho novo de "${updated.title}"', error: e);
+    }));
+  }
+
+  /// Tira da fila uma música que saiu da biblioteca (apagada, repetida removida). Se for a que está
+  /// tocando, pula para a próxima antes.
+  Future<void> forgetTrack(int? id) async {
+    if (id == null) return;
+    if (current?.id == id) await next();
+    await _serial(() async {
+      final seq = player.sequence;
+      for (var i = seq.length - 1; i >= 0; i--) {
+        if ((seq[i].tag as Track).id == id && i != _index) await player.removeAudioSourceAt(i);
+      }
+      _overrides.remove(id);
+      _autoAdded.remove(id);
+    });
+    notifyListeners();
+  }
+
+  /// Caminho que o player realmente abre na posição [i] (pode estar velho se a música foi movida).
+  String _sourcePath(int i) => (player.sequence[i].tag as Track).path;
+
+  /// Troca na fila as músicas movidas pelo caminho novo (menos a que está tocando agora).
+  /// Só roda dentro de [_serial].
+  Future<void> _relinkMoved() async {
+    for (var i = 0; i < player.sequence.length; i++) {
+      if (i == _index) continue;
+      final shown = _display(player.sequence[i].tag as Track);
+      if (shown.path == _sourcePath(i)) continue;
+      await player.removeAudioSourceAt(i);
+      await player.insertAudioSource(i, _source(shown));
+    }
   }
 
   void _logCurrent({required bool skipped}) {
