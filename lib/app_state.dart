@@ -494,7 +494,8 @@ class AppState extends ChangeNotifier {
   Future<String?> editTrack(Track t,
       {required String title, required String artist, required String album, required String genre, int? year, bool writeTags = true, bool move = true}) async {
     String? warning;
-    var path = t.path;
+    // a tela pode ter aberto antes de a música mudar de pasta: usa sempre o caminho atual
+    var path = byId(t.id)?.path ?? t.path;
     if (writeTags) {
       try {
         updateMetadata(File(path), (m) {
@@ -541,7 +542,7 @@ class AppState extends ChangeNotifier {
   /// Apaga a música do celular (e as pastas de álbum/artista que ficarem vazias).
   /// Devolve false (e avisa no balão) se o Android não deixou apagar o arquivo.
   Future<bool> deleteTrack(Track t) async {
-    if (player.current?.id == t.id) await player.next(); // solta o arquivo antes de apagar
+    await player.forgetTrack(t.id); // sai da fila (e solta o arquivo, se estava tocando) antes de apagar
     final f = File(t.path);
     try {
       if (f.existsSync()) await f.delete();
@@ -566,7 +567,7 @@ class AppState extends ChangeNotifier {
       var fav = keep.favorite;
       for (final t in entry.value) {
         if (t.id == null || t.id == keep.id) continue;
-        if (player.current?.id == t.id) await player.next();
+        await player.forgetTrack(t.id);
         fav = fav || t.favorite;
         await db.replaceInPlaylists(t.id!, keep.id!);
         await db.mergeTrackHistory(t.id!, keep.id!);

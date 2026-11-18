@@ -73,6 +73,21 @@ Future<void> main() async {
 /// Nada de erro sumir calado: o que escapar de todos os try/catch vai para o registro.
 /// Erro de tela ou inesperado = caixa vermelha (grave); falta de internet = só registro.
 void _catchEverything() {
+  // se uma parte da tela não conseguir se desenhar, mostra um aviso no lugar (nunca um bloco cinza vazio)
+  ErrorWidget.builder = (details) => const ColoredBox(
+        color: Xp.beige,
+        child: Center(
+          child: Padding(
+            padding: EdgeInsets.all(12),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              XpIcon(XpIcons.warning, size: 28),
+              SizedBox(height: 6),
+              Text('Esta parte não pôde ser mostrada.\nOs detalhes estão no Registro de erros.',
+                  textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: Colors.black87)),
+            ]),
+          ),
+        ),
+      );
   FlutterError.onError = (details) {
     FlutterError.presentError(details);
     if (details.silent) {
@@ -232,8 +247,11 @@ class _HomeShellState extends State<HomeShell> {
 
   static const _roots = <Widget>[NowPlayingScreen(), LibraryScreen(), PlaylistsScreen(), FavoritesScreen()];
 
+  late final _keepRoots = [for (var i = 0; i < 4; i++) KeepRootObserver(() => _roots[i])];
+
   Widget _tabNavigator(int i) => Navigator(
     key: _navs[i],
+    observers: [_keepRoots[i]],
     onGenerateRoute: (s) => MaterialPageRoute<void>(settings: s, builder: (_) => _roots[i]),
   );
 
@@ -575,4 +593,35 @@ class StartMenu extends StatelessWidget {
       ),
     ),
   );
+}
+
+/// Garante que a aba nunca fica vazia: se algo fechar a tela principal da aba (ex.: dois "voltar"
+/// seguidos), ela é aberta de novo na hora. Antes isso deixava o "Tocando agora" em branco.
+class KeepRootObserver extends NavigatorObserver {
+  final Widget Function() root;
+  KeepRootObserver(this.root);
+
+  /// Telas abertas nesta aba.
+  int open = 0;
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) => open++;
+
+  @override
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) => _closed();
+
+  @override
+  void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) => _closed();
+
+  void _closed() {
+    open--;
+    if (open > 0) return;
+    // o navegador está no meio da troca: reabre logo depois
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final nav = navigator;
+      if (open > 0 || nav == null || !nav.mounted) return;
+      errorLog.info('App', 'Uma aba ficou sem tela e foi reaberta', null);
+      nav.push(PageRouteBuilder<void>(pageBuilder: (_, _, _) => root(), transitionDuration: Duration.zero));
+    });
+  }
 }
