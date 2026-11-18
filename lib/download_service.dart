@@ -218,6 +218,10 @@ class DownloadService extends ChangeNotifier {
         u.host.endsWith('youtu.be') && u.pathSegments.isNotEmpty ||
         u.pathSegments.isNotEmpty && const {'shorts', 'live', 'embed'}.contains(u.pathSegments.first);
     if (u.pathSegments.isNotEmpty && u.pathSegments.first == 'playlist') return hasList ? LinkKind.playlist : LinkKind.unknown;
+    // álbum do YT Music aberto pela página dele (music.youtube.com/browse/MPREb…) também é uma lista
+    if (u.pathSegments.length > 1 && u.pathSegments.first == 'browse' && RegExp(r'^(MPREb|VL)').hasMatch(u.pathSegments[1])) {
+      return LinkKind.playlist;
+    }
     if (hasVideo && hasList) return LinkKind.both;
     if (hasList) return LinkKind.playlist;
     return LinkKind.video;

@@ -11,12 +11,18 @@ class ShareIntake {
 
   static Future<void> attach(void Function(String text) onShared) async {
     if (!Platform.isAndroid) return;
+    void receive(String text) {
+      errorLog.info('Compartilhar', 'Link recebido: $text');
+      onShared(text);
+    }
+
     _channel.setMethodCallHandler((call) async {
-      if (call.method == 'shared' && call.arguments is String) onShared(call.arguments as String);
+      if (call.method == 'shared' && call.arguments is String) receive(call.arguments as String);
     });
     try {
+      // também avisa o Android que o Dart já está escutando: os próximos links vêm na hora
       final first = await _channel.invokeMethod<String>('initial');
-      if (first != null && first.trim().isNotEmpty) onShared(first);
+      if (first != null && first.trim().isNotEmpty) receive(first);
     } catch (e) {
       errorLog.info('Compartilhar', 'Não deu para ler o link compartilhado', e);
     }
