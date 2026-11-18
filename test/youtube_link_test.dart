@@ -16,5 +16,9 @@ void main() {
     expect(k('https://www.youtube.com/watch?v=abc&list=RDabc&start_radio=1'), LinkKind.video);
     expect(k('Olha essa: https://youtu.be/abc?si=xyz muito boa'), LinkKind.video);
     expect(k(''), LinkKind.unknown);
+    // como o app do YouTube manda pelo "Compartilhar"
+    expect(k('https://youtube.com/playlist?list=PLx0sYbCqOb8Q&si=AbC123'), LinkKind.playlist);
+    expect(k('https://youtu.be/8xg3vE8Ie_E?si=AbC123'), LinkKind.video);
+    expect(k('Assista "Numb" no YouTube\nhttps://youtu.be/kXYiU_JCYtU?si=x'), LinkKind.video);
   });
 }
