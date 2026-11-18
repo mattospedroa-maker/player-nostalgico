@@ -161,7 +161,7 @@ class GifFetcher {
   /// As buscas em três grupos, na ordem dos 9 GIFs:
   /// 2 pelo nome da música, 2 pelo artista, 2 pelo gênero, e o resto intercalando os três.
   /// [tagAnime]: categorias de anime vindas das tags do Last.fm (valem mais que o gênero, menos que o clima escolhido).
-  static GifPlan planFor(Track t, {List<String> extras = const [], List<String> tagAnime = const []}) {
+  static GifPlan planFor(Track t, {List<String> extras = const [], List<String> tagAnime = const [], List<MusicTag>? tags}) {
     final parsed = parseFileName(t.title);
     final title = parsed.title.trim();
     var artist = t.artist.trim();
@@ -180,10 +180,42 @@ class GifFetcher {
       artist: uniq([if (artist.isNotEmpty) artist, if (artist.isNotEmpty) '$artist band', if (artist.isNotEmpty) '$artist live']),
       genre: uniq([if (hasGenre) genre, if (hasGenre) '$mainGenre concert', if (hasGenre) '$mainGenre music']),
       animeQueries: uniq(extras),
-      // clima escolhido no selo do GIF vale mais que o gênero
-      moods: t.chosenMood?.categories ?? (tagAnime.isNotEmpty ? tagAnime : (hasGenre ? moodCategories(genre) : neutralMoods)),
+      moods: moodsFor(t, tagAnime: tagAnime, hasGenre: hasGenre, tags: tags),
     );
   }
+
+  /// Categorias de anime da música: clima escolhido > clima automático (pistas) > tags do Last.fm > gênero.
+  /// Com clima automático, as categorias dele se alternam com as das tags (que trazem atmosfera e cenas do clipe),
+  /// começando pelo clima.
+  static List<String> moodsFor(Track t, {List<String> tagAnime = const [], bool? hasGenre, List<MusicTag>? tags}) {
+    final chosen = t.chosenMood;
+    if (chosen != null) return chosen.categories;
+    final auto = MoodClues.forTrack(t, tags: tags).mood;
+    if (auto != null) {
+      // categorias das tags que brigam com o clima saem (ex.: soco numa música melancólica só porque a banda é de metal)
+      final clash = {for (final m in _clashes[auto]!) ...m.categories}.difference(auto.categories.toSet());
+      final fromTags = tagAnime.where((c) => !clash.contains(c)).toList();
+      final out = <String>[];
+      for (var i = 0; i < auto.categories.length || i < fromTags.length; i++) {
+        if (i < auto.categories.length && !out.contains(auto.categories[i])) out.add(auto.categories[i]);
+        if (i < fromTags.length && !out.contains(fromTags[i])) out.add(fromTags[i]);
+      }
+      return out;
+    }
+    if (tagAnime.isNotEmpty) return tagAnime;
+    final g = t.genre.trim();
+    final known = hasGenre ?? (g.isNotEmpty && g.toLowerCase() != 'desconhecido');
+    return known ? moodCategories(g) : neutralMoods;
+  }
+
+  static const _clashes = <Mood, List<Mood>>{
+    Mood.calmo: [Mood.acao, Mood.festa],
+    Mood.triste: [Mood.acao, Mood.festa],
+    Mood.romantico: [Mood.acao],
+    Mood.festa: [Mood.triste, Mood.calmo],
+    Mood.epico: [Mood.triste, Mood.calmo],
+    Mood.acao: [Mood.calmo, Mood.romantico, Mood.triste],
+  };
 
   /// Ordem das vagas: 2 da música, 2 do artista, 2 do gênero, depois anime no clima da música intercalado com o gênero.
   static const slotOrder = [0, 3, 3, 0, 3, 1, 3, 2, 3];
@@ -206,15 +238,25 @@ class GifFetcher {
     return (parsed.title.trim(), artist);
   }
 
-  /// Tags do Last.fm da música, com cache em `GIFs/.lastfm.json`. Nunca lança erro.
-  Future<TagResult> tagsFor(Track t) async {
-    final (title, artist) = namesFor(t);
+  TagCache? get _tags {
     final root = gifs.gifRoot;
     if (root != null && _tagCacheRoot != root) {
       _tagCache = TagCache(File(p.join(root, '.lastfm.json')));
       _tagCacheRoot = root;
     }
-    var r = _tagCache?.get(artist, title);
+    return _tagCache;
+  }
+
+  /// Tags já guardadas da música (sem internet, mesmo vencidas). Usadas pelo clima automático.
+  List<MusicTag>? cachedTags(Track t) {
+    final (title, artist) = namesFor(t);
+    return _tags?.get(artist, title, ignoreAge: true)?.tags;
+  }
+
+  /// Tags do Last.fm da música, com cache em `GIFs/.lastfm.json`. Nunca lança erro.
+  Future<TagResult> tagsFor(Track t) async {
+    final (title, artist) = namesFor(t);
+    var r = _tags?.get(artist, title);
     if (r == null) {
       try {
         r = await LastFmClient(client, lastFmKey()).topTags(artist, title);
@@ -223,6 +265,8 @@ class GifFetcher {
         r = const TagResult(TagStatus.badResponse);
       }
       _tagCache?.put(artist, title, r);
+      // tags novas podem mudar o clima automático desta música
+      if (r.tags.isNotEmpty) MoodClues.invalidate();
     }
     tagStatus[t.id] = r.status;
     return r;
@@ -375,7 +419,7 @@ class GifFetcher {
       pinned = (await gifs.db.pinnedGifs(t.id!)).where((g) => File(g).existsSync()).toList();
     }
     final animeDone = entry is Map && entry['anime'] == true;
-    final plan0 = planFor(t, extras: gifs.extrasFor(t.artist, parseFileName(t.title).title), tagAnime: tagAnime);
+    final plan0 = planFor(t, extras: gifs.extrasFor(t.artist, parseFileName(t.title).title), tagAnime: tagAnime, tags: cachedTags(t));
     // em massa, deixa vagas para os GIFs de anime que vêm quando a música tocar
     final reserve = bulk && plan0.anime && providers.any((pr) => pr.animeOnly) ? animeSlots : 0;
     final need = maxGifsPerTrack - reserve - pinned.length;
@@ -439,10 +483,12 @@ class GifFetcher {
         if (tagAnime.isEmpty || t.chosenMood != null) {
           cats.shuffle(rnd);
         } else if (cats.length > 2) {
-          // mantém a categoria principal e sorteia as outras por música, para o álbum não ficar todo igual
-          final rest = cats.sublist(1)..shuffle(rnd);
+          // mantém a categoria principal (com clima automático, as duas primeiras: a do clima e a das tags)
+          // e sorteia as outras por música, para o álbum não ficar todo igual
+          final keep = MoodClues.forTrack(t, tags: cachedTags(t)).mood != null && cats.length > 3 ? 2 : 1;
+          final rest = cats.sublist(keep)..shuffle(rnd);
           cats
-            ..removeRange(1, cats.length)
+            ..removeRange(keep, cats.length)
             ..addAll(rest);
         }
         for (final cat in cats.take(4)) {

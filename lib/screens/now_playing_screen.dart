@@ -1058,7 +1058,7 @@ class MoodBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final chosen = track.chosenMood;
-    final auto = Mood.fromGenre(track.genre);
+    final auto = track.autoMood;
     final label = chosen == null ? '✨ Auto' : '${chosen.emoji} ${chosen.label}';
     return PopupMenuButton<String>(
       tooltip: 'Clima dos GIFs',
@@ -1070,7 +1070,7 @@ class MoodBadge extends StatelessWidget {
         await app.setMood(track, mood);
         messenger.showSnackBar(SnackBar(
           content: Text(mood == null
-              ? 'Clima automático (pelo gênero). Buscando GIFs novos...'
+              ? 'Clima automático. Buscando GIFs novos...'
               : 'Clima: ${mood.label}. A música foi para a playlist "${mood.label}". Buscando GIFs novos...'),
         ));
       },
@@ -1078,7 +1078,7 @@ class MoodBadge extends StatelessWidget {
         CheckedPopupMenuItem(
           value: 'auto',
           checked: chosen == null,
-          child: Text(auto == null ? '✨ Auto (gênero)' : '✨ Auto (gênero: ${auto.label})'),
+          child: Text(auto == null ? '✨ Auto (neutro)' : '✨ Auto (${auto.label})'),
         ),
         for (final m in Mood.values)
           CheckedPopupMenuItem(value: m.name, checked: chosen == m, child: Text('${m.emoji} ${m.label}')),

@@ -141,11 +141,12 @@ class TagCache {
     return _data!;
   }
 
-  TagResult? get(String artist, String track) {
+  /// [ignoreAge]: devolve mesmo vencida (o clima automático prefere tags velhas a nenhuma).
+  TagResult? get(String artist, String track, {bool ignoreAge = false}) {
     final e = _map[keyFor(artist, track)];
     if (e is! Map) return null;
     final at = DateTime.tryParse('${e['t']}');
-    if (at == null || DateTime.now().difference(at) > maxAge) return null;
+    if (!ignoreAge && (at == null || DateTime.now().difference(at) > maxAge)) return null;
     final status = TagStatus.values.asNameMap()['${e['s']}'];
     if (status == null) return null;
     final tags = [for (final m in (e['tags'] as List? ?? const [])) if (m is Map) MusicTag.fromJson(m.cast<String, dynamic>())];
