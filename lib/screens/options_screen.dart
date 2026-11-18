@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
+import '../app_version.dart';
 import '../crossfade.dart';
 import '../player_service.dart';
 import '../theme.dart';
@@ -99,6 +100,7 @@ class _OptionsScreenState extends State<OptionsScreen> {
                   ),
                 ),
               ),
+              const XpStatusBar(['Nostalgic MPlayer', 'Versão $appVersion']),
             ],
           ),
         ),
