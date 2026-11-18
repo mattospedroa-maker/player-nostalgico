@@ -222,4 +222,39 @@ void main() {
       expect(p.basename(mv.targetPath!), 'Ritual (2).mp3');
     });
   });
+
+  test('MusicBrainz: artista com nome de canal tenta de novo limpo', () async {
+    final asked = <String>[];
+    final client = MockClient((req) async {
+      final q = req.url.queryParameters['query'] ?? '';
+      asked.add(q);
+      final hit = q.contains('artist:"Madrugada"');
+      final body = {
+        'recordings': hit
+            ? [
+                {
+                  'score': 100,
+                  'title': 'Electric',
+                  'artist-credit': [
+                    {'name': 'Madrugada'}
+                  ],
+                  'releases': [
+                    {
+                      'title': 'Industrial Silence',
+                      'status': 'Official',
+                      'release-group': {'primary-type': 'Album'}
+                    }
+                  ]
+                }
+              ]
+            : []
+      };
+      return http.Response(jsonEncode(body), 200);
+    });
+    final mb = MusicBrainzClient(client: client, minInterval: Duration.zero);
+    final found = await mb.lookupSmart('Electric', artist: 'MadrugadaOfficial');
+    expect(found?.artist, 'Madrugada');
+    expect(found?.album, 'Industrial Silence');
+    expect(asked.first, contains('MadrugadaOfficial'));
+  });
 }

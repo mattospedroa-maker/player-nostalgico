@@ -279,7 +279,7 @@ class DownloadService extends ChangeNotifier {
       try {
         final n = e.names;
         final hint = n.artist == unknownArtist ? null : n.artist;
-        final found = await mb.lookup(n.title, artist: hint);
+        final found = await mb.lookupSmart(n.title, artist: hint, titleOnlyMinScore: 101);
         if (found != null && !e.edited && (hint == null || _sameArtist(found.artist, hint))) {
           e.names = YtNames(artist: found.artist, title: found.title, album: found.album);
           markExisting([e], uncheck: !identical(e, single));
