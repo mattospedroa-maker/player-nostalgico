@@ -145,16 +145,25 @@ class _LibraryScreenState extends State<LibraryScreen> {
     ],
   );
 
-  Widget _library(AppState app, String root) {
+  /// O campo de busca fica sempre no MESMO lugar da árvore, fora da troca
+  /// "início" ↔ "resultados". Antes ele era criado dentro de cada uma das duas
+  /// telas, então ao digitar a 1ª letra (ou apagar a última) o Flutter jogava o
+  /// campo fora e criava outro: o foco se perdia e o teclado fechava.
+  Widget _library(AppState app, String root) => Column(
+    children: [
+      _searchField(),
+      Expanded(child: _searching ? _resultsView(app) : _home(app, root)),
+    ],
+  );
+
+  Widget _home(AppState app, String root) {
     final ps = context.read<PlayerService>();
     final tracks = app.tracks;
-    if (_searching) return _resultsView(app);
     final sum = _summaryOf(tracks);
     final recent = sum.recent;
     return ListView(
       padding: EdgeInsets.zero,
       children: [
-        _searchField(),
         _filterLink(),
         XpTaskPane(
           title: 'Tarefas de música',
@@ -298,7 +307,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
     final hits = _results;
     return Column(
       children: [
-        _searchField(),
         _filtersBox(app),
         XpColumnHeader('Nome', right: '${hits.length} itens'),
         Expanded(
