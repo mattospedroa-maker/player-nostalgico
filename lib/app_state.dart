@@ -14,6 +14,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'artist_names.dart';
 import 'artist_photos.dart';
 import 'audio_handler.dart';
+import 'backup.dart';
 import 'cover_service.dart';
 import 'crossfade.dart';
 import 'db.dart';
@@ -307,6 +308,8 @@ class AppState extends ChangeNotifier {
       final t = s.player.current == null ? null : s.byId(s.player.current!.id);
       if (t != null) await s.toggleFavorite(t);
     };
+    // quem já usava o app antes do backup existir: banco com dados = pode começar a copiar para a pasta
+    if (prefs.getBool('backupReady') == null && (await db.playlists()).isNotEmpty) await prefs.setBool('backupReady', true);
     await s.reload(rereadGifs: true);
     // capas que faltam (inclusive as que falharam antes), em segundo plano
     unawaited(Future<void>.delayed(const Duration(seconds: 5), () => s.fetchMissingCovers()).catchError(_coversFailed));
@@ -352,6 +355,42 @@ class AppState extends ChangeNotifier {
     playlists = await db.playlists();
     if (rereadGifs) await gifs.refresh();
     notifyListeners();
+    _scheduleBackup();
+  }
+
+  Timer? _backupTimer;
+
+  /// Copia playlists/favoritos/climas para a pasta Playlists dentro da pasta de músicas pouco depois de cada mudança.
+  /// Só depois de [_restoreIfFresh] ter rodado: um banco recém-criado (vazio) nunca apaga o backup.
+  void _scheduleBackup() {
+    final root = sourceRoot;
+    if (root == null || prefs.getBool('backupReady') != true) return;
+    _backupTimer?.cancel();
+    _backupTimer = Timer(const Duration(seconds: 2), () {
+      LibraryBackup.save(db, root).catchError((Object e) {
+        errorLog.warn('Playlists', 'Não deu para salvar a cópia das playlists na pasta $root/${LibraryBackup.folderName}', error: e);
+      });
+    });
+  }
+
+  /// App instalado de novo (banco zerado): recria playlists, favoritos e climas a partir da pasta Playlists.
+  Future<void> _restoreIfFresh(String root) async {
+    if (prefs.getBool('backupReady') == true || tracks.isEmpty) return;
+    try {
+      if ((await db.playlists()).isEmpty && LibraryBackup.exists(root)) {
+        final r = await LibraryBackup.restore(db, root);
+        if (r.any) {
+          errorLog.info('Playlists',
+              'Recriadas ${r.playlists} playlists, ${r.favorites} favoritas e ${r.moods} climas a partir da pasta ${LibraryBackup.folderName}'
+              '${r.missing > 0 ? ' (${r.missing} músicas não encontradas)' : ''}');
+        }
+      }
+    } catch (e) {
+      errorLog.warn('Playlists', 'Não deu para recriar as playlists a partir da pasta ${LibraryBackup.folderName}', error: e, balloon: true);
+      return; // não marca como pronto: na próxima leitura tenta de novo, e o backup não é sobrescrito
+    }
+    await prefs.setBool('backupReady', true);
+    await reload();
   }
 
   Future<void> rescan() async {
@@ -378,6 +417,7 @@ class AppState extends ChangeNotifier {
       scanning = false;
       await reload(rereadGifs: true);
     }
+    await _restoreIfFresh(root);
     // músicas novas na biblioteca: busca GIFs sozinho, em segundo plano
     final added = tracks.where((t) => !before.contains(t.id)).toList();
     unawaited(_afterScan(added));

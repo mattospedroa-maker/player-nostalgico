@@ -29,21 +29,27 @@ android {
         versionName = flutter.versionName
     }
 
-    // Chave fixa vinda dos secrets do GitHub (o CI grava em app/release.jks). Sem ela, usa a de debug.
-    val releaseKeystore = file("release.jks")
-    val keystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: ""
+    // Assinatura sempre igual em todo build: assim o Android instala a versão nova POR CIMA da antiga
+    // e as playlists/favoritos continuam. Sem isso cada build do CI saía com uma chave de debug nova,
+    // o celular recusava atualizar e era preciso desinstalar (apagando os dados).
+    // De onde vem a chave: secrets ANDROID_KEYSTORE_BASE64/PASSWORD (o CI grava app/release.jks) ou,
+    // se não houver, app/chave-fixa.jks no repositório. Sem nenhuma das duas, cai na de debug.
+    val secretKeystore = file("release.jks")
+    val secretPassword = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: ""
+    val useSecret = secretKeystore.exists() && secretPassword.isNotEmpty()
+    val repoKeystore = file("chave-fixa.jks")
     signingConfigs {
         create("fixa") {
-            storeFile = releaseKeystore
-            storePassword = keystorePassword
+            storeFile = if (useSecret) secretKeystore else repoKeystore
+            storePassword = if (useSecret) secretPassword else "nostalgicmplayer"
             keyAlias = "nostalgic"
-            keyPassword = keystorePassword
+            keyPassword = if (useSecret) secretPassword else "nostalgicmplayer"
         }
     }
 
     buildTypes {
         release {
-            signingConfig = if (releaseKeystore.exists() && keystorePassword.isNotEmpty()) signingConfigs.getByName("fixa") else signingConfigs.getByName("debug")
+            signingConfig = if (useSecret || repoKeystore.exists()) signingConfigs.getByName("fixa") else signingConfigs.getByName("debug")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             // yt-dlp + Python + ffmpeg pesam ~50 MB por arquitetura: o APK de release leva só a dos celulares (arm64).
             ndk { abiFilters += listOf("arm64-v8a") }
