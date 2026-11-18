@@ -9,6 +9,7 @@ import 'error_log.dart';
 import 'filename_parser.dart';
 import 'metadata.dart';
 import 'models.dart';
+import 'youtube_names.dart';
 
 /// Resultado da busca de artista/álbum para uma música.
 class SongInfo {
@@ -62,6 +63,24 @@ class MusicBrainzClient {
     if (res.statusCode == 503) throw const HttpException('MusicBrainz ocupado (limite de pedidos). Tente de novo mais tarde.');
     if (res.statusCode != 200) throw HttpException('MusicBrainz respondeu ${res.statusCode}');
     return parseRecordingSearch(jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>, title: title, artistHint: artist);
+  }
+
+  /// Como [lookup], mas aguenta artista com nome de canal do YouTube ("MadrugadaOfficial", "FulanoVEVO",
+  /// "Fulano - Topic"): tenta o nome como está, depois limpo, e por fim só o título — aceitando a resposta
+  /// só título se o artista bater com algum jeito de escrever a pista (ou se o MusicBrainz tiver muita certeza).
+  Future<SongInfo?> lookupSmart(String title, {String? artist, int titleOnlyMinScore = 90}) async {
+    final hint = artist?.trim() ?? '';
+    if (hint.isEmpty) return lookup(title);
+    final variants = artistNameVariants(hint);
+    for (final v in variants) {
+      final found = await lookup(title, artist: v);
+      if (found != null) return found;
+    }
+    final retry = await lookup(title);
+    if (retry == null) return null;
+    final got = _norm(retry.artist);
+    final matches = got.isNotEmpty && variants.map(_norm).any((v) => v.isNotEmpty && (got.contains(v) || (got.length >= 3 && v.contains(got))));
+    return matches || retry.score >= titleOnlyMinScore ? retry : null;
   }
 
   /// Gênero/subgênero do artista pelas tags do MusicBrainz (ex.: "Industrial Metal"). Null se não achar.
@@ -265,13 +284,9 @@ class Organizer {
 
     // 2. Pesquisa o título limpo (e o artista, se souber) no MusicBrainz.
     if (useOnline && title.isNotEmpty) {
-      final found = await mb.lookup(title, artist: artistHint);
+      // a pista de artista pode estar errada (nome do canal do YouTube, cantora virtual em vez do produtor...)
+      final found = await mb.lookupSmart(title, artist: artistHint);
       if (found != null) return found;
-      if (artistHint != null) {
-        // a pista de artista pode estar errada (ex.: nome da cantora virtual em vez do produtor)
-        final retry = await mb.lookup(title);
-        if (retry != null && (_norm(retry.artist).contains(_norm(artistHint)) || retry.score >= 90)) return retry;
-      }
     }
     if (tagArtist.isNotEmpty && tagAlbum.isNotEmpty) {
       return SongInfo(title: title, artist: tagArtist, album: tagAlbum, score: 90, source: 'tags');

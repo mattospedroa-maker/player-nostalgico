@@ -46,4 +46,24 @@ void main() {
   test('(feat.) continua no título', () {
     expect(guessYoutubeNames({'title': 'Eminem - Till I Collapse (feat. Nate Dogg) [Lyrics]'}).title, 'Till I Collapse (feat. Nate Dogg)');
   });
+
+  test('canal com Official/Music/TV grudado ou separado', () {
+    expect(artistFromChannel('MadrugadaOfficial'), 'Madrugada');
+    expect(artistFromChannel('madrugadaofficial'), 'madrugada');
+    expect(artistFromChannel('Madrugada Official Channel'), 'Madrugada');
+    expect(artistFromChannel('Anitta Oficial'), 'Anitta');
+    expect(artistFromChannel('Ghost - Official'), 'Ghost');
+    expect(artistFromChannel('GhostMusic'), 'Ghost');
+    expect(artistFromChannel('PitbullTV'), 'Pitbull');
+    expect(artistFromChannel('Electromusic'), 'Electromusic');
+    expect(artistFromChannel('Unofficial'), 'Unofficial');
+    expect(guessYoutubeNames({'title': 'Electric', 'channel': 'MadrugadaOfficial'}).artist, 'Madrugada');
+  });
+
+  test('jeitos de escrever o artista para o MusicBrainz', () {
+    expect(artistNameVariants('MadrugadaOfficial'), ['MadrugadaOfficial', 'Madrugada']);
+    expect(artistNameVariants('LinkinParkVEVO'), ['LinkinParkVEVO', 'LinkinPark', 'Linkin Park']);
+    expect(artistNameVariants('Madrugada'), ['Madrugada']);
+    expect(artistNameVariants('Roxy Music').first, 'Roxy Music');
+  });
 }
