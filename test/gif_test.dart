@@ -50,14 +50,23 @@ void main() {
     expect(NekosBestProvider(MockClient((_) async => http.Response('{}', 200))).allowBulk, isFalse);
   });
 
-  test('plano: 2 da música, 2 do artista, 2 do gênero e anime no clima do gênero', () {
+  test('plano: cenas (palavras do usuário na frente), anime no clima, título+artista; artista e gênero de reserva', () {
     final t = Track(path: '/m/x.mp3', title: '01 - Numb', artist: 'Linkin Park', album: 'Meteora', genre: 'Nu Metal', addedAt: 0, modifiedAt: 0);
     final plan = GifFetcher.planFor(t, extras: ['naruto']);
-    expect(plan.title, ['naruto', 'Numb Linkin Park', 'Numb']);
+    expect(plan.scenes, ['naruto']);
+    expect(plan.title, ['Numb Linkin Park', 'Numb']);
     expect(plan.artist.first, 'Linkin Park');
     expect(plan.genre, ['Nu Metal', 'Metal concert', 'Metal music']);
     expect(plan.moods, contains('punch'));
-    expect(GifFetcher.slotOrder.where((s) => s == 3).length, greaterThanOrEqualTo(5)); // maioria anime
+    expect(GifFetcher.slotOrder.length, 9);
+    expect(GifFetcher.slotOrder.where((s) => s == GifFetcher.slotScene).length, 5);
+    expect(GifFetcher.slotOrder.where((s) => s == GifFetcher.slotAnime).length, GifFetcher.animeSlots);
+    expect(GifFetcher.slotOrder.where((s) => s == GifFetcher.slotTitle).length, 2);
+    // com cena, não busca "artista live" nem "gênero concert"
+    final withScene = GifFetcher.planFor(t, scenes: ['rain window night']);
+    expect(withScene.scenes, ['rain window night']);
+    expect(withScene.artist, isNot(contains('Linkin Park live')));
+    expect(withScene.genre, isNot(contains('Metal concert')));
     expect(GifFetcher.moodCategories('Sertanejo'), contains('dance'));
     expect(GifFetcher.moodCategories('Lo-Fi'), contains('sleep'));
     expect(GifFetcher.moodCategories('Alternative Rock'), contains('run'));

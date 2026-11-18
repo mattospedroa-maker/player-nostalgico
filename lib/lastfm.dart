@@ -85,6 +85,59 @@ class LastFmClient {
     return _fetch(artistUrlFor(artist, key));
   }
 
+  static Uri infoUrlFor(String artist, String track, String key) => Uri.https('ws.audioscrobbler.com', '/2.0/', {
+        'method': 'track.getinfo',
+        'artist': artist,
+        'track': track,
+        'autocorrect': '1',
+        'api_key': key,
+        'format': 'json',
+      });
+
+  /// Andamento e energia de `track.getInfo`, só se a resposta trouxer (quase nunca traz; aí volta vazio).
+  /// null = não deu para consultar (sem chave, sem internet): tenta outra hora.
+  Future<TrackTempo?> trackTempo(String artist, String track) async {
+    final key = apiKey?.trim() ?? '';
+    if (key.isEmpty || artist.trim().isEmpty || track.trim().isEmpty) return null;
+    final wait = minInterval - DateTime.now().difference(_last);
+    if (wait > Duration.zero) await Future<void>.delayed(wait);
+    _last = DateTime.now();
+    try {
+      final res = await client
+          .get(infoUrlFor(artist, track, key), headers: {'User-Agent': 'PlayerNostalgico/1.0 (app pessoal offline)'})
+          .timeout(const Duration(seconds: 15));
+      return parseTempo(res.statusCode, res.body);
+    } catch (e) {
+      errorLog.info('GIFs', 'Last.fm não respondeu (andamento)', e);
+      return null;
+    }
+  }
+
+  /// Lê `bpm` e `energy` da resposta de `track.getInfo` (separado para testar sem internet).
+  /// Música não encontrada = vazio (vale guardar); erro de serviço = null.
+  static TrackTempo? parseTempo(int statusCode, String body) {
+    Object? json;
+    try {
+      json = jsonDecode(body);
+    } catch (_) {
+      return null;
+    }
+    if (json is! Map) return null;
+    final err = (json['error'] as num?)?.toInt();
+    if (err == 6) return const TrackTempo();
+    if (err != null || statusCode != 200) return null;
+    final t = json['track'];
+    if (t is! Map) return const TrackTempo();
+    double? num_(Object? v) => v is num ? v.toDouble() : double.tryParse('${v ?? ''}'.trim());
+    final b = num_(t['bpm']);
+    var e = num_(t['energy']);
+    if (e != null && e > 1 && e <= 100) e = e / 100; // alguns serviços mandam 0–100
+    return TrackTempo(
+      bpm: b == null || b < 40 || b > 220 ? null : b.round(),
+      energy: e == null || e < 0 || e > 1 ? null : e,
+    );
+  }
+
   Future<TagResult> _fetch(Uri uri) async {
     final wait = minInterval - DateTime.now().difference(_last);
     if (wait > Duration.zero) await Future<void>.delayed(wait);
@@ -185,6 +238,51 @@ class TagCache {
       file.writeAsStringSync(jsonEncode(_map));
     } catch (e) {
       errorLog.warn('GIFs', 'Não deu para salvar o cache do Last.fm', error: e);
+    }
+  }
+}
+
+/// Andamento de uma música (BPM e energia 0–1), quando se sabe.
+class TrackTempo {
+  final int? bpm;
+  final double? energy;
+  const TrackTempo({this.bpm, this.energy});
+  bool get isEmpty => bpm == null && energy == null;
+}
+
+/// Andamento do Last.fm por música (`GIFs/.ritmo.json`), para não consultar de novo. Guarda também "não tem".
+class TempoCache {
+  final File file;
+  final Duration maxAge;
+  Map<String, dynamic>? _data;
+  TempoCache(this.file, {this.maxAge = const Duration(days: 60)});
+
+  Map<String, dynamic> get _map {
+    if (_data != null) return _data!;
+    try {
+      _data = file.existsSync() ? (jsonDecode(file.readAsStringSync()) as Map).cast<String, dynamic>() : {};
+    } catch (e) {
+      errorLog.info('GIFs', 'Cache do andamento estava ilegível e foi recomeçado', e);
+      _data = {};
+    }
+    return _data!;
+  }
+
+  TrackTempo? get(String artist, String track) {
+    final e = _map[TagCache.keyFor(artist, track)];
+    if (e is! Map) return null;
+    final at = DateTime.tryParse('${e['t']}');
+    if (at == null || DateTime.now().difference(at) > maxAge) return null;
+    return TrackTempo(bpm: (e['b'] as num?)?.toInt(), energy: (e['e'] as num?)?.toDouble());
+  }
+
+  void put(String artist, String track, TrackTempo t) {
+    _map[TagCache.keyFor(artist, track)] = {'t': DateTime.now().toIso8601String(), 'b': ?t.bpm, 'e': ?t.energy};
+    try {
+      file.parent.createSync(recursive: true);
+      file.writeAsStringSync(jsonEncode(_map));
+    } catch (e) {
+      errorLog.warn('GIFs', 'Não deu para salvar o cache do andamento', error: e);
     }
   }
 }

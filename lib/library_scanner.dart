@@ -86,6 +86,7 @@ class LibraryScanner {
           genre: tags?.genre ?? '',
           year: tags?.year,
           durationMs: tags?.duration?.inMilliseconds ?? 0,
+          bpm: tags?.bpm,
           addedAt: now,
           modifiedAt: mtime,
         ));

@@ -14,6 +14,7 @@ import 'gif_feedback.dart';
 import 'gif_providers.dart';
 import 'gif_service.dart';
 import 'lastfm.dart';
+import 'lyrics.dart';
 import 'models.dart';
 import 'mood.dart';
 import 'organizer.dart' show safeFolderName;
@@ -55,6 +56,19 @@ class GifFetcher {
   /// Última situação do clipe por música (para mostrar "Do clipe: ...").
   final Map<int?, ClipInfo?> clipInfo = {};
   final Map<String, DateTime> _clipFailedAt = {};
+
+  /// Ler a letra para tirar as cenas (desligável nos testes).
+  bool useLyrics = true;
+
+  /// Últimas cenas da letra por música (a letra mesmo nunca é guardada).
+  final Map<int?, List<LyricScene>> lyricScenes = {};
+  LyricsCache? _lyricsCache;
+  String? _lyricsRoot;
+  final Map<String, DateTime> _lyricsFailedAt = {};
+
+  TempoCache? _tempoCache;
+  String? _tempoRoot;
+  final Map<String, DateTime> _tempoFailedAt = {};
 
   GifFeedback? _feedback;
   String? _feedbackRoot;
@@ -158,10 +172,19 @@ class GifFetcher {
   /// Sem gênero: mistura neutra (os GIFs de anime sempre vêm).
   static const neutralMoods = ['happy', 'wave', 'smile', 'thumbsup', 'dance', 'laugh'];
 
-  /// As buscas em três grupos, na ordem dos 9 GIFs:
-  /// 2 pelo nome da música, 2 pelo artista, 2 pelo gênero, e o resto intercalando os três.
-  /// [tagAnime]: categorias de anime vindas das tags do Last.fm (valem mais que o gênero, menos que o clima escolhido).
-  static GifPlan planFor(Track t, {List<String> extras = const [], List<String> tagAnime = const [], List<MusicTag>? tags}) {
+  /// As buscas por grupo, na ordem das vagas ([slotOrder]):
+  /// até 5 de cena (palavras do usuário, letra, clipe, dicionário), 2 de reação de anime, o resto título+artista.
+  /// Artista e gênero ficam de reserva, para quando os outros grupos não acham nada.
+  /// [tagAnime]: categorias de anime vindas das tags do Last.fm.
+  /// [scenes]: pesquisas de cena já em ordem (letra, clipe, dicionário); com alguma, não busca "artista live" nem "gênero concert".
+  /// [bpm]/[energy]: andamento da música (muda a ordem dos climas).
+  static GifPlan planFor(Track t,
+      {List<String> extras = const [],
+      List<String> tagAnime = const [],
+      List<MusicTag>? tags,
+      List<String> scenes = const [],
+      int? bpm,
+      double? energy}) {
     final parsed = parseFileName(t.title);
     final title = parsed.title.trim();
     var artist = t.artist.trim();
@@ -175,37 +198,73 @@ class GifFetcher {
       return qs.map((q) => q.trim()).where((q) => q.length >= 2 && seen.add(q.toLowerCase())).toList();
     }
 
+    final hasScene = uniq(scenes).isNotEmpty;
     return GifPlan(
-      title: uniq([...extras, if (artist.isNotEmpty) '$title $artist', title]),
-      artist: uniq([if (artist.isNotEmpty) artist, if (artist.isNotEmpty) '$artist band', if (artist.isNotEmpty) '$artist live']),
-      genre: uniq([if (hasGenre) genre, if (hasGenre) '$mainGenre concert', if (hasGenre) '$mainGenre music']),
+      scenes: uniq([...extras, ...scenes]),
+      title: uniq([if (artist.isNotEmpty) '$title $artist', title]),
+      artist: uniq([if (artist.isNotEmpty) artist, if (artist.isNotEmpty) '$artist band', if (artist.isNotEmpty && !hasScene) '$artist live']),
+      genre: uniq([if (hasGenre) genre, if (hasGenre && !hasScene) '$mainGenre concert', if (hasGenre) '$mainGenre music']),
       animeQueries: uniq(extras),
-      moods: moodsFor(t, tagAnime: tagAnime, hasGenre: hasGenre, tags: tags),
+      moods: moodsFor(t, tagAnime: tagAnime, hasGenre: hasGenre, tags: tags, bpm: bpm, energy: energy),
     );
   }
 
-  /// Categorias de anime da música: clima escolhido > clima automático (pistas) > tags do Last.fm > gênero.
-  /// Com clima automático, as categorias dele se alternam com as das tags (que trazem atmosfera e cenas do clipe),
-  /// começando pelo clima.
-  static List<String> moodsFor(Track t, {List<String> tagAnime = const [], bool? hasGenre, List<MusicTag>? tags}) {
+  /// Categorias de anime da música. O clima escolhido pelo usuário é absoluto (ignora pontos, andamento e letra).
+  /// Automático: os pontos de cada clima ([MoodGuess.scores]) com o andamento aplicado viram a ordem
+  /// ([categoriesFromScores]); sem ponto nenhum, as tags do Last.fm, senão o gênero, senão a mistura neutra.
+  static List<String> moodsFor(Track t,
+      {List<String> tagAnime = const [], bool? hasGenre, List<MusicTag>? tags, int? bpm, double? energy}) {
     final chosen = t.chosenMood;
     if (chosen != null) return chosen.categories;
-    final auto = MoodClues.forTrack(t, tags: tags).mood;
-    if (auto != null) {
-      // categorias das tags que brigam com o clima saem (ex.: soco numa música melancólica só porque a banda é de metal)
-      final clash = {for (final m in _clashes[auto]!) ...m.categories}.difference(auto.categories.toSet());
-      final fromTags = tagAnime.where((c) => !clash.contains(c)).toList();
-      final out = <String>[];
-      for (var i = 0; i < auto.categories.length || i < fromTags.length; i++) {
-        if (i < auto.categories.length && !out.contains(auto.categories[i])) out.add(auto.categories[i]);
-        if (i < fromTags.length && !out.contains(fromTags[i])) out.add(fromTags[i]);
-      }
-      return out;
-    }
+    final scores = MoodClues.withTempo(MoodClues.forTrack(t, tags: tags).scores, bpm: bpm ?? t.bpm, energy: energy);
+    final ordered = categoriesFromScores(scores, tagAnime: tagAnime);
+    if (ordered.isNotEmpty) return ordered;
     if (tagAnime.isNotEmpty) return tagAnime;
     final g = t.genre.trim();
     final known = hasGenre ?? (g.isNotEmpty && g.toLowerCase() != 'desconhecido');
     return known ? moodCategories(g) : neutralMoods;
+  }
+
+  /// Quantas categorias de cada clima entram quando há dois climas na disputa.
+  static const perMood = 3;
+
+  /// Pontos dos climas -> categorias de anime, em ordem. Função pura (testável).
+  /// - Só um clima com pontos: as categorias dele.
+  /// - Líder com folga ([MoodClues.minLead]): 3 do líder, depois 3 do 2º (o 2º que briga com o líder não entra).
+  /// - Folga menor: intercala os dois (3 de cada).
+  /// Depois vêm as categorias das tags ([tagAnime]), sem repetir e sem as que brigam com o líder.
+  /// Sem ponto nenhum: vazio (quem chama usa o gênero).
+  static List<String> categoriesFromScores(Map<Mood, double> scores, {List<String> tagAnime = const []}) {
+    final ranked = scores.entries.where((e) => e.value > 0).toList()..sort((a, b) => b.value.compareTo(a.value));
+    if (ranked.isEmpty) return const [];
+    final lead = ranked.first.key;
+    Mood? second = ranked.length > 1 ? ranked[1].key : null;
+    final clear = second == null || ranked.first.value - ranked[1].value >= MoodClues.minLead - 1e-9;
+    if (second != null && clear && _clashes[lead]!.contains(second)) second = null;
+    final out = <String>[];
+    void add(String c) {
+      if (!out.contains(c)) out.add(c);
+    }
+
+    if (second == null) {
+      lead.categories.forEach(add);
+    } else if (clear) {
+      lead.categories.take(perMood).forEach(add);
+      second.categories.take(perMood).forEach(add);
+    } else {
+      for (var i = 0; i < perMood; i++) {
+        if (i < lead.categories.length) add(lead.categories[i]);
+        if (i < second.categories.length) add(second.categories[i]);
+      }
+    }
+    // categorias das tags que brigam com o líder saem (ex.: soco numa música triste só porque a banda é de rock);
+    // num empate, as do 2º clima continuam valendo
+    final clash = {for (final m in _clashes[lead]!) ...m.categories}
+        .difference({...lead.categories, if (second != null && !clear) ...second.categories});
+    for (final c in tagAnime) {
+      if (!clash.contains(c)) add(c);
+    }
+    return out;
   }
 
   static const _clashes = <Mood, List<Mood>>{
@@ -217,8 +276,14 @@ class GifFetcher {
     Mood.acao: [Mood.calmo, Mood.romantico, Mood.triste],
   };
 
-  /// Ordem das vagas: 2 da música, 2 do artista, 2 do gênero, depois anime no clima da música intercalado com o gênero.
-  static const slotOrder = [0, 3, 3, 0, 3, 1, 3, 2, 3];
+  /// Grupos das vagas, na ordem de [GifPlan]: 0 cena, 1 reação de anime, 2 título+artista, 3 artista, 4 gênero.
+  static const slotScene = 0, slotAnime = 1, slotTitle = 2, slotArtist = 3, slotGenre = 4;
+
+  /// As 9 vagas: até 5 de cena, 2 de reação de anime, o resto (2) título+artista.
+  static const slotOrder = [slotScene, slotAnime, slotScene, slotTitle, slotScene, slotAnime, slotScene, slotTitle, slotScene];
+
+  /// Grupo que acabou: quem entra no lugar (o que sobra das cenas vai para título+artista; artista e gênero por último).
+  static List<int> slotFallback(int want) => {want, slotTitle, slotAnime, slotScene, slotArtist, slotGenre}.toList();
 
   /// Vagas guardadas para os GIFs de anime (só baixados música a música, nunca em massa).
   static const animeSlots = 2;
@@ -296,12 +361,86 @@ class GifFetcher {
     return clipInfo[t.id] = info;
   }
 
-  /// Pesquisas visuais da música: tags do Last.fm + cenas do clipe -> dicionário; sem nada, a alternativa básica.
-  /// O clima escolhido no selo pesa mais que tudo.
-  Future<VisualPlan> visualPlanFor(Track t) async {
+  /// Cenas tiradas da letra (LRCLIB, senão lyrics.ovh), com cache em `GIFs/.lyrics.json`.
+  /// A letra não é mostrada nem gravada: só as cenas. Falhou sem internet = não tenta por 10 min. Nunca lança erro.
+  /// [online] false: só o que já está no cache.
+  Future<List<LyricScene>> lyricScenesFor(Track t, {bool online = true}) async {
+    if (!useLyrics) return const [];
+    final (title, artist) = namesFor(t);
+    final root = gifs.gifRoot;
+    if (root != null && _lyricsRoot != root) {
+      _lyricsCache = LyricsCache(File(p.join(root, '.lyrics.json')));
+      _lyricsRoot = root;
+    }
+    final cached = _lyricsCache?.get(artist, title);
+    if (cached != null) return lyricScenes[t.id] = cached;
+    if (!online) return const [];
+    final key = LyricsCache.keyFor(artist, title);
+    final failed = _lyricsFailedAt[key];
+    if (failed != null && DateTime.now().difference(failed) < const Duration(minutes: 10)) return const [];
+    final c = LyricsClient(client);
+    List<LyricScene> found;
+    try {
+      found = await c.scenes(artist, title, album: t.album == unknownAlbum ? '' : t.album);
+    } catch (e) {
+      errorLog.info('GIFs', 'Letra não respondeu (cenas da letra)', e);
+      _lyricsFailedAt[key] = DateTime.now();
+      return const [];
+    }
+    if (!c.reached) {
+      _lyricsFailedAt[key] = DateTime.now();
+      return const [];
+    }
+    _lyricsCache?.put(artist, title, found);
+    return lyricScenes[t.id] = found;
+  }
+
+  /// Andamento da música: tag TBPM do arquivo; se vazia, Last.fm `track.getInfo` (cache em `GIFs/.ritmo.json`).
+  /// O BPM achado no Last.fm fica gravado na música. [online] false: só o que já se sabe. Nunca lança erro.
+  Future<TrackTempo> tempoFor(Track t, {bool online = true}) async {
+    final (title, artist) = namesFor(t);
+    final root = gifs.gifRoot;
+    if (root != null && _tempoRoot != root) {
+      _tempoCache = TempoCache(File(p.join(root, '.ritmo.json')));
+      _tempoRoot = root;
+    }
+    final cached = _tempoCache?.get(artist, title);
+    final own = MoodClues.validBpm(t.bpm);
+    if (own != null) return TrackTempo(bpm: own, energy: cached?.energy);
+    if (cached != null) return cached;
+    final apiKey = lastFmKey()?.trim() ?? '';
+    if (!online || apiKey.isEmpty) return const TrackTempo();
+    final key = TagCache.keyFor(artist, title);
+    final failed = _tempoFailedAt[key];
+    if (failed != null && DateTime.now().difference(failed) < const Duration(minutes: 10)) return const TrackTempo();
+    final r = await LastFmClient(client, apiKey).trackTempo(artist, title);
+    if (r == null) {
+      _tempoFailedAt[key] = DateTime.now();
+      return const TrackTempo();
+    }
+    _tempoCache?.put(artist, title, r);
+    final bpm = r.bpm;
+    if (bpm != null && t.id != null) {
+      try {
+        await gifs.db.setBpm(t.id!, bpm);
+      } catch (e) {
+        errorLog.info('GIFs', 'Não deu para guardar o andamento da música', e);
+      }
+    }
+    return r;
+  }
+
+  /// Grupo das pesquisas que vêm da letra (aparece assim na tela "GIFs pela vibe").
+  static const lyricsGroup = 'Da letra';
+
+  /// Pesquisas visuais da música, em ordem: palavras do usuário (e nome da trilha sonora), cenas da letra,
+  /// cenas do clipe, depois as do dicionário pelas tags do Last.fm; sem nada, a alternativa básica.
+  /// O clima escolhido no selo pesa mais que as tags. [lyrics] false: cenas da letra só do cache.
+  Future<VisualPlan> visualPlanFor(Track t, {bool lyrics = true}) async {
     final (title, artist) = namesFor(t);
     final r = await tagsFor(t);
     final clip = await clipFor(t);
+    final fromLyrics = await lyricScenesFor(t, online: lyrics);
     var plan = mapper.convert(r.tags, mood: t.chosenMood, title: title, artist: artist, genre: t.genre, scenes: clip?.scenes ?? const {});
     // palavras do usuário (música e artista) e o nome da trilha sonora vêm na frente: são as mais específicas
     final top = plan.all.isEmpty ? 1.0 : plan.all.first.score;
@@ -310,12 +449,23 @@ class GifFetcher {
     final front = <VisualQuery>[
       for (final e in extras)
         for (final w in e.split(',').map((x) => x.trim()).where((x) => x.length >= 2)) VisualQuery(w, 'Suas palavras', top * 2),
+      for (final (i, s) in fromLyrics.indexed) VisualQuery(s.query, lyricsGroup, top * (1.5 - i * 0.02)),
       if (ost != null) VisualQuery(ost, 'Trilha sonora', top * 1.4),
     ];
-    if (front.isNotEmpty) {
+    // cenas do clipe vêm antes das pesquisas que saem só das tags
+    final clipLabels = {
+      for (final k in clip?.scenes.keys ?? const <String>[]) ...visualTags.where((e) => e.scene && e.key == k).map((e) => e.label),
+    };
+    final clipFirst = clipLabels.isEmpty
+        ? plan.all
+        : [
+            for (final q in plan.all) clipLabels.contains(q.group) ? VisualQuery(q.text, q.group, top * 1.1 + q.score * 0.01) : q,
+          ];
+    if (front.isNotEmpty || clipLabels.isNotEmpty) {
       final seen = <String>{};
+      final merged = [...front, ...clipFirst]..sort((a, b) => b.score.compareTo(a.score));
       plan = VisualPlan(
-        all: [...front, ...plan.all].where((q) => seen.add(VisualTagMapper.normalize(q.text))).toList(),
+        all: merged.where((q) => seen.add(VisualTagMapper.normalize(q.text))).toList(),
         anime: plan.anime,
         matchedTags: plan.matchedTags,
         fromTags: plan.fromTags,
@@ -387,7 +537,7 @@ class GifFetcher {
   }
 
   /// Versão da regra de escolha. Músicas buscadas com uma regra antiga são refeitas.
-  static const planVersion = 4; // 4: varia os GIFs entre músicas do mesmo álbum
+  static const planVersion = 5; // 5: vagas por cena/anime/título, clima pelos pontos + andamento, cenas da letra
 
   /// Nomes dos arquivos baixados automaticamente (hash do conteúdo).
   static final _autoName = RegExp(r'^[0-9a-f]{12}\.gif$');
@@ -410,7 +560,7 @@ class GifFetcher {
 
     var pinned = (await gifs.db.pinnedGifs(t.id!)).where((g) => File(g).existsSync()).toList();
     // tags do Last.fm (do cache quando já consultou): escolhem as categorias de anime
-    final visual = await visualPlanFor(t);
+    final visual = await visualPlanFor(t, lyrics: !bulk);
     final tagAnime = visual.fromTags ? visual.anime : const <String>[];
     // a música foi buscada antes de ter as tags: refaz os automáticos uma vez com elas
     final redoForTags = entry is Map && entry['lfm'] != true && tagAnime.isNotEmpty && t.chosenMood == null && !bulk;
@@ -419,7 +569,18 @@ class GifFetcher {
       pinned = (await gifs.db.pinnedGifs(t.id!)).where((g) => File(g).existsSync()).toList();
     }
     final animeDone = entry is Map && entry['anime'] == true;
-    final plan0 = planFor(t, extras: gifs.extrasFor(t.artist, parseFileName(t.title).title), tagAnime: tagAnime, tags: cachedTags(t));
+    // andamento: só música a música (em massa, só o que já se sabe)
+    final tempo = await tempoFor(t, online: !bulk);
+    // cenas em ordem (letra, clipe, dicionário); as palavras do usuário e o nome/artista entram pelo planFor
+    const notScene = {'Suas palavras', 'Música', 'Artista'};
+    final sceneQueries = [for (final q in visual.all) if (!notScene.contains(q.group)) q.text].take(8).toList();
+    final plan0 = planFor(t,
+        extras: gifs.extrasFor(t.artist, parseFileName(t.title).title),
+        tagAnime: tagAnime,
+        tags: cachedTags(t),
+        scenes: sceneQueries,
+        bpm: tempo.bpm,
+        energy: tempo.energy);
     // em massa, deixa vagas para os GIFs de anime que vêm quando a música tocar
     final reserve = bulk && plan0.anime && providers.any((pr) => pr.animeOnly) ? animeSlots : 0;
     final need = maxGifsPerTrack - reserve - pinned.length;
@@ -466,8 +627,10 @@ class GifFetcher {
       final rnd = Random(t.path.hashCode);
       final (title0, artist0) = namesFor(t);
       final rejected = feedback?.rejected(artist0, title0) ?? const <String>{};
+      // palavras do usuário na frente de tudo (também no anime), depois as cenas
+      final sceneC = plan.anime ? await collect(plan.animeQueries, anime: true) : <GifCandidate>[];
+      sceneC.addAll(await collect(plan.scenes, anime: false));
       final titleC = await collect(plan.title, anime: false);
-      if (plan.anime) titleC.insertAll(0, await collect(plan.animeQueries, anime: true));
       final artistC = (await collect(plan.artist, anime: false))..shuffle(rnd); // varia entre as músicas do artista
       final genreC = (await collect(plan.genre, anime: false))..shuffle(rnd);
       final animeC = <GifCandidate>[];
@@ -475,23 +638,12 @@ class GifFetcher {
       final sources = bulk ? const <AnimeMoodSource>[] : moodSources;
       final climas = _readClimas();
       if (sources.isNotEmpty && plan.moods.isNotEmpty) {
-        // categorias que o usuário marcou como "não combina" para esta música saem da lista
+        // categoria com 2 ou mais 👎 do artista sai (um 👎 só não tira); a ordem é a do clima (moodsFor)
         final fb = feedback;
-        final cats = plan.moods.where((c) => fb == null || fb.weight(artist0, title0, 'anime:$c') > 0.4).toList();
-        if (cats.isEmpty) cats.addAll(plan.moods);
-        // das tags já vêm em ordem de importância; do gênero/clima, sorteia
-        if (tagAnime.isEmpty || t.chosenMood != null) {
-          cats.shuffle(rnd);
-        } else if (cats.length > 2) {
-          // mantém a categoria principal (com clima automático, as duas primeiras: a do clima e a das tags)
-          // e sorteia as outras por música, para o álbum não ficar todo igual
-          final keep = MoodClues.forTrack(t, tags: cachedTags(t)).mood != null && cats.length > 3 ? 2 : 1;
-          final rest = cats.sublist(keep)..shuffle(rnd);
-          cats
-            ..removeRange(keep, cats.length)
-            ..addAll(rest);
-        }
+        final cats = plan.moods.where((c) => fb == null || fb.categoryDislikes(artist0, c) < 2).toList();
+        final perCat = <List<GifCandidate>>[];
         for (final cat in cats.take(4)) {
+          final mine = <GifCandidate>[];
           // a primeira fonte que responder vale; se ela caiu, a próxima (waifu.pics) entra no lugar
           for (final src in sources) {
             if (health.isDown(src.name)) continue;
@@ -503,7 +655,7 @@ class GifFetcher {
               moodUsed.add(src.name);
               for (final c in got) {
                 if (!seenUrls.add(c.url)) continue;
-                animeC.add(c);
+                mine.add(c);
                 if (c.category != null && nekosCategory(c.url) == null) climas[c.url] = c.category;
               }
               break;
@@ -513,10 +665,12 @@ class GifFetcher {
               moodFailures[src.name] = e;
             }
           }
+          perCat.add(mine);
         }
-        animeC.shuffle(rnd);
+        // um de cada categoria por vez, na ordem do clima: as 2 vagas de anime ficam com as 2 primeiras
+        animeC.addAll(interleave(perCat));
       }
-      final buckets = [titleC, artistC, genreC, animeC];
+      final buckets = [sceneC, animeC, titleC, artistC, genreC];
 
       // hashes do que a música já tem, para não repetir o mesmo GIF
       final have = pinned.map((g) => p.basenameWithoutExtension(g)).toSet();
@@ -529,7 +683,7 @@ class GifFetcher {
         final want = slotOrder[(pinned.length + slot) % slotOrder.length];
         slot++;
         // se o grupo da vez acabou, pega do próximo que tiver
-        final bucket = [for (var k = 0; k < 4; k++) buckets[(want + k) % 4]].firstWhere((b) => b.isNotEmpty);
+        final bucket = [for (final k in slotFallback(want)) buckets[k]].firstWhere((b) => b.isNotEmpty);
         while (bucket.isNotEmpty) {
           final c = bucket.removeAt(0);
           if (rejected.contains(c.url)) continue; // o usuário disse que não combina
@@ -685,9 +839,10 @@ class GifFetcher {
     final hash = p.basenameWithoutExtension(path);
     final urls = [for (final e in _readIndex().entries) if (e.value == path) e.key];
     feedback?.reject(artist, title, [hash, ...urls]);
-    for (final u in urls) {
-      final cat = nekosCategory(u);
-      if (cat != null) feedback?.vote(artist, title, 'anime:$cat', -1);
+    // um 👎 conta uma vez por categoria, mesmo que o GIF tenha vindo de mais de um endereço
+    for (final cat in {for (final u in urls) ?categoryOf(u)}) {
+      feedback?.vote(artist, title, 'anime:$cat', -1);
+      feedback?.dislikeCategory(artist, cat);
     }
     await gifs.deleteGif(path, trackId: t.id);
   }
@@ -751,9 +906,10 @@ class GifFetcher {
   }
 }
 
-/// Buscas de uma música, separadas por grupo.
+/// Buscas de uma música, separadas por grupo (na ordem de [GifFetcher.slotOrder]).
 class GifPlan {
-  final List<String> title, artist, genre, animeQueries, moods;
-  const GifPlan({required this.title, required this.artist, required this.genre, required this.animeQueries, required this.moods});
+  final List<String> scenes, title, artist, genre, animeQueries, moods;
+  const GifPlan(
+      {this.scenes = const [], required this.title, required this.artist, required this.genre, required this.animeQueries, required this.moods});
   bool get anime => animeQueries.isNotEmpty || moods.isNotEmpty;
 }

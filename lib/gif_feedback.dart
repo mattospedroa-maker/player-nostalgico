@@ -85,6 +85,25 @@ class GifFeedback {
     return (1 + 0.3 * song + 0.12 * art).clamp(0.15, 2.5).toDouble();
   }
 
+  // ---------- 👎 por categoria de anime no artista ----------
+
+  /// Conta um 👎 num GIF de anime da categoria [category] para o artista.
+  void dislikeCategory(String artist, String category) {
+    final c = _section('categorias');
+    final m = ((c[artistKey(artist)] as Map?) ?? {}).cast<String, dynamic>();
+    m[category] = ((m[category] as num?) ?? 0).toInt() + 1;
+    c[artistKey(artist)] = m;
+    _save();
+  }
+
+  /// Quantos 👎 o artista já deu em GIFs de anime dessa categoria (inclui os antigos, contados pela força do termo).
+  int categoryDislikes(String artist, String category) {
+    final counted = (((_section('categorias')[artistKey(artist)] as Map?) ?? const {})[category] as num?)?.toInt() ?? 0;
+    final term = VisualTagMapper.normalize('anime:$category');
+    final vote = ((((_section('termos')[artistKey(artist)] as Map?) ?? const {})[term] as num?) ?? 0).toInt();
+    return counted > -vote ? counted : -vote;
+  }
+
   /// Aplica as preferências ao plano: reordena pesquisas e categorias de anime pela força de cada uma.
   VisualPlan apply(VisualPlan plan, String artist, String title) {
     final all = [

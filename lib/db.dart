@@ -13,10 +13,11 @@ class AppDb {
     final db = await f.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 3,
+        version: 4,
         onUpgrade: (db, from, to) async {
           if (from < 2) await db.execute('ALTER TABLE tracks ADD COLUMN edited INTEGER NOT NULL DEFAULT 0');
           if (from < 3) await db.execute("ALTER TABLE tracks ADD COLUMN mood TEXT NOT NULL DEFAULT ''");
+          if (from < 4) await db.execute('ALTER TABLE tracks ADD COLUMN bpm INTEGER');
         },
         onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
         // índices que faltavam (só acrescentam, não mexem em nenhum dado): abrir playlist, trocar
@@ -41,7 +42,8 @@ class AppDb {
               added_at INTEGER NOT NULL,
               modified_at INTEGER NOT NULL,
               edited INTEGER NOT NULL DEFAULT 0,
-              mood TEXT NOT NULL DEFAULT ''
+              mood TEXT NOT NULL DEFAULT '',
+              bpm INTEGER
             )''');
           await db.execute('''
             CREATE TABLE playlists(
@@ -87,13 +89,15 @@ class AppDb {
   Future<int> upsertTrack(Track t, {DatabaseExecutor? tx}) async {
     final db = tx ?? this.db;
     final existing = await db.query('tracks', where: 'path = ?', whereArgs: [t.path]);
-    if (existing.isEmpty) return db.insert('tracks', t.toMap()..remove('id'));
+    // andamento: só grava quando o arquivo traz (a releitura sem TBPM não apaga o que o Last.fm deu)
+    if (existing.isEmpty) return db.insert('tracks', t.toMap()..remove('id')..addAll({if (t.bpm != null) 'bpm': t.bpm}));
     final old = existing.first;
     final id = old['id'] as int;
     final m = t.toMap()
       ..remove('id')
       ..['favorite'] = old['favorite']
       ..['added_at'] = old['added_at'];
+    if (t.bpm != null) m['bpm'] = t.bpm;
     if (old['edited'] == 1) {
       // editada à mão: a releitura não desfaz a edição
       for (final k in ['title', 'artist', 'album', 'genre', 'year']) {
@@ -137,6 +141,9 @@ class AppDb {
       db.update('tracks', {'genre': genre}, where: 'id = ? AND genre = ?', whereArgs: [id, current]);
 
   Future<void> setMood(int id, String mood) => db.update('tracks', {'mood': mood}, where: 'id = ?', whereArgs: [id]);
+
+  /// Andamento achado no Last.fm (só onde o arquivo não trazia).
+  Future<void> setBpm(int id, int bpm) => db.update('tracks', {'bpm': bpm}, where: 'id = ? AND bpm IS NULL', whereArgs: [id]);
 
   Future<void> removeFromPlaylist(int playlistId, int trackId) =>
       db.delete('playlist_tracks', where: 'playlist_id = ? AND track_id = ?', whereArgs: [playlistId, trackId]);

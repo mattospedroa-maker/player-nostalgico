@@ -14,7 +14,10 @@ class TagInfo {
   final String genre;
   final int? year;
   final Duration? duration;
-  const TagInfo({this.title = '', this.artist = '', this.album = '', this.genre = '', this.year, this.duration});
+
+  /// Andamento da tag TBPM (só se for um número plausível, 40 a 220).
+  final int? bpm;
+  const TagInfo({this.title = '', this.artist = '', this.album = '', this.genre = '', this.year, this.duration, this.bpm});
 }
 
 /// Lê as tags do arquivo (ID3, Vorbis, MP4...). Interface para poder trocar nos testes.
@@ -53,10 +56,28 @@ class FileMetadataReader implements MetadataReader {
         genre: realGenre(m.genres), // "Music" (categoria do YouTube) e afins contam como vazio
         year: m.year?.year,
         duration: m.duration,
+        bpm: path.toLowerCase().endsWith('.mp3') ? _bpmOf(path) : null,
       );
     } catch (_) {
       return null;
     }
+  }
+
+  /// TBPM do ID3 (a leitura simples não traz). Só arquivos MP3; erro = sem andamento.
+  static int? _bpmOf(String path) {
+    try {
+      final all = amr.readAllMetadata(File(path), getImage: false);
+      return all is amr.Mp3Metadata ? parseBpm(all.bpm) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// "128", "92.5" -> número; fora de 40–220 conta como ausente.
+  static int? parseBpm(Object? raw) {
+    final v = raw is num ? raw.toDouble() : double.tryParse('${raw ?? ''}'.replaceAll('\u0000', '').trim().replaceAll(',', '.'));
+    if (v == null || v < 40 || v > 220) return null;
+    return v.round();
   }
 
   @override

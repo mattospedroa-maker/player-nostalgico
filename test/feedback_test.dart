@@ -126,6 +126,62 @@ void main() {
       expect(f.feedback!.rejected(artist, title), contains(p.basenameWithoutExtension(first)));
     });
 
+    MockClient nekos(List<String> cats) => MockClient((req) async {
+          if (req.url.path.endsWith('.gif')) return http.Response.bytes([...ascii.encode('GIF89a'), ...utf8.encode(req.url.path)], 200);
+          if (req.url.host == 'nekos.best' && req.url.path != '/api/v2/search') {
+            final cat = req.url.pathSegments.last;
+            cats.add(cat);
+            return http.Response(jsonEncode({'results': [for (var i = 0; i < 5; i++) {'url': 'https://nekos.best/api/v2/$cat/$i.gif'}]}), 200);
+          }
+          if (req.url.host == 'nekos.best') return http.Response('{"results":[]}', 200);
+          return http.Response('{}', 404);
+        });
+
+    test('vagas de anime seguem a ordem do clima; 2 👎 do artista na categoria tiram ela, 1 não', () async {
+      await db.upsertTrack(Track(
+          path: p.join(root.path, 'Ohne dich.mp3'), title: 'Ohne dich', artist: 'Rammstein', album: 'Reise', mood: 'triste', addedAt: 0, modifiedAt: 0));
+      var t = (await db.allTracks()).firstWhere((t) => t.title == 'Ohne dich');
+      await db.setMood(t.id!, 'triste');
+      t = (await db.allTracks()).firstWhere((t) => t.title == 'Ohne dich');
+      final cats = <String>[];
+      final f = GifFetcher(gifs, client: nekos(cats))
+        ..useClipInfo = false
+        ..useLyrics = false;
+      await f.fetchFor(t);
+      expect(cats, ['cry', 'hug', 'pat', 'pout']);
+      // na ordem em que foram fixados
+      final pinned = [
+        for (final r in await db.db.query('track_gifs', where: 'track_id = ?', whereArgs: [t.id], orderBy: 'rowid')) r['gif_path'] as String,
+      ];
+      final idx = jsonDecode(File(p.join(root.path, 'GIFs', '.indice.json')).readAsStringSync()) as Map;
+      String catOf(String path) => nekosCategory(idx.entries.firstWhere((e) => e.value == path).key as String)!;
+      expect(pinned.take(2).map(catOf), ['cry', 'hug']); // as 2 primeiras vagas de anime: 1ª e 2ª categoria
+
+      f.feedback!.dislikeCategory('Rammstein', 'cry');
+      cats.clear();
+      await f.refetchFor(t);
+      expect(cats.first, 'cry'); // um 👎 só não tira
+
+      f.feedback!.dislikeCategory('Rammstein', 'cry');
+      cats.clear();
+      await f.refetchFor(t);
+      expect(cats, isNot(contains('cry')));
+      expect(cats.first, 'hug');
+    });
+
+    test('andamento: a releitura sem TBPM não apaga o BPM guardado', () async {
+      final path = p.join(root.path, 'Lenta.mp3');
+      await db.upsertTrack(Track(path: path, title: 'Lenta', artist: 'X', album: 'Y', bpm: 72, addedAt: 0, modifiedAt: 0));
+      await db.upsertTrack(Track(path: path, title: 'Lenta', artist: 'X', album: 'Y', addedAt: 0, modifiedAt: 1));
+      var t = (await db.allTracks()).single;
+      expect(t.bpm, 72);
+      await db.setBpm(t.id!, 140); // Last.fm não sobrescreve o que o arquivo trouxe
+      t = (await db.allTracks()).single;
+      expect(t.bpm, 72);
+      await db.upsertTrack(Track(path: path, title: 'Lenta', artist: 'X', album: 'Y', bpm: 90, addedAt: 0, modifiedAt: 2));
+      expect((await db.allTracks()).single.bpm, 90);
+    });
+
     test('palavras novas já baixam GIFs do GIPHY (anime primeiro)', () async {
       final t = await add('Numb', 'Meteora');
       final asked = <String>[];

@@ -14,6 +14,10 @@ class Track {
   /// Clima escolhido no selo do GIF ('' = automático). Fica fora do toMap: a releitura não apaga.
   final String mood;
 
+  /// Andamento (batidas por minuto) da tag TBPM ou do Last.fm. Null = desconhecido.
+  /// Também fica fora do toMap: a releitura só grava quando o arquivo traz um valor.
+  final int? bpm;
+
   const Track({
     this.id,
     required this.path,
@@ -27,6 +31,7 @@ class Track {
     required this.addedAt,
     required this.modifiedAt,
     this.mood = '',
+    this.bpm,
   });
 
   Track copyWith({int? id, String? path, bool? favorite, String? artist, String? album}) => Track(
@@ -42,6 +47,7 @@ class Track {
         addedAt: addedAt,
         modifiedAt: modifiedAt,
         mood: mood,
+        bpm: bpm,
       );
 
   Map<String, Object?> toMap() => {
@@ -71,6 +77,7 @@ class Track {
         addedAt: m['added_at'] as int,
         modifiedAt: m['modified_at'] as int,
         mood: (m['mood'] as String?) ?? '',
+        bpm: m['bpm'] as int?,
       );
 }
 
