@@ -56,7 +56,7 @@ List<SmartCollection> buildSmartCollections(List<Track> tracks, PlayStats stats,
   }
   for (final m in Mood.values) {
     final list = byMood[m];
-    if (list != null) out.add(SmartCollection('mood:${m.name}', 'Clima ${m.emoji} ${m.label}', 'escolhido por você ou pelo gênero', XpIcons.cassette, list));
+    if (list != null) out.add(SmartCollection('mood:${m.name}', 'Clima ${m.emoji} ${m.label}', 'escolhido por você ou automático', XpIcons.cassette, list));
   }
   return out;
 }

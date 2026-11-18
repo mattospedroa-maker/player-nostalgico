@@ -347,6 +347,8 @@ class AppState extends ChangeNotifier {
   Future<void> reload({bool rereadGifs = false}) async {
     tracks = await db.allTracks();
     ArtistNames.current = ArtistNames.fromTracks(tracks);
+    MoodClues.tagsOf = gifFetcher.cachedTags;
+    MoodClues.learnFrom(tracks);
     playlists = await db.playlists();
     if (rereadGifs) await gifs.refresh();
     notifyListeners();
@@ -642,7 +644,7 @@ class AppState extends ChangeNotifier {
 
   /// Clima escolhido no selo do GIF. A música entra na playlist com o nome do clima (ex.: "Triste"),
   /// sai da playlist do clima antigo, ganha GIFs novos e, se guia o mix, o mix é refeito.
-  /// [mood] null = automático (pelo gênero).
+  /// [mood] null = automático (pistas: tags do Last.fm, título, escolhas, gênero).
   Future<void> setMood(Track t, Mood? mood) async {
     final id = t.id;
     if (id == null) return;
