@@ -11,6 +11,7 @@ import 'clip_info.dart';
 import 'error_log.dart';
 import 'filename_parser.dart';
 import 'gif_feedback.dart';
+import 'gif_mix.dart';
 import 'gif_providers.dart';
 import 'gif_service.dart';
 import 'lastfm.dart';
@@ -25,8 +26,10 @@ import 'visual_tags.dart';
 /// Máximo de GIFs por música (para não ocupar espaço demais).
 const maxGifsPerTrack = 9;
 
-/// Baixa GIFs da internet (Openverse + Wikimedia) pelo nome da música e do artista,
+/// Baixa GIFs da internet pelo plano visual da música (cenas, clima, título, artista, gênero, palavras do usuário),
 /// guarda em `GIFs/Artista/Título/` e fixa na música. Depois funciona offline.
+/// Padrão: anime (nekos.best, waifu.pics de reserva) + geral (Openverse e Wikimedia, licenças livres que
+/// permitem baixar e guardar com crédito), intercalados por [GifMix] (~70% anime / ~30% geral).
 class GifFetcher {
   final GifService gifs;
   final List<GifProvider> providers;
@@ -107,7 +110,14 @@ class GifFetcher {
       ServiceHealth? health,
       this.maxBytes = 8 * 1024 * 1024,
       this.retryAfter = const Duration(days: 3)})
-      : providers = providers ?? [NekosBestProvider(client)], // só GIFs de anime (pedido do usuário)
+      : providers = providers ??
+            [
+              NekosBestProvider(client),
+              // gerais: licenças livres (CC/domínio público) permitem guardar no aparelho com crédito.
+              // Fora do "Baixar para todas" para respeitar o limite de pedidos sem chave do Openverse.
+              OpenverseProvider(client, allowBulk: false, minInterval: const Duration(seconds: 1)),
+              WikimediaProvider(client, allowBulk: false),
+            ],
         health = health ?? ServiceHealth(),
         moodSources = moodSources ??
             [
@@ -276,14 +286,26 @@ class GifFetcher {
     Mood.acao: [Mood.calmo, Mood.romantico, Mood.triste],
   };
 
-  /// Grupos das vagas, na ordem de [GifPlan]: 0 cena, 1 reação de anime, 2 título+artista, 3 artista, 4 gênero.
-  static const slotScene = 0, slotAnime = 1, slotTitle = 2, slotArtist = 3, slotGenre = 4;
+  /// Limite de pedidos por provedor em cada música (respeita os limites das fontes; o player não espera por isso).
+  static const maxRequestsPerProvider = 5;
 
-  /// As 9 vagas: até 5 de cena, 2 de reação de anime, o resto (2) título+artista.
-  static const slotOrder = [slotScene, slotAnime, slotScene, slotTitle, slotScene, slotAnime, slotScene, slotTitle, slotScene];
+  /// Tempo máximo de cada pedido a um provedor.
+  static const providerTimeout = Duration(seconds: 12);
 
-  /// Grupo que acabou: quem entra no lugar (o que sobra das cenas vai para título+artista; artista e gênero por último).
-  static List<int> slotFallback(int want) => {want, slotTitle, slotAnime, slotScene, slotArtist, slotGenre}.toList();
+  /// Clima da música (escolhido ou automático) -> pesquisa de cena para o provedor geral.
+  static const moodQueries = {
+    Mood.calmo: 'calm night sky',
+    Mood.triste: 'rain window',
+    Mood.romantico: 'sunset couple',
+    Mood.festa: 'party lights',
+    Mood.epico: 'epic landscape',
+    Mood.acao: 'fight scene',
+  };
+
+  static String? moodQueryFor(Track t, {List<MusicTag>? tags}) {
+    final m = t.chosenMood ?? MoodClues.forTrack(t, tags: tags).mood;
+    return m == null ? null : moodQueries[m];
+  }
 
   /// Vagas guardadas para os GIFs de anime (só baixados música a música, nunca em massa).
   static const animeSlots = 2;
@@ -594,69 +616,85 @@ class GifFetcher {
     var saved = 0;
     try {
       final plan = plan0;
-      final seenUrls = <String>{};
       final usable = providers.where((pr) => (!bulk || pr.allowBulk) && (!pr.animeOnly || plan.anime)).toList();
       // plano B: quais fontes de anime falharam e se alguma respondeu
       final moodFailures = <String, Object>{};
       final moodUsed = <String>{};
+      final (title0, artist0) = namesFor(t);
+      final rejected = feedback?.rejected(artist0, title0) ?? const <String>{};
+      final fb = feedback;
+      // cena, clima, título, artista, gênero e palavras do usuário -> provedor geral;
+      // palavras do usuário e nome da trilha sonora -> também a busca de anime
+      final routes = routeQueries(
+        userWords: plan.animeQueries,
+        scenes: [for (final s in plan.scenes) if (!plan.animeQueries.contains(s)) s],
+        ost: soundtrackName(t.album),
+        mood: moodQueryFor(t, tags: cachedTags(t)),
+        title: plan.title,
+        artist: plan.artist,
+        genre: plan.genre,
+      );
+      // candidatos bons suficientes por lado (sobra para downloads que falham e repetidos)
+      final enough = need * 2;
 
-      Future<List<GifCandidate>> collect(List<String> queries, {required bool anime}) async {
+      // Um provedor: pesquisas na ordem de importância, no máximo [maxRequestsPerProvider] pedidos,
+      // cada um com [providerTimeout]. Falhou = para nesta música (os outros provedores seguem).
+      Future<List<GifCandidate>> ask(GifProvider prov, List<RoutedQuery> queries) async {
         final out = <GifCandidate>[];
+        var asked = 0;
         for (final q in queries) {
-          for (final prov in usable.where((pr) => pr.animeOnly == anime)) {
-            if (health.isDown(prov.name)) continue; // caiu há pouco: nem tenta
-            try {
-              for (final c in await prov.search(q, limit: 15)) {
-                if (seenUrls.add(c.url)) out.add(c);
-              }
-              health.up(prov.name);
-            } catch (e) {
-              // sem internet ou fonte fora do ar: tenta a próxima
-              errorLog.info('GIFs', 'Busca de GIFs falhou em ${prov.name}', e);
-              if (prov is AnimeMoodSource) {
-                health.down(prov.name, e);
-                moodFailures[prov.name] = e;
-              }
+          if (asked >= maxRequestsPerProvider || out.length >= enough || health.isDown(prov.name)) break;
+          asked++;
+          try {
+            final got = await prov.search(q.text, limit: 15).timeout(providerTimeout);
+            health.up(prov.name);
+            for (final (i, c) in got.indexed) {
+              // fraco (nada da pesquisa no metadado ou nota baixa) não entra, nem para completar
+              if (queryMatch(q.text, c.meta) <= 0) continue;
+              var score = relevance(q, c.meta, i);
+              if (fb != null) score *= fb.weight(artist0, title0, q.text).clamp(0.15, 1.2);
+              if (score < minGoodScore) continue;
+              out.add(c.ranked(query: q.text, score: score, kind: kindOf(c, animeOnlySource: prov.animeOnly)));
             }
+          } catch (e) {
+            // sem internet, fora do ar, limite de pedidos ou demorou demais
+            errorLog.info('GIFs', 'Busca de GIFs falhou em ${prov.name}', e);
+            health.down(prov.name, e);
+            if (prov is AnimeMoodSource) moodFailures[prov.name] = e;
+            break;
           }
-          if (out.length >= 8) break;
         }
         return out;
       }
 
-      final rnd = Random(t.path.hashCode);
-      final (title0, artist0) = namesFor(t);
-      final rejected = feedback?.rejected(artist0, title0) ?? const <String>{};
-      // palavras do usuário na frente de tudo (também no anime), depois as cenas
-      final sceneC = plan.anime ? await collect(plan.animeQueries, anime: true) : <GifCandidate>[];
-      sceneC.addAll(await collect(plan.scenes, anime: false));
-      final titleC = await collect(plan.title, anime: false);
-      final artistC = (await collect(plan.artist, anime: false))..shuffle(rnd); // varia entre as músicas do artista
-      final genreC = (await collect(plan.genre, anime: false))..shuffle(rnd);
-      final animeC = <GifCandidate>[];
       // em massa as fontes de anime não entram (termos do nekos.best); música a música, sim
       final sources = bulk ? const <AnimeMoodSource>[] : moodSources;
       final climas = _readClimas();
-      if (sources.isNotEmpty && plan.moods.isNotEmpty) {
-        // categoria com 2 ou mais 👎 do artista sai (um 👎 só não tira); a ordem é a do clima (moodsFor)
-        final fb = feedback;
+
+      // GIFs de anime pelas categorias do clima: um de cada categoria por vez, na ordem de moodsFor
+      Future<List<GifCandidate>> moodGifs() async {
+        final out = <GifCandidate>[];
+        if (sources.isEmpty || plan.moods.isEmpty) return out;
+        // categoria com 2 ou mais 👎 do artista sai (um 👎 só não tira, mas desce)
         final cats = plan.moods.where((c) => fb == null || fb.categoryDislikes(artist0, c) < 2).toList();
-        final perCat = <List<GifCandidate>>[];
-        for (final cat in cats.take(4)) {
-          final mine = <GifCandidate>[];
+        for (final (ci, cat) in cats.take(4).indexed) {
           // a primeira fonte que responder vale; se ela caiu, a próxima (waifu.pics) entra no lugar
           for (final src in sources) {
             if (health.isDown(src.name)) continue;
             try {
               // pede mais do que precisa: sobra para pular os que outras músicas já usam
-              final got = await src.random(cat, amount: 5);
+              final got = await src.random(cat, amount: 5).timeout(providerTimeout);
               health.up(src.name);
               if (got.isEmpty) continue;
               moodUsed.add(src.name);
-              for (final c in got) {
-                if (!seenUrls.add(c.url)) continue;
-                mine.add(c);
+              var w = 1.0;
+              if (fb != null) {
+                w = fb.weight(artist0, title0, 'anime:$cat').clamp(0.15, 1.2).toDouble();
+                if (fb.categoryDislikes(artist0, cat) == 1) w *= 0.8;
+              }
+              for (final (j, c) in got.indexed) {
                 if (c.category != null && nekosCategory(c.url) == null) climas[c.url] = c.category;
+                out.add(c.ranked(query: 'anime:$cat', score: (0.85 - j * 0.04 - ci * 0.01) * w, kind: GifKind.anime));
               }
               break;
             } catch (e) {
@@ -665,68 +703,78 @@ class GifFetcher {
               moodFailures[src.name] = e;
             }
           }
-          perCat.add(mine);
         }
-        // um de cada categoria por vez, na ordem do clima: as 2 vagas de anime ficam com as 2 primeiras
-        animeC.addAll(interleave(perCat));
+        return out;
       }
-      final buckets = [sceneC, animeC, titleC, artistC, genreC];
+
+      // anime e geral na mesma seleção, ao mesmo tempo: a falha de um não cancela o outro
+      final lists = await Future.wait<List<GifCandidate>>([
+        for (final pr in usable.where((pr) => !pr.animeOnly)) ask(pr, routes.general).catchError((Object _) => <GifCandidate>[]),
+        for (final pr in usable.where((pr) => pr.animeOnly)) ask(pr, routes.anime).catchError((Object _) => <GifCandidate>[]),
+        moodGifs().catchError((Object _) => <GifCandidate>[]),
+      ]);
+      // mesmo endereço vindo de mais de um provedor/pesquisa: fica uma vez, com a melhor nota
+      final best = <String, GifCandidate>{};
+      for (final c in lists.expand((l) => l)) {
+        if (rejected.contains(c.url)) continue; // o usuário disse que não combina
+        final old = best[c.url];
+        if (old == null || c.score > old.score) best[c.url] = c;
+      }
+      final mix = GifMix(
+        anime: [for (final c in best.values) if (c.kind == GifKind.anime) c],
+        general: [for (final c in best.values) if (c.kind != GifKind.anime) c],
+        total: need,
+      );
 
       // hashes do que a música já tem, para não repetir o mesmo GIF
       final have = pinned.map((g) => p.basenameWithoutExtension(g)).toSet();
       final index = _readIndex();
       final credits = <String>[];
-      var slot = 0;
       // GIFs que outras músicas já usam: ficam para o fim (só entram se faltar GIF novo)
       final reuse = <String>[];
-      while (saved < need && buckets.any((b) => b.isNotEmpty)) {
-        final want = slotOrder[(pinned.length + slot) % slotOrder.length];
-        slot++;
-        // se o grupo da vez acabou, pega do próximo que tiver
-        final bucket = [for (final k in slotFallback(want)) buckets[k]].firstWhere((b) => b.isNotEmpty);
-        while (bucket.isNotEmpty) {
-          final c = bucket.removeAt(0);
-          if (rejected.contains(c.url)) continue; // o usuário disse que não combina
-          // 1) mesmo endereço já baixado para outra música: usa o mesmo arquivo, sem baixar
-          final known = index[c.url] as String?;
-          if (known != null && File(known).existsSync()) {
-            if (have.contains(p.basenameWithoutExtension(known))) continue;
-            if (rejected.contains(p.basenameWithoutExtension(known))) continue;
-            if (await gifs.db.gifUsers(known) > 0) {
-              reuse.add(known);
-              continue;
-            }
-            have.add(p.basenameWithoutExtension(known));
-            await gifs.db.pinGif(t.id!, known);
-            saved++;
-            break;
-          }
-          final bytes = await _download(c.url);
-          if (bytes == null) continue;
-          final hash = sha1.convert(bytes).toString().substring(0, 12);
-          if (rejected.contains(hash)) continue;
-          if (!have.add(hash)) continue; // mesmo GIF vindo de outro endereço
-          // 2) mesmo conteúdo já guardado (por outra música): aponta para ele, não grava de novo
-          var target = gifs.findByName('$hash.gif');
-          if (target != null && await gifs.db.gifUsers(target) > 0) {
-            // outra música já tem esse GIF: guarda para o fim
-            have.remove(hash);
-            index[c.url] = target;
-            reuse.add(target);
+      while (saved < need) {
+        final c = mix.next();
+        if (c == null) break;
+        // 1) mesmo endereço já baixado para outra música: usa o mesmo arquivo, sem baixar
+        final known = index[c.url] as String?;
+        if (known != null && File(known).existsSync()) {
+          if (have.contains(p.basenameWithoutExtension(known))) continue;
+          if (rejected.contains(p.basenameWithoutExtension(known))) continue;
+          if (await gifs.db.gifUsers(known) > 0) {
+            reuse.add(known);
             continue;
           }
-          if (target == null) {
-            target = p.join(dest.path, '$hash.gif');
-            await dest.create(recursive: true);
-            await File(target).writeAsBytes(bytes, flush: true);
-            gifs.addToCache(target);
-            credits.add('$hash.gif · ${c.credit}');
-          }
-          index[c.url] = target;
-          await gifs.db.pinGif(t.id!, target);
+          have.add(p.basenameWithoutExtension(known));
+          await gifs.db.pinGif(t.id!, known);
+          mix.accept(c);
           saved++;
-          break;
+          continue;
         }
+        final bytes = await _download(c.url);
+        if (bytes == null) continue;
+        final hash = sha1.convert(bytes).toString().substring(0, 12);
+        if (rejected.contains(hash)) continue;
+        if (!have.add(hash)) continue; // mesmo GIF vindo de outro endereço
+        // 2) mesmo conteúdo já guardado (por outra música): aponta para ele, não grava de novo
+        var target = gifs.findByName('$hash.gif');
+        if (target != null && await gifs.db.gifUsers(target) > 0) {
+          // outra música já tem esse GIF: guarda para o fim
+          have.remove(hash);
+          index[c.url] = target;
+          reuse.add(target);
+          continue;
+        }
+        if (target == null) {
+          target = p.join(dest.path, '$hash.gif');
+          await dest.create(recursive: true);
+          await File(target).writeAsBytes(bytes, flush: true);
+          gifs.addToCache(target);
+          credits.add('$hash.gif · ${c.credit}');
+        }
+        index[c.url] = target;
+        await gifs.db.pinGif(t.id!, target);
+        mix.accept(c);
+        saved++;
       }
       for (final g in reuse) {
         if (saved >= need) break;
