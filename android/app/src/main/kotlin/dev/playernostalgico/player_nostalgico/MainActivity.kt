@@ -5,18 +5,16 @@ import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
 
 class MainActivity : AudioServiceActivity() {
-    private var share: ShareBridge? = null
-
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         YtDlpBridge(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
-        share = ShareBridge(flutterEngine.dartExecutor.binaryMessenger).also { it.keep(intent) }
+        ShareBridge(flutterEngine.dartExecutor.binaryMessenger).deliver(intent)
     }
 
-    // link compartilhado com o app já aberto
+    // link compartilhado com o app já aberto (singleTask: reaproveita esta mesma janela)
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        share?.send(intent)
+        ShareBridge.current?.deliver(intent)
     }
 }

@@ -30,7 +30,7 @@ jobs:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
           if [ -n "$KEYSTORE_B64" ]; then echo "$KEYSTORE_B64" | base64 -d > android/app/release.jks; echo "usando a chave fixa"; elif [ -f android/app/chave-fixa.jks ]; then echo "usando a chave fixa do repositorio"; else echo "sem chave fixa: assina com a chave de debug do CI"; fi
-      - run: flutter build apk --release --target-platform android-arm64 --build-name=1.5.${{ github.run_number }} --build-number=${{ github.run_number }} --dart-define=APP_VERSION=1.5.${{ github.run_number }} --dart-define=LASTFM_KEY="$LASTFM_KEY" --dart-define=GIPHY_KEY="$GIPHY_KEY"
+      - run: flutter build apk --release --target-platform android-arm64 --build-name=1.6.${{ github.run_number }} --build-number=${{ github.run_number }} --dart-define=APP_VERSION=1.6.${{ github.run_number }} --dart-define=LASTFM_KEY="$LASTFM_KEY" --dart-define=GIPHY_KEY="$GIPHY_KEY"
         env:
           LASTFM_KEY: ${{ secrets.LASTFM_KEY }}
           GIPHY_KEY: ${{ secrets.GIPHY_KEY }}
@@ -61,7 +61,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cp build/app/outputs/flutter-apk/app-release.apk player-nostalgico.apk
-          gh release create "v1.5.${{ github.run_number }}" player-nostalgico.apk \
-            --title "Player Nostálgico 1.5.${{ github.run_number }}" \
+          gh release create "v1.6.${{ github.run_number }}" player-nostalgico.apk \
+            --title "Player Nostálgico 1.6.${{ github.run_number }}" \
             --notes "APK gerado automaticamente a partir de ${{ github.sha }}. Baixe player-nostalgico.apk e abra no celular." \
             --latest
