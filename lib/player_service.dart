@@ -249,15 +249,53 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
     await player.seek(Duration.zero, index: index);
   }
 
+  /// Próxima música (botão ⏭ da tela, menu Tocar e notificação).
+  ///
+  /// Avanço manual sempre vai para a próxima faixa, mesmo com "Repetir uma" ligado (antes o just_audio
+  /// voltava para o começo da mesma música). E nunca fica esperando para sempre outra tarefa da fila
+  /// (mix, troca de caminho, reordenar): se ela demorar, o avanço acontece assim mesmo.
   Future<void> next() async {
     crossfader.cancel(); // avanço manual: nunca com transição
     _guard.reset();
     final skipped = current;
     _logCurrent(skipped: true);
-    // garante que existe uma próxima (o mix completa a fila antes de avançar)
-    await _serial(_extendMix);
-    await player.seekToNext();
-    if (skipped != null && adaptive) await pushSimilarBack(skipped);
+    var done = false;
+    Future<void> advance() async {
+      if (done) return;
+      done = true;
+      // garante que existe uma próxima (o mix completa a fila antes de avançar)
+      if (nextIndexFor(_index, player.sequence.length, player.loopMode) == null) await _extendMix();
+      final to = nextIndexFor(_index, player.sequence.length, player.loopMode);
+      if (to != null) await player.seek(Duration.zero, index: to);
+    }
+
+    try {
+      await _serial(advance).timeout(_manualWait);
+    } on TimeoutException {
+      errorLog.info('Fila', 'A fila estava ocupada com outra tarefa; avançou sem esperar');
+      await advance();
+    }
+    if (skipped != null && adaptive) unawaited(pushSimilarBack(skipped));
+  }
+
+  /// Quanto um botão (próxima/anterior) espera uma tarefa da fila em andamento antes de agir assim mesmo.
+  static const _manualWait = Duration(seconds: 2);
+
+  /// Para onde o avanço manual vai a partir de [index] numa fila de [length] músicas.
+  /// "Repetir uma" não prende o botão na mesma música; "Repetir tudo" volta ao começo depois da última.
+  @visibleForTesting
+  static int? nextIndexFor(int? index, int length, LoopMode loop) {
+    if (index == null || length == 0) return null;
+    if (index + 1 < length) return index + 1;
+    return loop == LoopMode.off ? null : 0;
+  }
+
+  /// Para onde o "anterior" manual vai (mesma regra do [nextIndexFor], ao contrário).
+  @visibleForTesting
+  static int? previousIndexFor(int? index, int length, LoopMode loop) {
+    if (index == null || length == 0) return null;
+    if (index > 0) return index - 1;
+    return loop == LoopMode.off ? null : length - 1;
   }
 
   /// Troca o tipo de mix na hora: as músicas que o mix colocou são refeitas; a atual continua.
@@ -482,7 +520,8 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
   Future<void> previous() async {
     crossfader.cancel();
     if (player.position > const Duration(seconds: 3)) return player.seek(Duration.zero);
-    await player.seekToPrevious();
+    final to = previousIndexFor(_index, player.sequence.length, player.loopMode);
+    if (to != null) await player.seek(Duration.zero, index: to);
   }
 
   /// Aleatório feito pelo app (para a fila poder se adaptar ao que você pula e curte).
