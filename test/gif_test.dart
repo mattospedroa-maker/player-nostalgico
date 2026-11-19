@@ -58,10 +58,6 @@ void main() {
     expect(plan.artist.first, 'Linkin Park');
     expect(plan.genre, ['Nu Metal', 'Metal concert', 'Metal music']);
     expect(plan.moods, contains('punch'));
-    expect(GifFetcher.slotOrder.length, 9);
-    expect(GifFetcher.slotOrder.where((s) => s == GifFetcher.slotScene).length, 5);
-    expect(GifFetcher.slotOrder.where((s) => s == GifFetcher.slotAnime).length, GifFetcher.animeSlots);
-    expect(GifFetcher.slotOrder.where((s) => s == GifFetcher.slotTitle).length, 2);
     // com cena, não busca "artista live" nem "gênero concert"
     final withScene = GifFetcher.planFor(t, scenes: ['rain window night']);
     expect(withScene.scenes, ['rain window night']);

@@ -4,6 +4,9 @@ import 'package:http/http.dart' as http;
 
 import 'service_health.dart';
 
+/// Tipo do GIF na seleção: anime ou geral (cena, filme, paisagem...). Vem do metadado, não só da fonte.
+enum GifKind { anime, general }
+
 /// Um GIF encontrado numa fonte online.
 class GifCandidate {
   final String url;
@@ -11,7 +14,19 @@ class GifCandidate {
   final String credit; // autor + licença, para o arquivo de créditos
   /// Categoria do clima de anime ("dance"), quando veio de uma; serve para emprestar GIFs guardados depois.
   final String? category;
-  const GifCandidate({required this.url, required this.source, this.credit = '', this.category});
+
+  /// Texto que a fonte dá sobre o GIF (título, tags, nome do anime): serve para medir a relevância e o tipo.
+  final String meta;
+
+  /// Preenchidos na seleção: pesquisa que achou o GIF, nota de relevância e tipo.
+  final String query;
+  final double score;
+  final GifKind? kind;
+  const GifCandidate(
+      {required this.url, required this.source, this.credit = '', this.category, this.meta = '', this.query = '', this.score = 0, this.kind});
+
+  GifCandidate ranked({required String query, required double score, required GifKind kind}) =>
+      GifCandidate(url: url, source: source, credit: credit, category: category, meta: meta, query: query, score: score, kind: kind);
 }
 
 abstract class GifProvider {
@@ -29,15 +44,27 @@ abstract class GifProvider {
 const _ua = 'PlayerNostalgico/0.2 (app pessoal offline)';
 
 /// Openverse: acervo de imagens com licenças livres (permite baixar e guardar, com crédito).
+/// Termos do Openverse: respeitar o limite de pedidos (sem chave: até 20 por página, ~1 pedido/s),
+/// não raspar o acervo e dar crédito conforme a licença CC de cada obra (vai para `creditos.txt`).
 class OpenverseProvider extends GifProvider {
   final http.Client client;
-  OpenverseProvider(this.client);
+  final bool _bulk;
+  final Duration minInterval;
+  DateTime _last = DateTime.fromMillisecondsSinceEpoch(0);
+  OpenverseProvider(this.client, {bool allowBulk = true, this.minInterval = Duration.zero}) : _bulk = allowBulk;
 
   @override
   String get name => 'Openverse';
 
   @override
+  bool get allowBulk => _bulk;
+
+  @override
   Future<List<GifCandidate>> search(String query, {int limit = 20}) async {
+    final wait = minInterval - DateTime.now().difference(_last);
+    if (wait > Duration.zero) await Future<void>.delayed(wait);
+    _last = DateTime.now();
+    limit = limit.clamp(1, 20);
     final uri = Uri.https('api.openverse.org', '/v1/images/', {
       'q': query,
       'extension': 'gif',
@@ -45,6 +72,7 @@ class OpenverseProvider extends GifProvider {
       'mature': 'false',
     });
     final res = await client.get(uri, headers: {'User-Agent': _ua, 'Accept': 'application/json'}).timeout(const Duration(seconds: 20));
+    if (res.statusCode == 429 || res.statusCode >= 500) throw ServiceDown(name, res.statusCode);
     if (res.statusCode != 200) return const [];
     return parse(jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>);
   }
@@ -58,7 +86,12 @@ class OpenverseProvider extends GifProvider {
       out.add(GifCandidate(
         url: url,
         source: 'openverse',
-        credit: '${r['title'] ?? ''} · ${r['creator'] ?? 'autor desconhecido'} · CC $lic · ${r['foreign_landing_url'] ?? url}',
+        credit: '${r['title'] ?? ''} · ${r['creator'] ?? 'autor desconhecido'} · CC $lic · ${r['foreign_landing_url'] ?? url} · via Openverse',
+        meta: [
+          '${r['title'] ?? ''}',
+          for (final t in (r['tags'] as List? ?? const []))
+            if (t is Map && t['name'] is String) t['name'] as String,
+        ].join(' '),
       ));
     }
     return out;
@@ -68,10 +101,14 @@ class OpenverseProvider extends GifProvider {
 /// Wikimedia Commons: arquivos livres; busca só GIFs.
 class WikimediaProvider extends GifProvider {
   final http.Client client;
-  WikimediaProvider(this.client);
+  final bool _bulk;
+  WikimediaProvider(this.client, {bool allowBulk = true}) : _bulk = allowBulk;
 
   @override
   String get name => 'Wikimedia';
+
+  @override
+  bool get allowBulk => _bulk;
 
   @override
   Future<List<GifCandidate>> search(String query, {int limit = 20}) async {
@@ -84,9 +121,10 @@ class WikimediaProvider extends GifProvider {
       'gsrlimit': '$limit',
       'prop': 'imageinfo',
       'iiprop': 'url|size|mime|extmetadata',
-      'iiextmetadatafilter': 'Artist|LicenseShortName',
+      'iiextmetadatafilter': 'Artist|LicenseShortName|ImageDescription|Categories',
     });
     final res = await client.get(uri, headers: {'User-Agent': _ua}).timeout(const Duration(seconds: 20));
+    if (res.statusCode == 429 || res.statusCode >= 500) throw ServiceDown(name, res.statusCode);
     if (res.statusCode != 200) return const [];
     return parse(jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>);
   }
@@ -105,6 +143,8 @@ class WikimediaProvider extends GifProvider {
         url: info['url'] as String,
         source: 'wikimedia',
         credit: '${pg['title']} · ${strip(meta['Artist']?['value'] as String?)} · ${strip(meta['LicenseShortName']?['value'] as String?)} · ${info['descriptionurl'] ?? info['url']}',
+        meta: '${'${pg['title'] ?? ''}'.replaceFirst(RegExp(r'^File:'), '').replaceAll(RegExp(r'\.gif$', caseSensitive: false), '')} '
+            '${strip(meta['ImageDescription']?['value'] as String?)} ${strip(meta['Categories']?['value'] as String?).replaceAll('|', ' ')}',
       ));
     }
     return out;
@@ -159,7 +199,11 @@ class NekosBestProvider extends GifProvider implements AnimeMoodSource {
   static List<GifCandidate> parse(Map<String, dynamic> json) => [
         for (final r in (json['results'] as List? ?? const []).cast<Map<String, dynamic>>())
           if (r['url'] is String)
-            GifCandidate(url: r['url'] as String, source: 'nekos.best', credit: '${r['anime_name'] ?? 'anime'} · via nekos.best · ${r['url']}'),
+            GifCandidate(
+                url: r['url'] as String,
+                source: 'nekos.best',
+                credit: '${r['anime_name'] ?? 'anime'} · via nekos.best · ${r['url']}',
+                meta: 'anime ${r['anime_name'] ?? ''}'),
       ];
 }
 
@@ -199,7 +243,7 @@ class WaifuPicsProvider implements AnimeMoodSource {
   /// Só os .gif (a categoria mistura imagens paradas). [category] é a do nekos.best, para lembrar o clima.
   static List<GifCandidate> parse(Map<String, dynamic> json, String category, {int amount = 5}) => [
         for (final u in (json['files'] as List? ?? const []).whereType<String>())
-          if (u.toLowerCase().endsWith('.gif')) GifCandidate(url: u, source: 'waifu.pics', credit: 'anime · via waifu.pics · $u', category: category),
+          if (u.toLowerCase().endsWith('.gif')) GifCandidate(url: u, source: 'waifu.pics', credit: 'anime · via waifu.pics · $u', category: category, meta: 'anime $category'),
       ].take(amount).toList();
 }
 
