@@ -30,10 +30,21 @@ jobs:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
           if [ -n "$KEYSTORE_B64" ]; then echo "$KEYSTORE_B64" | base64 -d > android/app/release.jks; echo "usando a chave fixa"; elif [ -f android/app/chave-fixa.jks ]; then echo "usando a chave fixa do repositorio"; else echo "sem chave fixa: assina com a chave de debug do CI"; fi
-      - run: flutter build apk --release --target-platform android-arm64 --build-name=2.0.${{ github.run_number }} --build-number=${{ github.run_number }} --dart-define=APP_VERSION=2.0.${{ github.run_number }} --dart-define=LASTFM_KEY="$LASTFM_KEY" --dart-define=GIPHY_KEY="$GIPHY_KEY"
+      - name: Conferir as chaves das APIs (só diz se existem, nunca mostra o valor)
         env:
           LASTFM_KEY: ${{ secrets.LASTFM_KEY }}
           GIPHY_KEY: ${{ secrets.GIPHY_KEY }}
+          GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+        run: |
+          for k in LASTFM_KEY GIPHY_KEY GEMINI_KEY; do
+            v="${!k}"
+            if [ -n "$v" ]; then echo "$k: configurada (${#v} caracteres)"; else echo "::warning::$k não configurada: o APK sai sem ela"; fi
+          done
+      - run: flutter build apk --release --target-platform android-arm64 --build-name=2.0.${{ github.run_number }} --build-number=${{ github.run_number }} --dart-define=APP_VERSION=2.0.${{ github.run_number }} --dart-define=LASTFM_KEY="$LASTFM_KEY" --dart-define=GIPHY_KEY="$GIPHY_KEY" --dart-define=GEMINI_KEY="$GEMINI_KEY"
+        env:
+          LASTFM_KEY: ${{ secrets.LASTFM_KEY }}
+          GIPHY_KEY: ${{ secrets.GIPHY_KEY }}
+          GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       - name: Conferir que o APK saiu com a chave fixa (instala por cima sem perder dados)
         run: |
