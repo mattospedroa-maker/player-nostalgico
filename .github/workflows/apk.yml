@@ -40,6 +40,12 @@ jobs:
             v="${!k}"
             if [ -n "$v" ]; then echo "$k: configurada (${#v} caracteres)"; else echo "::warning::$k não configurada: o APK sai sem ela"; fi
           done
+          # teste de verdade da chave do Gemini (lista os modelos; a chave vai no cabeçalho, nunca aparece no log)
+          if [ -n "$GEMINI_KEY" ]; then
+            case "$GEMINI_KEY" in *[[:space:]]*|*\"*|*=*) echo "::warning::GEMINI_KEY tem espaço, aspas ou '=': cole só a chave no segredo";; esac
+            code=$(curl -s -o /dev/null -w '%{http_code}' -H "x-goog-api-key: $GEMINI_KEY" https://generativelanguage.googleapis.com/v1beta/models || echo erro)
+            if [ "$code" = 200 ]; then echo "GEMINI_KEY: o Google aceitou a chave (HTTP 200)"; else echo "::warning::GEMINI_KEY: o Google recusou a chave (HTTP $code)"; fi
+          fi
       - run: flutter build apk --release --target-platform android-arm64 --build-name=2.0.${{ github.run_number }} --build-number=${{ github.run_number }} --dart-define=APP_VERSION=2.0.${{ github.run_number }} --dart-define=LASTFM_KEY="$LASTFM_KEY" --dart-define=GIPHY_KEY="$GIPHY_KEY" --dart-define=GEMINI_KEY="$GEMINI_KEY"
         env:
           LASTFM_KEY: ${{ secrets.LASTFM_KEY }}
