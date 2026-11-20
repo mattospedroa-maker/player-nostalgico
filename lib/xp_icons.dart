@@ -31,6 +31,9 @@ enum XpIcons {
   doc,
   check,
   error,
+  mic,
+  radio,
+  book,
 }
 
 const _svg = <XpIcons, String>{
@@ -68,6 +71,12 @@ const _svg = <XpIcons, String>{
   XpIcons.doc:
       '<path d="M7 3h13l6 6v20H7z" fill="#fff" stroke="#555"/><path d="M20 3v6h6" fill="#ddd" stroke="#555"/><path d="M11 20h10M11 24h10" stroke="#3b8cf5" stroke-width="2"/><circle cx="13" cy="13" r="3" fill="#3b8cf5"/>',
   XpIcons.error: '<circle cx="16" cy="16" r="14" fill="#e0342a" stroke="#7a1010"/><circle cx="12" cy="11" r="5" fill="#ff8a7a" opacity=".55"/><path d="M10.5 10.5l11 11M21.5 10.5l-11 11" stroke="#fff" stroke-width="3.6"/>',
+  XpIcons.mic:
+      '<rect x="11" y="2" width="10" height="17" rx="5" fill="#9aa8c4" stroke="#1d3c78" stroke-width="1.5"/><path d="M13 7h6M13 11h6M13 15h6" stroke="#33507f"/><path d="M7 15a9 9 0 0 0 18 0" fill="none" stroke="#1d3c78" stroke-width="2.5"/><path d="M16 24v5M10 29h12" stroke="#1d3c78" stroke-width="2.5"/>',
+  XpIcons.radio:
+      '<path d="M8 10L24 3" stroke="#333" stroke-width="2"/><rect x="2" y="10" width="28" height="18" rx="2" fill="#a8743a" stroke="#4a3010"/><circle cx="10" cy="19" r="5" fill="#2b2b2b" stroke="#000"/><circle cx="10" cy="19" r="2" fill="#666"/><path d="M18 15h9M18 19h9M18 23h9" stroke="#f0e0c0" stroke-width="1.6"/>',
+  XpIcons.book:
+      '<path d="M3 5h11a2 2 0 0 1 2 2v21a2 2 0 0 0-2-2H3z" fill="#d84a2a" stroke="#7a1d07"/><path d="M29 5H18a2 2 0 0 0-2 2v21a2 2 0 0 1 2-2h11z" fill="#e8613f" stroke="#7a1d07"/><path d="M6 10h6M6 14h6M20 10h6M20 14h6" stroke="#ffd0c0"/>',
   XpIcons.check: '<circle cx="16" cy="16" r="14" fill="#3aa83a" stroke="#1b5e1b"/><path d="M9 16l5 5 9-10" fill="none" stroke="#fff" stroke-width="3.5"/>',
 };
 

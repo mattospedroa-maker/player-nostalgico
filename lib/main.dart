@@ -18,6 +18,7 @@ import 'screens/event_log_screen.dart';
 import 'screens/favorites_screen.dart';
 import 'screens/library_screen.dart';
 import 'screens/now_playing_screen.dart';
+import 'screens/podcasts_screen.dart' show showPodcastSuggestionBalloon;
 import 'screens/options_screen.dart';
 import 'screens/organizer_screen.dart';
 import 'screens/playlists_screen.dart';
@@ -260,6 +261,8 @@ class _HomeShellState extends State<HomeShell> {
   void initState() {
     super.initState();
     unawaited(ShareIntake.attach(_openShared));
+    // músicas com cara de podcast: balão perto do relógio (nunca move nada sozinho)
+    context.read<AppState>().onPodcastSuggestions = showPodcastSuggestionBalloon;
   }
 
   /// Link compartilhado de outro app: fecha o que estiver aberto por cima e abre "Baixar do YouTube" já buscando.

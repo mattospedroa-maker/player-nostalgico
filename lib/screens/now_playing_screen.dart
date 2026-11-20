@@ -17,6 +17,8 @@ import '../gif_service.dart';
 import '../models.dart';
 import '../mood.dart';
 import '../player_service.dart';
+import '../podcasts.dart';
+import '../main.dart' show HomeShell;
 import '../skip_guard.dart';
 import '../theme.dart';
 import '../visual_search.dart';
@@ -34,6 +36,7 @@ class NowPlayingScreen extends StatelessWidget {
     final ps = context.watch<PlayerService>();
     final app = context.watch<AppState>();
     final t = ps.current == null ? null : (app.byId(ps.current!.id) ?? ps.current);
+    final pod = t != null && app.isPodcast(t);
     return Column(
       children: [
         const XpTitleBar(title: 'Tocando agora'),
@@ -45,15 +48,15 @@ class NowPlayingScreen extends StatelessWidget {
                 'Editar informações…',
                 t == null ? null : () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => EditTrackScreen(track: t))),
               ),
-              XpMenuItem('Adicionar a uma playlist…', t == null ? null : () => pickPlaylistAndAdd(context, t)),
-              XpMenuItem(t?.favorite ?? false ? 'Tirar das favoritas' : 'Adicionar às favoritas', t == null ? null : () => app.toggleFavorite(t)),
+              XpMenuItem('Adicionar a uma playlist…', t == null || pod ? null : () => pickPlaylistAndAdd(context, t)),
+              XpMenuItem(t?.favorite ?? false ? 'Tirar das favoritas' : 'Adicionar às favoritas', t == null || pod ? null : () => app.toggleFavorite(t)),
             ],
           ),
           (
             'Exibir',
             [
               XpMenuItem('Fila de reprodução', t == null ? null : () => _Toolbar.showQueue(context)),
-              XpMenuItem('GIFs desta música…', t == null ? null : () => showGifManager(context, t)),
+              XpMenuItem('GIFs desta música…', t == null || pod ? null : () => showGifManager(context, t)),
             ],
           ),
           (
@@ -87,11 +90,17 @@ class NowPlayingScreen extends StatelessWidget {
                       child: StreamBuilder<Duration>(
                         stream: ps.player.positionStream,
                         builder: (context, snap) => LcdPanel(
-                          lines: [
-                            ('Artista', t.artist),
-                            ('Faixa', t.title),
-                            ('Álbum', [t.album, if ((t.year ?? 0) > 0) '${t.year}'].join(' · ')),
-                          ],
+                          lines: pod
+                              ? [
+                                  ('Programa', t.artist),
+                                  ('Episódio', t.title),
+                                  ('Podcast', 'velocidade ${_speed(ps.podcastSpeed)}${ps.podcastMode ? '' : ' · depois voltam as músicas'}'),
+                                ]
+                              : [
+                                  ('Artista', t.artist),
+                                  ('Faixa', t.title),
+                                  ('Álbum', [t.album, if ((t.year ?? 0) > 0) '${t.year}'].join(' · ')),
+                                ],
                           time: _clock(snap.data ?? Duration.zero),
                           total: _clock(ps.player.duration ?? Duration(milliseconds: t.durationMs)),
                           playing: ps.playing,
@@ -103,7 +112,16 @@ class NowPlayingScreen extends StatelessWidget {
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 10),
                       child: GlossyBar(
-                        children: [
+                        children: pod
+                            ? [
+                                GlossyButton(icon: Icons.replay_10, size: 40, onTap: () => ps.seekBy(const Duration(seconds: -10)), tooltip: 'Voltar 10 s'),
+                                GlossyButton(icon: Icons.skip_previous, size: 46, onTap: ps.previous, tooltip: 'Anterior'),
+                                GlossyButton(icon: ps.playing ? Icons.pause : Icons.play_arrow, size: 66, onTap: ps.togglePlay),
+                                GlossyButton(icon: Icons.skip_next, size: 46, onTap: ps.next, tooltip: 'Próximo'),
+                                GlossyButton(icon: Icons.forward_30, size: 40, onTap: () => ps.seekBy(const Duration(seconds: 30)), tooltip: 'Avançar 30 s'),
+                                GlossyButton(icon: Icons.speed, size: 36, active: ps.podcastSpeed != 1.0, onTap: ps.cyclePodcastSpeed, tooltip: 'Velocidade: ${_speed(ps.podcastSpeed)}'),
+                              ]
+                            : [
                           GlossyButton(icon: Icons.shuffle, size: 40, active: ps.shuffle, onTap: ps.toggleShuffle, tooltip: 'Aleatório'),
                           GlossyButton(icon: Icons.skip_previous, size: 46, onTap: ps.previous, tooltip: 'Anterior'),
                           GlossyButton(icon: ps.playing ? Icons.pause : Icons.play_arrow, size: 66, onTap: ps.togglePlay),
@@ -126,8 +144,7 @@ class NowPlayingScreen extends StatelessWidget {
                         ],
                       ),
                     ),
-                    _Toolbar(track: t),
-                    const _MixBox(),
+                    if (pod) _PodcastBox(track: t) else ...[_Toolbar(track: t), const _MixBox()],
                     const SizedBox(height: 12),
                   ],
                 ),
@@ -140,8 +157,10 @@ class NowPlayingScreen extends StatelessWidget {
             return XpStatusBar([
               outage != null ? '🌐 $outage' : (t == null ? 'Pronto' : '${ps.playing ? 'Tocando' : 'Pausado'} · ${t.title}'),
               if (t != null) p.extension(t.path).replaceFirst('.', '').toUpperCase(),
-              'Mix: ${ps.mixMode == MixMode.artist ? 'artista' : 'vibe'}',
-              ps.crossfade ? 'Transição: ligada' : 'Transição: desligada',
+              if (pod) 'Podcast · ${_speed(ps.podcastSpeed)}' else ...[
+                'Mix: ${ps.mixMode == MixMode.artist ? 'artista' : 'vibe'}',
+                ps.crossfade ? 'Transição: ligada' : 'Transição: desligada',
+              ],
             ]);
           },
         ),
@@ -149,7 +168,67 @@ class NowPlayingScreen extends StatelessWidget {
     );
   }
 
+  static String _speed(double v) => '${v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toString().replaceAll('.', ',')}x';
+
   static String _clock(Duration d) => '${d.inMinutes.toString().padLeft(2, '0')}:${(d.inSeconds % 60).toString().padLeft(2, '0')}';
+}
+
+/// Podcast tocando: botões próprios (fila, ouvido) e o que vem depois (próximo episódio ou a volta das músicas).
+class _PodcastBox extends StatelessWidget {
+  final Track track;
+  const _PodcastBox({required this.track});
+
+  @override
+  Widget build(BuildContext context) {
+    final ps = context.watch<PlayerService>();
+    final app = context.read<AppState>();
+    final next = ps.upcoming.take(3).toList();
+    final listened = app.podcastProgress.listened(track.path);
+    Widget item(XpIcons i, String label, VoidCallback onTap, {bool on = false}) => Expanded(
+          child: Padding(padding: const EdgeInsets.symmetric(horizontal: 2), child: BevelButton(icon: i, label: label, onTap: onTap, on: on)),
+        );
+    return Column(children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(8, 10, 8, 0),
+        child: Row(children: [
+          item(XpIcons.list, 'Fila', () => _Toolbar.showQueue(context)),
+          item(XpIcons.check, listened ? 'Ouvido' : 'Marcar ouvido', () {
+            app.podcastProgress.setListened(track.path, !listened);
+            app.touch();
+          }, on: listened),
+          item(XpIcons.mic, 'Podcasts', () {
+            app.setLibraryMedia(MediaKind.podcasts);
+            HomeShell.goTo(context, 1);
+          }),
+        ]),
+      ),
+      Container(
+        margin: const EdgeInsets.fromLTRB(10, 10, 10, 0),
+        child: Bevel(
+          sunken: true,
+          padding: const EdgeInsets.all(8),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(ps.podcastMode ? 'Depois deste episódio:' : 'Depois deste episódio, as músicas voltam:',
+                style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold, color: Color(0xFF1C3F94))),
+            if (next.isEmpty)
+              const Padding(
+                padding: EdgeInsets.only(top: 6),
+                child: Text('Nada. O player para quando o episódio acabar.', style: TextStyle(fontSize: 12, color: Xp.blueMuted)),
+              ),
+            for (final t in next)
+              Padding(
+                padding: const EdgeInsets.only(top: 5),
+                child: Row(children: [
+                  XpIcon(app.isPodcast(t) ? XpIcons.mic : XpIcons.note, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, color: Xp.navy))),
+                ]),
+              ),
+          ]),
+        ),
+      ),
+    ]);
+  }
 }
 
 /// "Depois desta, tocar:" Da mesma vibe / Do mesmo artista, e as 3 próximas.
@@ -542,12 +621,14 @@ class _GifCarouselState extends State<GifCarousel> {
   Future<void> _load() async {
     final app = context.read<AppState>();
     _lastCount = app.gifs.count;
-    final own = await app.gifs.gifsFor(widget.track);
+    // podcast: por enquanto só a capa do episódio (os GIFs de "estúdio de rádio" vêm numa fase própria)
+    final pod = app.isPodcast(widget.track);
+    final own = pod ? const <String>[] : await app.gifs.gifsFor(widget.track);
     // plano B: serviço de GIFs fora do ar -> completa com GIFs guardados do mesmo clima
-    final lend = app.gifFetcher.borrowed[widget.track.id] ?? const <String>[];
+    final lend = pod ? const <String>[] : app.gifFetcher.borrowed[widget.track.id] ?? const <String>[];
     _lastBorrowed = lend.length;
     final gifs = [...own, ...lend.where((g) => !own.contains(g))].take(maxGifsPerTrack).toList();
-    final extras = app.gifExtrasFor(widget.track);
+    final extras = pod ? const <String>[] : app.gifExtrasFor(widget.track);
     Uint8List? cover;
     if (gifs.isEmpty && extras.isEmpty) cover = await app.covers.fileFor(widget.track)?.readAsBytes() ?? await app.metadata.cover(widget.track.path);
     if (!mounted) return;
@@ -644,12 +725,13 @@ class _GifCarouselState extends State<GifCarousel> {
       WidgetsBinding.instance.addPostFrameCallback((_) => mounted ? _load() : null);
     }
     final fetching = app.gifFetcher.isFetching(widget.track);
+    final pod = app.isPodcast(widget.track);
     return Column(children: [
       GestureDetector(
         onTap: _gifs.length > 1
             ? () => _go(_i + 1)
-            : (_gifs.isEmpty && !fetching ? () => app.gifFetcher.fetchFor(widget.track, force: true) : null),
-        onLongPress: () => showGifManager(context, widget.track).then((_) => _load()),
+            : (_gifs.isEmpty && !fetching && !pod ? () => app.gifFetcher.fetchFor(widget.track, force: true) : null),
+        onLongPress: pod ? null : () => showGifManager(context, widget.track).then((_) => _load()),
         child: Container(
           margin: const EdgeInsets.fromLTRB(10, 10, 10, 6),
           height: 270,
@@ -675,14 +757,16 @@ class _GifCarouselState extends State<GifCarousel> {
                 child: Padding(
                   padding: const EdgeInsets.all(20),
                   child: Text(
-                      fetching
-                          ? 'Procurando GIFs de "${widget.track.title}"...'
-                          : 'Sem GIFs para esta música.\nToque para buscar na internet, ou segure para escolher do celular.',
+                      pod
+                          ? '🎙 Podcast\n${widget.track.artist}'
+                          : fetching
+                              ? 'Procurando GIFs de "${widget.track.title}"...'
+                              : 'Sem GIFs para esta música.\nToque para buscar na internet, ou segure para escolher do celular.',
                       textAlign: TextAlign.center,
                       style: const TextStyle(color: Color(0xFF99FFFF), fontSize: 13)),
                 ),
               ),
-            Positioned(left: 6, top: 6, child: MoodBadge(track: widget.track)),
+            if (!pod) Positioned(left: 6, top: 6, child: MoodBadge(track: widget.track)),
             if (fetching && _gifs.isNotEmpty)
               Positioned(
                 left: 6,

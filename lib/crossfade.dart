@@ -166,8 +166,12 @@ class Crossfader {
     _timer = Timer(wait.isNegative ? Duration.zero : wait, _prepare);
   }
 
+  /// Quando devolve true, não faz transição (ex.: podcast tocando ou entrando: conversa não tem crossfade).
+  bool Function()? hold;
+
   bool get _ready {
     if (!_enabled || !main.playing || !main.canAdvance) return false;
+    if (hold?.call() ?? false) return false;
     final d = main.duration;
     return d != null && d >= fade * 3; // música curtinha não tem crossfade
   }

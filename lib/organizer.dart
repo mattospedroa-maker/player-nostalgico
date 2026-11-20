@@ -10,6 +10,7 @@ import 'filename_parser.dart';
 import 'genre.dart';
 import 'metadata.dart';
 import 'models.dart';
+import 'podcasts.dart';
 import 'youtube_names.dart';
 
 /// Resultado da busca de artista/álbum para uma música.
@@ -247,6 +248,8 @@ class Organizer {
         .whereType<File>()
         .where((f) => isAudioFile(f.path))
         .where((f) => !_isInsideGifFolder(f.path))
+        // podcasts têm a própria organização (Podcasts/Programa/): o organizador de músicas não mexe
+        .where((f) => !isPodcastPath(sourceRoot, f.path))
         .toList()
       ..sort((a, b) => a.path.compareTo(b.path));
   }

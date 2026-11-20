@@ -163,9 +163,9 @@ class YtDlp {
   }
 
   /// Argumentos para baixar só o áudio e converter em .mp3 (com capa quadrada e tags).
-  static List<String> mp3Args(String url, String outDir) => [
+  static List<String> mp3Args(String url, String outDir, {String quality = '192K'}) => [
         '-f', 'bestaudio/best',
-        '-x', '--audio-format', 'mp3', '--audio-quality', '192K',
+        '-x', '--audio-format', 'mp3', '--audio-quality', quality,
         '--embed-metadata',
         '--embed-thumbnail', '--convert-thumbnails', 'jpg',
         // capa quadrada (miniatura do YouTube é 16:9)
@@ -176,9 +176,9 @@ class YtDlp {
       ];
 
   /// Baixa e converte. Devolve o caminho do .mp3 gerado dentro de [outDir].
-  Future<String> downloadMp3(String url, String outDir, {required String id, void Function(double, String)? onProgress}) async {
+  Future<String> downloadMp3(String url, String outDir, {required String id, String quality = '192K', void Function(double, String)? onProgress}) async {
     await Directory(outDir).create(recursive: true);
-    final r = await run(mp3Args(url, outDir), id: id, download: true, onProgress: onProgress);
+    final r = await run(mp3Args(url, outDir, quality: quality), id: id, download: true, onProgress: onProgress);
     final mp3s = Directory(outDir).listSync().whereType<File>().where((f) => f.path.toLowerCase().endsWith('.mp3')).toList();
     if (mp3s.isEmpty) throw YtDlpException.from(r.err.isNotEmpty ? r.err : 'O yt-dlp terminou sem gerar o .mp3 (código ${r.exitCode}).');
     return mp3s.first.path;

@@ -8,6 +8,7 @@ import 'error_log.dart';
 import 'filename_parser.dart';
 import 'metadata.dart';
 import 'models.dart';
+import 'podcasts.dart';
 
 /// Varre a pasta-fonte e mantém o banco em dia (só relê o que mudou).
 class LibraryScanner {
@@ -61,7 +62,9 @@ class LibraryScanner {
           continue; // o arquivo sumiu no meio da leitura: segue com os outros
         }
         final old = known[f.path];
-        if (!force && old != null && old.modifiedAt == mtime) continue;
+        // podcast lido antes como música (ex.: a pasta Podcasts já existia): relê para pegar o programa da pasta
+        final staleEpisode = old != null && isPodcastPath(root, f.path) && old.artist != (programFromPath(root, f.path) ?? old.artist);
+        if (!force && old != null && old.modifiedAt == mtime && !staleEpisode) continue;
         toRead.add((f, mtime));
       }
       if (toRead.isEmpty) continue;
@@ -76,6 +79,25 @@ class LibraryScanner {
         final folderAlbum = p.basename(p.dirname(f.path));
         final tagTitle = (tags?.title.isNotEmpty ?? false) ? parseFileName(tags!.title) : null;
         final artist = cleanArtistName(tags?.artist ?? '') ?? tagTitle?.artist ?? parsed.artist ?? unknownArtist;
+        if (isPodcastPath(root, f.path)) {
+          // podcast: o "artista" é o programa (a pasta Podcasts/<Programa>/), e o título fica inteiro
+          // (o título de episódio costuma ter convidados e número, que a limpeza de músicas cortaria)
+          final program = programFromPath(root, f.path) ??
+              ((tags?.artist.trim().isNotEmpty ?? false) ? tags!.artist.trim() : unknownProgram);
+          final title = (tags?.title.trim().isNotEmpty ?? false) ? tags!.title.trim() : p.basenameWithoutExtension(f.path);
+          pending.add(Track(
+            path: f.path,
+            title: title,
+            artist: program,
+            album: program,
+            year: tags?.year,
+            durationMs: tags?.duration?.inMilliseconds ?? 0,
+            addedAt: now,
+            modifiedAt: mtime,
+          ));
+          changed++;
+          continue;
+        }
         pending.add(Track(
           path: f.path,
           title: tagTitle?.title ?? parsed.title,

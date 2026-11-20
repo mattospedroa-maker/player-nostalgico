@@ -13,6 +13,7 @@ import 'db.dart';
 import 'error_log.dart';
 import 'models.dart';
 import 'mood.dart';
+import 'podcasts.dart';
 import 'recommender.dart';
 import 'skip_guard.dart';
 
@@ -52,6 +53,32 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
 
   final PlayerAudioHandler? handler;
 
+  // ---------- podcasts ----------
+  /// O AppState diz quem é podcast (arquivo dentro da pasta Podcasts).
+  bool Function(Track) isPodcast = (_) => false;
+
+  /// Onde cada episódio parou (o AppState preenche).
+  PodcastProgress? podcastProgress;
+
+  /// Velocidade dos podcasts (músicas tocam sempre em 1x).
+  double podcastSpeed = 1.0;
+  void Function(double)? onPodcastSpeedChanged;
+
+  /// Velocidades do botão de podcast, em ciclo.
+  static const podcastSpeeds = [1.0, 1.25, 1.5, 2.0];
+
+  /// A fila foi escolhida na área de Podcasts: depois do episódio vem outro episódio, nunca música do mix.
+  bool _podcastMode = false;
+  bool get podcastMode => _podcastMode;
+
+  bool get currentIsPodcast {
+    final c = current;
+    return c != null && isPodcast(c);
+  }
+
+  int? _preparedId;
+  Timer? _podcastSaver;
+
   /// Transição suave entre músicas (só no fim natural de cada uma).
   late final Crossfader crossfader;
   void Function(bool)? onCrossfadeChanged;
@@ -77,7 +104,11 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
   PlaybackFailure? failureOf(Track t) => _failed[t.path];
 
   PlayerService(this.db, {this.handler, TailDeck Function()? tail}) {
-    crossfader = Crossfader(JustAudioDeck(player), tail ?? JustAudioTail.new);
+    crossfader = Crossfader(JustAudioDeck(player), tail ?? JustAudioTail.new)
+      // conversa não tem transição: nem saindo de um podcast nem entrando num
+      ..hold = (() => currentIsPodcast || (upcoming.isNotEmpty && isPodcast(upcoming.first)));
+    // onde o episódio parou: anotado a cada 5 s enquanto toca
+    _podcastSaver = Timer.periodic(const Duration(seconds: 5), (_) => _savePodcastPosition());
     handler
       ?..player = player
       ..onNext = next
@@ -87,6 +118,7 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
     _subs.add(player.playingStream.listen((_) => handler?.broadcast()));
     _subs.add(player.currentIndexStream.listen((i) {
       final now = current;
+      _prepareKind(now);
       if (now?.id != _startedTrackId) {
         _logCurrent(skipped: false);
         _startedAt = DateTime.now();
@@ -174,16 +206,19 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
   LoopMode get loop => player.loopMode;
   int get _nextPos => (_index ?? -1) + 1;
 
-  Future<void> playQueue(List<Track> tracks, {int start = 0, bool mix = false}) async {
+  Future<void> playQueue(List<Track> tracks, {int start = 0, bool mix = false, bool podcast = false}) async {
     if (tracks.isEmpty) return;
     crossfader.cancel(); // escolheu outra música: troca na hora, sem transição
+    _savePodcastPosition();
     _logCurrent(skipped: true);
     await _serial(() async {
       _fromMix = mix;
+      _podcastMode = podcast;
+      _preparedId = null;
       _original = [for (final t in tracks) t.id];
       final list = List.of(tracks);
       var first = start.clamp(0, list.length - 1);
-      if (_shuffle) {
+      if (_shuffle && !podcast) {
         final t = list.removeAt(first);
         list.shuffle(_rnd);
         list.insert(0, t);
@@ -202,11 +237,73 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
       }
       _startedAt = DateTime.now();
       _startedTrackId = current?.id;
+      _prepareKind(current);
       _publishMediaItem();
       await _extendMix();
     });
     unawaited(player.play());
     notifyListeners();
+  }
+
+  /// Toca um episódio escolhido na área de Podcasts: depois dele vêm [following] (outros episódios), nunca música.
+  Future<void> playPodcast(Track episode, {List<Track> following = const []}) =>
+      playQueue([episode, ...following.where((t) => t.id != episode.id)], podcast: true);
+
+  /// Toca um episódio no meio das músicas: entra logo depois da atual, toca agora, e quando acaba
+  /// a fila de músicas continua de onde estava. Sem músicas tocando, vira uma fila de podcast normal.
+  Future<void> playPodcastBetweenSongs(Track episode) async {
+    if (_podcastMode || current == null || currentIsPodcast) return playPodcast(episode);
+    crossfader.cancel();
+    _savePodcastPosition();
+    _logCurrent(skipped: true);
+    await _serial(() async {
+      final pos = _nextPos;
+      await player.insertAudioSource(pos, _source(episode));
+      await player.seek(Duration.zero, index: pos);
+    });
+    unawaited(player.play());
+    notifyListeners();
+  }
+
+  /// Volta/avança alguns segundos (botões -15 / +30 dos podcasts).
+  Future<void> seekBy(Duration d) async {
+    final total = player.duration;
+    var to = player.position + d;
+    if (to < Duration.zero) to = Duration.zero;
+    if (total != null && to > total - const Duration(seconds: 1)) to = total - const Duration(seconds: 1);
+    await seek(to);
+  }
+
+  /// Próxima velocidade dos podcasts (1x → 1.25x → 1.5x → 2x → 1x).
+  Future<void> cyclePodcastSpeed() async {
+    final i = podcastSpeeds.indexOf(podcastSpeed);
+    podcastSpeed = podcastSpeeds[(i + 1) % podcastSpeeds.length];
+    onPodcastSpeedChanged?.call(podcastSpeed);
+    if (currentIsPodcast) await player.setSpeed(podcastSpeed);
+    notifyListeners();
+  }
+
+  /// Faixa nova começou: podcast continua de onde parou e usa a velocidade escolhida; música sempre em 1x.
+  void _prepareKind(Track? now) {
+    if (now == null || now.id == _preparedId) return;
+    _preparedId = now.id;
+    if (isPodcast(now)) {
+      unawaited(player.setSpeed(podcastSpeed).catchError((Object _) {}));
+      final at = podcastProgress?.resumeAt(now.path);
+      if (at != null) unawaited(player.seek(at).catchError((Object _) {}));
+    } else if (player.speed != 1.0) {
+      unawaited(player.setSpeed(1.0).catchError((Object _) {}));
+    }
+  }
+
+  /// Anota onde o episódio que está tocando parou (perto do fim = ouvido).
+  void _savePodcastPosition() {
+    final c = current;
+    final prog = podcastProgress;
+    if (c == null || prog == null || !isPodcast(c)) return;
+    final pos = player.position;
+    if (pos <= Duration.zero) return;
+    prog.save(c.path, pos, player.duration ?? (c.durationMs > 0 ? Duration(milliseconds: c.durationMs) : null));
   }
 
   AudioSource _source(Track t) => AudioSource.file(t.path, tag: t);
@@ -234,6 +331,7 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
     if (player.playing) {
       crossfader.cancel();
       await player.pause();
+      _savePodcastPosition();
     } else {
       unawaited(player.play());
     }
@@ -243,6 +341,7 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
   Future<void> seek(Duration position) async {
     crossfader.cancel();
     await player.seek(position);
+    _savePodcastPosition();
   }
 
   /// Tocar uma música da fila direto (sem transição).
@@ -260,6 +359,7 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
   /// (mix, troca de caminho, reordenar): se ela demorar, o avanço acontece assim mesmo.
   Future<void> next() async {
     crossfader.cancel(); // avanço manual: nunca com transição
+    _savePodcastPosition();
     _guard.reset();
     final skipped = current;
     _logCurrent(skipped: true);
@@ -329,6 +429,7 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
   /// A música mudou. No "do mesmo artista", se agora toca outro artista (ex.: o artista anterior
   /// acabou e entrou uma da vibe), as próximas do mix passam a ser desse artista. Só roda dentro de [_serial].
   Future<void> _followArtist() async {
+    if (currentIsPodcast) return; // episódio no meio das músicas: o mix de músicas fica como estava
     final now = current;
     final was = _mixArtist;
     if (mixMode == MixMode.artist &&
@@ -346,6 +447,8 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
   /// A música que guia o mix. "Do mesmo artista": a que está tocando agora (é o artista dela que
   /// você quer ouvir). "Da mesma vibe": a primeira escolhida (com o clima atual dela).
   Track? get mixSeed {
+    // podcast no meio das músicas: o mix continua guiado pelas músicas, nunca pelo episódio
+    if (currentIsPodcast) return _firstChosen;
     if (mixMode == MixMode.artist) return current ?? _firstChosen;
     return _firstChosen ?? current;
   }
@@ -364,7 +467,8 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
   /// Só roda dentro de [_serial].
   Future<void> _extendMix({bool force = false}) async {
     final seed = mixSeed;
-    if (seed == null || player.loopMode != LoopMode.off) return;
+    // fila de podcasts: o mix de músicas nunca entra (o mix de podcasts vem numa fase própria)
+    if (_podcastMode || seed == null || isPodcast(seed) || player.loopMode != LoopMode.off) return;
     final q = queue;
     if (!force && q.length - _nextPos >= 3) return;
     final failedIds = {for (final t in library()) if (_failed.containsKey(t.path)) t.id};
@@ -635,6 +739,8 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
 
   @override
   void dispose() {
+    _savePodcastPosition();
+    _podcastSaver?.cancel();
     _logCurrent(skipped: false);
     for (final s in _subs) {
       s.cancel();

@@ -367,7 +367,11 @@ class XpStatusBar extends StatelessWidget {
 /// Barra de endereço do Explorer: "Endereço  [📁 Música\Álbuns]".
 class XpAddressBar extends StatelessWidget {
   final String path;
-  const XpAddressBar(this.path, {super.key});
+  final XpIcons icon;
+
+  /// Com [onDrop], o campo ganha a setinha ▼ e abre uma lista (ex.: tipo de mídia da Biblioteca).
+  final VoidCallback? onDrop;
+  const XpAddressBar(this.path, {super.key, this.icon = XpIcons.folder, this.onDrop});
 
   @override
   Widget build(BuildContext context) => Container(
@@ -381,17 +385,37 @@ class XpAddressBar extends StatelessWidget {
         const Text('Endereço', style: TextStyle(fontSize: 12.5, color: Color(0xFF555555))),
         const SizedBox(width: 6),
         Expanded(
-          child: Bevel(
-            sunken: true,
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
-            child: Row(
-              children: [
-                const XpIcon(XpIcons.folder, size: 16),
-                const SizedBox(width: 5),
-                Expanded(
-                  child: Text(path, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
-                ),
-              ],
+          child: GestureDetector(
+            onTap: onDrop,
+            behavior: HitTestBehavior.opaque,
+            child: Bevel(
+              sunken: true,
+              padding: EdgeInsets.fromLTRB(4, onDrop == null ? 3 : 1, onDrop == null ? 4 : 1, onDrop == null ? 3 : 1),
+              child: Row(
+                children: [
+                  XpIcon(icon, size: 16),
+                  const SizedBox(width: 5),
+                  Expanded(
+                    child: Text(path, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
+                  ),
+                  if (onDrop != null)
+                    Semantics(
+                      button: true,
+                      label: 'Escolher tipo de mídia',
+                      child: Container(
+                        width: 20,
+                        height: 20,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0xFFC6D8FC), Color(0xFF9BB7F2)]),
+                          border: Border.all(color: const Color(0xFF7F9DB9)),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                        child: const Icon(Icons.arrow_drop_down, size: 18, color: Xp.navy),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
         ),
