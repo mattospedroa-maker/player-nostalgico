@@ -94,6 +94,9 @@ class EpisodeInfo {
 
   bool get hasSummary => summary.trim().isNotEmpty;
 
+  /// Texto extra para a busca de episódios: participantes (não viram artistas, mas acham o episódio), temas e assunto.
+  String get searchText => [for (final x in people) x.name, ...topics, subject, ...tags].join(' ');
+
   /// Capítulo tocando em [pos] (null antes do primeiro ou sem capítulos).
   Chapter? chapterAt(Duration pos) {
     Chapter? cur;

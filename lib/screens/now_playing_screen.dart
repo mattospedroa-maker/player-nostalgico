@@ -17,6 +17,7 @@ import '../gif_service.dart';
 import '../models.dart';
 import '../mood.dart';
 import '../player_service.dart';
+import '../podcast_info.dart';
 import '../podcasts.dart';
 import '../main.dart' show HomeShell;
 import '../skip_guard.dart';
@@ -25,6 +26,7 @@ import '../visual_search.dart';
 import '../widgets.dart';
 import '../xp_icons.dart';
 import 'edit_track_screen.dart';
+import 'episode_summary.dart';
 import 'gif_vibe_screen.dart';
 import 'gif_web_screen.dart';
 
@@ -108,7 +110,17 @@ class NowPlayingScreen extends StatelessWidget {
                         ),
                       ),
                     ),
-                    SeekBar(player: ps.player, onSeek: ps.seek),
+                    if (pod)
+                      ListenableBuilder(
+                        listenable: app.podcastInfo,
+                        builder: (_, _) => SeekBar(
+                          player: ps.player,
+                          onSeek: ps.seek,
+                          marks: [for (final c in app.podcastInfo.infoFor(t.path)?.chapters ?? const <Chapter>[]) Duration(milliseconds: c.startMs)],
+                        ),
+                      )
+                    else
+                      SeekBar(player: ps.player, onSeek: ps.seek),
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 10),
                       child: GlossyBar(
@@ -192,6 +204,7 @@ class _PodcastBox extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(8, 10, 8, 0),
         child: Row(children: [
           item(XpIcons.list, 'Fila', () => _Toolbar.showQueue(context)),
+          item(XpIcons.doc, 'Resumo', () => showEpisodeSummary(context, track)),
           item(XpIcons.check, listened ? 'Ouvido' : 'Marcar ouvido', () {
             app.podcastProgress.setListened(track.path, !listened);
             app.touch();
@@ -767,6 +780,7 @@ class _GifCarouselState extends State<GifCarousel> {
                 ),
               ),
             if (!pod) Positioned(left: 6, top: 6, child: MoodBadge(track: widget.track)),
+            if (pod) EpisodeBalloon(track: widget.track),
             if (fetching && _gifs.isNotEmpty)
               Positioned(
                 left: 6,
@@ -1101,7 +1115,10 @@ class SeekBar extends StatelessWidget {
 
   /// Seek do usuário (passa pelo PlayerService para interromper uma transição em andamento).
   final Future<void> Function(Duration)? onSeek;
-  const SeekBar({super.key, required this.player, this.onSeek});
+
+  /// Riscos amarelos (início de cada capítulo do podcast).
+  final List<Duration> marks;
+  const SeekBar({super.key, required this.player, this.onSeek, this.marks = const []});
 
   @override
   Widget build(BuildContext context) => StreamBuilder<Duration>(
@@ -1122,11 +1139,14 @@ class SeekBar extends StatelessWidget {
             thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 9, elevation: 2),
             trackShape: const RectangularSliderTrackShape(),
           ),
-          child: Slider(
-            value: pos.inMilliseconds.toDouble().clamp(0, max),
-            max: max,
-            onChanged: (v) => (onSeek ?? player.seek)(Duration(milliseconds: v.round())),
-          ),
+          child: Stack(alignment: Alignment.center, children: [
+            Slider(
+              value: pos.inMilliseconds.toDouble().clamp(0, max),
+              max: max,
+              onChanged: (v) => (onSeek ?? player.seek)(Duration(milliseconds: v.round())),
+            ),
+            if (marks.isNotEmpty) Positioned.fill(child: ChapterMarks(marks: marks, total: dur)),
+          ]),
         ),
       );
     },

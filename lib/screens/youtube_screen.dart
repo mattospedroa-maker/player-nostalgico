@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../app_state.dart';
 import '../copy_animation.dart';
 import '../download_service.dart';
+import '../podcast_info.dart';
 import '../theme.dart';
 import '../xp_icons.dart';
 
@@ -688,6 +689,9 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
             Text(e.names.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.5, color: active ? Colors.white : Colors.black)),
             Text(e.names.artist,
                 maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11.5, color: active ? const Color(0xFFDFE8FF) : const Color(0xFF666666))),
+            if (e.podcast && e.summary != SummaryStatus.none)
+              Text('Resumo (IA): ${e.summary == SummaryStatus.ok ? 'pronto ✓' : e.summary.label}',
+                  style: TextStyle(fontSize: 11.5, color: active ? const Color(0xFFDFE8FF) : (e.summary == SummaryStatus.ok ? const Color(0xFF1D7A2A) : const Color(0xFF666666)))),
           ]),
         ),
         SizedBox(width: 104, child: Text(text, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: color))),
