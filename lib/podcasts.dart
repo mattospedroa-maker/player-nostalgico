@@ -145,14 +145,15 @@ List<PodcastProgram> groupPrograms(List<Track> episodes) {
   return out;
 }
 
-/// Busca simples por título ou programa (sem acento, sem maiúscula).
-List<Track> searchEpisodes(List<Track> episodes, String query) {
+/// Busca simples por título ou programa (sem acento, sem maiúscula). [extra]: texto a mais por episódio
+/// (participantes e temas do resumo), para achar "Fulano" mesmo sem o nome no título.
+List<Track> searchEpisodes(List<Track> episodes, String query, {String Function(Track)? extra}) {
   final q = normalizeText(query);
   if (q.isEmpty) return episodes;
   final words = q.split(' ');
   return [
     for (final e in episodes)
-      if (words.every(normalizeText('${e.title} ${e.artist} ${p.basenameWithoutExtension(e.path)}').contains)) e,
+      if (words.every(normalizeText('${e.title} ${e.artist} ${p.basenameWithoutExtension(e.path)} ${extra?.call(e) ?? ''}').contains)) e,
   ];
 }
 

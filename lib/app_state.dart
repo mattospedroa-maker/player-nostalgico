@@ -34,6 +34,7 @@ import 'mood.dart';
 import 'organizer.dart';
 import 'play_stats.dart';
 import 'player_service.dart';
+import 'podcast_info.dart';
 import 'podcasts.dart';
 import 'recommender.dart';
 import 'visual_search.dart';
@@ -84,6 +85,30 @@ class AppState extends ChangeNotifier {
     // a música que está tocando já ganha os GIFs pelas tags
     final t = player.current == null ? null : byId(player.current!.id);
     if (t != null && autoGifs) unawaited(gifFetcher.fetchFor(t).catchError(_gifFetchFailed));
+  }
+
+  /// Chave do Gemini (resumo dos podcasts): a digitada nas Opções, senão a que veio no APK (secret GEMINI_KEY).
+  String get geminiKey => _keyOr(prefs.getString('geminiKey'), const String.fromEnvironment('GEMINI_KEY'));
+
+  /// Informações e resumo dos episódios (arquivo .json ao lado de cada um).
+  late final PodcastInfoService podcastInfo = PodcastInfoService(
+    client: gifFetcher.client,
+    apiKey: () => geminiKey,
+    fetchInfo: (url) => downloads.ytdlp.info(url, playlist: false),
+  );
+
+  /// Tocou um episódio sem resumo (baixado antes do resumo existir): faz agora, em segundo plano.
+  void _ensureSummary(Track t) {
+    if (geminiKey.isEmpty || podcastInfo.isWorking(t.path)) return;
+    final info = podcastInfo.infoFor(t.path);
+    if (info != null && (info.hasSummary || info.status == SummaryStatus.noCaptions)) return;
+    // tentou e falhou há pouco: não insiste a cada play (limite do plano grátis)
+    final tried = prefs.getInt('summaryTried:${t.path}') ?? 0;
+    if (DateTime.now().millisecondsSinceEpoch - tried < const Duration(hours: 6).inMilliseconds) return;
+    final id = info?.videoId.isNotEmpty == true ? info!.videoId : downloads.youtubeIdFor(t.path);
+    if (id == null || id.isEmpty) return; // arquivo que não veio do YouTube pelo app: sem como achar a legenda
+    prefs.setInt('summaryTried:${t.path}', DateTime.now().millisecondsSinceEpoch);
+    unawaited(podcastInfo.summarize(t.path, 'https://www.youtube.com/watch?v=$id', title: t.title, program: t.artist));
   }
 
   /// Chave da API do GIPHY (só no celular). Vazia = sem GIPHY, só anime.
@@ -330,6 +355,7 @@ class AppState extends ChangeNotifier {
         await player.forgetTrack(e.key.id); // o arquivo vai mudar de lugar: sai da fila de músicas
         await Directory(p.dirname(target)).create(recursive: true);
         await Organizer.moveFile(File(from), target);
+        podcastInfo.moved(from, target);
         done.add(MoveRecord(from: from, to: target, artist: e.value, album: e.value, title: e.key.title));
       } catch (err) {
         errorLog.warn('Podcasts', 'Não deu para mover "${p.basename(from)}" para Podcasts', error: err, balloon: true);
@@ -352,6 +378,7 @@ class AppState extends ChangeNotifier {
         await Directory(p.dirname(m.from)).create(recursive: true);
         await Organizer.moveFile(File(m.to), m.from);
         podcastProgress.moved(m.to, m.from);
+        podcastInfo.moved(m.to, m.from);
       } catch (err) {
         errorLog.warn('Podcasts', 'Não deu para devolver "${p.basename(m.to)}"', error: err, balloon: true);
       }
@@ -661,6 +688,7 @@ class AppState extends ChangeNotifier {
           await Organizer.moveFile(File(path), target);
           await db.moveTrack(path, target);
           podcastProgress.moved(path, target);
+          podcastInfo.moved(path, target);
           removeEmptyParents(root, [path]);
           path = target;
         }
@@ -761,8 +789,11 @@ class AppState extends ChangeNotifier {
     gifs.gifsFor(fresh).then((g) => nowShowingGif(fresh, g.isEmpty ? null : g.first)).catchError((Object e) {
       errorLog.info('Notificação', 'Não deu para trocar a imagem da notificação', e); // arte é secundária: nunca derruba o player
     });
-    // podcast: sem busca de GIFs/fotos de artista de música (o "artista" é o programa)
-    if (isPodcast(fresh)) return;
+    // podcast: sem busca de GIFs/fotos de artista de música (o "artista" é o programa); resumo se faltar
+    if (isPodcast(fresh)) {
+      _ensureSummary(fresh);
+      return;
+    }
     // fotos do artista: baixadas sozinhas, como os GIFs
     artistPhotos.fetch(ArtistNames.current.main(fresh.artist)).then((n) {
       if (n == 0) return;

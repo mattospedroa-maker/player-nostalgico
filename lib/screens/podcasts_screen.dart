@@ -153,9 +153,9 @@ class PodcastsHome extends StatelessWidget {
     final eps = app.podcasts;
     final resume = app.podcastProgress.lastInProgress(eps);
     if (query.isNotEmpty) {
-      final found = searchEpisodes(eps, query);
+      final found = searchEpisodes(eps, query, extra: (e) => app.podcastInfo.infoFor(e.path)?.searchText ?? '');
       return ListView(padding: EdgeInsets.zero, children: [
-        if (found.isEmpty) const EmptyHint(Icons.search_off, 'Nenhum episódio com esse nome.'),
+        if (found.isEmpty) const EmptyHint(Icons.search_off, 'Nenhum episódio com esse nome, participante ou tema.'),
         for (final e in found) EpisodeTile(episode: e, following: const []),
       ]);
     }

@@ -13,6 +13,7 @@ import 'error_log.dart';
 import 'metadata.dart';
 import 'models.dart';
 import 'organizer.dart';
+import 'podcast_info.dart';
 import 'podcasts.dart';
 import 'youtube_names.dart';
 import 'ytdlp.dart';
@@ -50,6 +51,12 @@ class YtEntry {
   /// Nome do canal (vira o programa quando é podcast).
   final String channel;
 
+  /// Informações que o yt-dlp devolveu (completas no "Um vídeo"; resumidas na playlist).
+  Map<String, dynamic> rawInfo = const {};
+
+  /// Situação do resumo do episódio (só podcast).
+  SummaryStatus summary = SummaryStatus.none;
+
   /// Nomes adivinhados para música (voltam quando troca de Podcast para Música).
   late YtNames musicNames = names;
 
@@ -81,6 +88,7 @@ class YtEntry {
     );
     if (e.unavailable) e.selected = false;
     e.musicNames = e.names;
+    e.rawInfo = info;
     if (looksLikePodcastVideo(info)) {
       e.podcast = true;
       e.names = e.podcastNames;
@@ -500,6 +508,8 @@ class DownloadService extends ChangeNotifier {
         e.status = YtStatus.downloading;
         notifyListeners();
         final tmp = p.join(tmpBase, e.id.isEmpty ? '${DateTime.now().millisecondsSinceEpoch}' : e.id);
+        // podcast: descrição, capítulos, legenda e resumo da IA andam junto com o download do áudio
+        final Future<EpisodeInfo>? extra = e.podcast ? _episodeInfo(e) : null;
         try {
           // plano B: se o YouTube mudou, atualiza o yt-dlp e tenta esta música de novo
           // podcast: fala não precisa de 192k (arquivo de 3h fica com metade do tamanho)
@@ -520,6 +530,14 @@ class DownloadService extends ChangeNotifier {
           await _rememberDownload(e.id, e.savedPath!);
           e.status = YtStatus.done;
           e.progress = 1;
+          if (extra != null) {
+            final path = e.savedPath!;
+            unawaited(extra.then((info) async {
+              await app.podcastInfo.save(path, info);
+              e.summary = info.status;
+              notifyListeners();
+            }));
+          }
         } on YtDlpException catch (err) {
           e.status = _cancelAll || err.message == 'Cancelado' ? YtStatus.canceled : YtStatus.failed;
           e.error = err.message;
@@ -580,6 +598,34 @@ class DownloadService extends ChangeNotifier {
     await Directory(p.dirname(target)).create(recursive: true);
     await Organizer.moveFile(mp3, target);
     return target;
+  }
+
+  /// Informações do episódio: pega o JSON completo do vídeo (a playlist só traz o resumido) e monta o resumo.
+  /// Nunca falha: sem internet/chave/legenda, devolve o que deu (e o status explica).
+  Future<EpisodeInfo> _episodeInfo(YtEntry e) async {
+    try {
+      var yt = e.rawInfo;
+      if (!yt.containsKey('automatic_captions') && !yt.containsKey('description')) {
+        yt = await ytdlp.info(e.url, playlist: false);
+      }
+      return await app.podcastInfo.build(yt, title: e.names.title, program: e.names.artist, onStatus: (s) {
+        e.summary = s;
+        notifyListeners();
+      });
+    } catch (err) {
+      errorLog.info('Podcasts', 'Não deu para buscar as informações do episódio "${e.names.title}"', err);
+      e.summary = SummaryStatus.failed;
+      notifyListeners();
+      return EpisodeInfo(videoId: e.id, url: e.url, status: SummaryStatus.failed, error: '$err');
+    }
+  }
+
+  /// Vídeo do YouTube de onde veio o arquivo (null = não foi baixado pelo app).
+  String? youtubeIdFor(String path) {
+    for (final en in _downloaded.entries) {
+      if (p.equals(en.value, path)) return en.key;
+    }
+    return null;
   }
 
   /// Episódio de podcast: tags com programa/título inteiro e vai para Podcasts/Programa/Episódio.mp3.
