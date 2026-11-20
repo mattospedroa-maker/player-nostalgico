@@ -76,6 +76,19 @@ void main() {
     expect(picks.map((t) => t.id).toSet(), {2, 3});
   });
 
+  test('"Do mesmo artista" com nome que tem & (G&TH) traz as faixas dele, não outros', () {
+    final lib = [
+      for (var i = 1; i <= 11; i++) _t(i, 'G&TH'),
+      _t(20, 'Nirvana'),
+      _t(21, 'The Living Tombstone'),
+      _t(22, 'Nirvana'),
+    ];
+    ArtistNames.current = ArtistNames.fromTracks(lib);
+    final picks = PlayerService.pickMix(lib[6], lib, mode: MixMode.artist, count: 10);
+    expect(picks.length, 10);
+    expect(picks.every((t) => t.artist == 'G&TH'), isTrue);
+  });
+
   test('parceria aparece em cada artista: MC VV & BOFE -> MC VV e BOFE', () {
     const lib = [
       'MC VV & BOFE',

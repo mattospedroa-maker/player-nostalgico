@@ -294,8 +294,9 @@ class AppState extends ChangeNotifier {
     s.player.addListener(s._onPlayerChanged);
     s.player
       ..library = (() => s.tracks)
-      ..mixMode = MixMode.values.asNameMap()[prefs.getString('mixMode')] ?? MixMode.vibe
-      ..onMixModeChanged = ((m) => prefs.setString('mixMode', m.name))
+      // 'mixMode2': a escolha antiga ('mixMode') é esquecida uma vez, para todo mundo começar em "Da mesma vibe"
+      ..mixMode = MixMode.values.asNameMap()[prefs.getString('mixMode2')] ?? MixMode.vibe
+      ..onMixModeChanged = ((m) => prefs.setString('mixMode2', m.name))
       ..onCrossfadeChanged = ((on) => prefs.setBool('crossfade', on))
       ..onCrossfadeTimesChanged = ((out, inn) {
         prefs.setInt('crossfadeOut', out.inSeconds);
