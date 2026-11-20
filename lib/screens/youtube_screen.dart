@@ -225,7 +225,7 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
       final e = ds.single!;
       buttons = [
         XpButton(
-          label: e.existingPath != null ? 'Baixar mesmo assim' : 'Baixar MP3',
+          label: e.existingPath != null ? 'Baixar mesmo assim' : (e.podcast ? 'Baixar episódio' : 'Baixar MP3'),
           icon: Icons.download,
           primary: e.existingPath == null,
           onTap: () async {
@@ -238,14 +238,16 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
       final sel = ds.playlist.where((e) => e.selected).toList();
       buttons = [
         XpButton(
-          label: 'Baixar ${sel.length} ${sel.length == 1 ? 'música' : 'músicas'}',
+          label: ds.playlistIsPodcast
+              ? 'Baixar ${sel.length} ${sel.length == 1 ? 'episódio' : 'episódios'}'
+              : 'Baixar ${sel.length} ${sel.length == 1 ? 'música' : 'músicas'}',
           icon: Icons.download,
           primary: true,
           onTap: sel.isEmpty
               ? null
               : () async {
                   if (!await _ready()) return;
-                  ds.enqueue(sel, playlistName: ds.makePlaylist ? ds.playlistTitle : null);
+                  ds.enqueue(sel, playlistName: ds.makePlaylist && !ds.playlistIsPodcast ? ds.playlistTitle : null);
                 },
         ),
       ];
@@ -373,12 +375,53 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
         const Spacer(),
         if (e.lookingUp) const Text('procurando álbum…', style: TextStyle(fontSize: 12, color: Xp.blueMuted)),
       ]),
-      _nameField('Artista', _artist, (v) => ds.edit(e, artist: v.trim())),
-      _nameField('Título', _title, (v) => ds.edit(e, title: v.trim())),
-      _nameField('Álbum', _album, (v) => ds.edit(e, album: v.trim())),
-      const SizedBox(height: 8),
-      Text('Vai para: ${e.names.artist}\\${e.names.album}\\${e.names.title}.mp3', style: const TextStyle(fontSize: 12, color: Xp.blueMuted)),
+      _kindSwitch(e.podcast, (v) => ds.setPodcast(e, v)),
+      if (e.podcast) ...[
+        _nameField('Programa', _artist, (v) => ds.edit(e, artist: v.trim(), album: v.trim())),
+        _nameField('Episódio', _title, (v) => ds.edit(e, title: v.trim())),
+        const SizedBox(height: 8),
+        Text('Vai para: Podcasts\\${e.names.artist}\\${e.names.title}.mp3', style: const TextStyle(fontSize: 12, color: Xp.blueMuted)),
+        const Text('Podcast nunca entra em Músicas, Tocar tudo nem na fila das músicas.', style: TextStyle(fontSize: 11.5, color: Xp.blueMuted)),
+      ] else ...[
+        _nameField('Artista', _artist, (v) => ds.edit(e, artist: v.trim())),
+        _nameField('Título', _title, (v) => ds.edit(e, title: v.trim())),
+        _nameField('Álbum', _album, (v) => ds.edit(e, album: v.trim())),
+        const SizedBox(height: 8),
+        Text('Vai para: ${e.names.artist}\\${e.names.album}\\${e.names.title}.mp3', style: const TextStyle(fontSize: 12, color: Xp.blueMuted)),
+      ],
       if (e.existingPath != null) _alreadyHave(e.existingPath!),
+    ]);
+  }
+
+  /// "Salvar como: (•) Música ( ) Podcast", com os botões de opção do XP.
+  Widget _kindSwitch(bool podcast, void Function(bool) onChanged) {
+    Widget opt(String label, bool value) {
+      final on = podcast == value;
+      return InkWell(
+        onTap: () => onChanged(value),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Container(
+              width: 13,
+              height: 13,
+              decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.white, border: Border.all(color: const Color(0xFF1C5180))),
+              alignment: Alignment.center,
+              child: on ? Container(width: 6, height: 6, decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFF21A121))) : null,
+            ),
+            const SizedBox(width: 6),
+            Text(label, style: TextStyle(fontSize: 14, fontWeight: on ? FontWeight.bold : FontWeight.normal)),
+          ]),
+        ),
+      );
+    }
+
+    return Row(children: [
+      const Text('Salvar como:', style: TextStyle(fontSize: 14)),
+      const SizedBox(width: 6),
+      opt('Música', false),
+      const SizedBox(width: 10),
+      opt('Podcast', true),
     ]);
   }
 
@@ -394,7 +437,7 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
         const SizedBox(width: 8),
         Expanded(
           child: Text.rich(TextSpan(children: [
-            const TextSpan(text: 'Você já tem esta música\n', style: TextStyle(fontWeight: FontWeight.bold)),
+            const TextSpan(text: 'Você já tem isto na Biblioteca\n', style: TextStyle(fontWeight: FontWeight.bold)),
             TextSpan(text: rel.replaceAll(p.separator, '\\')),
           ]), style: const TextStyle(color: Colors.black, fontSize: 13)),
         ),
@@ -431,6 +474,7 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
           style: const TextStyle(fontSize: 12.5, color: Xp.blueText),
         ),
       ),
+      Padding(padding: const EdgeInsets.symmetric(horizontal: 8), child: _kindSwitch(ds.playlistIsPodcast, ds.setPlaylistPodcast)),
       Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: const BoxDecoration(color: Color(0xFFEBEADB), border: Border(bottom: BorderSide(color: Color(0xFFC7C5B2)))),
@@ -445,6 +489,7 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
       Expanded(
         child: ListView(padding: EdgeInsets.zero, children: [
           for (final e in items) _playlistRow(ds, e),
+          if (!ds.playlistIsPodcast)
           CheckboxListTile(
             dense: true,
             controlAffinity: ListTileControlAffinity.leading,
@@ -473,7 +518,7 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
               Text(e.unavailable ? e.originalTitle : '${e.names.title} · ${e.names.artist}',
                   maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.5, color: dim ? const Color(0xFF8A93A6) : Colors.black)),
               Text(
-                e.unavailable ? 'Indisponível' : (e.lookingUp ? 'procurando álbum…' : e.names.album),
+                e.unavailable ? 'Indisponível' : (e.podcast ? 'Podcast · ${e.names.artist}' : (e.lookingUp ? 'procurando álbum…' : e.names.album)),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(fontSize: 11.5, color: Xp.blueMuted),
@@ -510,11 +555,13 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
         content: Column(mainAxisSize: MainAxisSize.min, children: [
           _old(e.originalTitle),
           const SizedBox(height: 8),
-          TextField(controller: a, decoration: const InputDecoration(labelText: 'Artista')),
+          TextField(controller: a, decoration: InputDecoration(labelText: e.podcast ? 'Programa' : 'Artista')),
           const SizedBox(height: 8),
-          TextField(controller: t, decoration: const InputDecoration(labelText: 'Título')),
-          const SizedBox(height: 8),
-          TextField(controller: al, decoration: const InputDecoration(labelText: 'Álbum')),
+          TextField(controller: t, decoration: InputDecoration(labelText: e.podcast ? 'Episódio' : 'Título')),
+          if (!e.podcast) ...[
+            const SizedBox(height: 8),
+            TextField(controller: al, decoration: const InputDecoration(labelText: 'Álbum')),
+          ],
         ]),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
@@ -523,7 +570,7 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
       ),
     );
     if (ok == true) {
-      ds.edit(e, artist: a.text.trim(), title: t.text.trim(), album: al.text.trim());
+      ds.edit(e, artist: a.text.trim(), title: t.text.trim(), album: e.podcast ? a.text.trim() : al.text.trim());
       setState(() {});
     }
     a.dispose();

@@ -34,6 +34,7 @@ import 'mood.dart';
 import 'organizer.dart';
 import 'play_stats.dart';
 import 'player_service.dart';
+import 'podcasts.dart';
 import 'recommender.dart';
 import 'visual_search.dart';
 
@@ -119,6 +120,7 @@ class AppState extends ChangeNotifier {
   static const _visualsMaxAge = Duration(days: 3);
 
   Future<List<VisualResult>> playerVisualsFor(Track t) {
+    if (isPodcast(t)) return Future.value(const []); // GIFs de podcast vêm numa fase própria (estúdio de rádio)
     if (gifSource == GifSource.anime || giphyKey.isEmpty || t.id == null) return Future.value(const []);
     final key = '${t.id}|${t.mood}|${gifSource.name}|v2'; // v2: sorteio por música (menos repetição no álbum)
     final rejected = _rejectedFor(t);
@@ -267,7 +269,97 @@ class AppState extends ChangeNotifier {
   bool _cancelBulk = false;
   final List<Track> _pending = [];
 
+  /// Só as músicas. Podcasts ficam de fora de propósito: tudo que usa [tracks] (Tocar tudo, mix,
+  /// recomendações, coleções, repetidas, capas, GIFs) nunca vê um podcast.
   List<Track> tracks = const [];
+
+  /// Episódios de podcast (arquivos dentro de `<pasta>`/Podcasts/).
+  List<Track> podcasts = const [];
+
+  /// Onde cada episódio parou e quais já foram ouvidos.
+  late final PodcastProgress podcastProgress = PodcastProgress(prefs);
+
+  bool isPodcast(Track t) => isPodcastPath(sourceRoot, t.path);
+
+  /// Redesenha as telas (ex.: marcou um episódio como ouvido).
+  void touch() => notifyListeners();
+
+  /// Tipo de mídia escolhido no "Endereço" da Biblioteca.
+  MediaKind get libraryMedia => MediaKind.values.asNameMap()[prefs.getString('libraryMedia')] == MediaKind.podcasts ? MediaKind.podcasts : MediaKind.music;
+  Future<void> setLibraryMedia(MediaKind m) async {
+    if (!m.available || m == libraryMedia) return;
+    await prefs.setString('libraryMedia', m.name);
+    notifyListeners();
+  }
+
+  /// Avisado depois de ler a pasta quando aparecem músicas com cara de podcast que ainda não foram avisadas
+  /// (a tela mostra o balão perto do relógio). Nunca move nada sozinho.
+  void Function(List<PodcastCandidate> fresh)? onPodcastSuggestions;
+
+  /// Músicas que parecem podcasts (menos as que você disse que não são).
+  List<PodcastCandidate> podcastCandidates() =>
+      findPodcastCandidates(tracks, dismissed: (prefs.getStringList('podcastNotPodcast') ?? const []).toSet());
+
+  /// Avisa uma vez por arquivo (o balão não volta para o mesmo arquivo).
+  void _suggestPodcasts() {
+    final seen = (prefs.getStringList('podcastSuggested') ?? const []).toSet();
+    final fresh = podcastCandidates().where((c) => c.strong && !seen.contains(c.track.path)).toList();
+    if (fresh.isEmpty || onPodcastSuggestions == null) return;
+    prefs.setStringList('podcastSuggested', [...seen, ...fresh.map((c) => c.track.path)]);
+    onPodcastSuggestions!(fresh);
+  }
+
+  /// Move para Podcasts/`<Programa>`/ os escolhidos na revisão. Os desmarcados ficam marcados como "não é podcast"
+  /// e não aparecem de novo. Devolve os movimentos feitos (para desfazer).
+  Future<List<MoveRecord>> moveToPodcasts(Map<Track, String> chosen, {Iterable<Track> notPodcast = const []}) async {
+    final root = sourceRoot;
+    if (root == null) return const [];
+    if (notPodcast.isNotEmpty) {
+      final no = (prefs.getStringList('podcastNotPodcast') ?? const []).toSet()..addAll(notPodcast.map((t) => t.path));
+      await prefs.setStringList('podcastNotPodcast', no.toList());
+    }
+    final done = <MoveRecord>[];
+    for (final e in chosen.entries) {
+      final from = e.key.path;
+      var target = podcastTargetPath(root, e.value, p.basename(from));
+      final base = p.withoutExtension(target), ext = p.extension(target);
+      for (var k = 2; File(target).existsSync(); k++) {
+        target = '$base ($k)$ext';
+      }
+      try {
+        await player.forgetTrack(e.key.id); // o arquivo vai mudar de lugar: sai da fila de músicas
+        await Directory(p.dirname(target)).create(recursive: true);
+        await Organizer.moveFile(File(from), target);
+        done.add(MoveRecord(from: from, to: target, artist: e.value, album: e.value, title: e.key.title));
+      } catch (err) {
+        errorLog.warn('Podcasts', 'Não deu para mover "${p.basename(from)}" para Podcasts', error: err, balloon: true);
+      }
+    }
+    if (done.isNotEmpty) {
+      removeEmptyParents(root, done.map((m) => m.from));
+      await rescan();
+    }
+    return done;
+  }
+
+  /// Desfaz [moveToPodcasts]: devolve os arquivos para onde estavam.
+  Future<void> undoMoveToPodcasts(List<MoveRecord> moves) async {
+    final root = sourceRoot;
+    for (final m in moves) {
+      try {
+        if (!File(m.to).existsSync()) continue;
+        await player.forgetTrack(podcasts.where((t) => t.path == m.to).firstOrNull?.id);
+        await Directory(p.dirname(m.from)).create(recursive: true);
+        await Organizer.moveFile(File(m.to), m.from);
+        podcastProgress.moved(m.to, m.from);
+      } catch (err) {
+        errorLog.warn('Podcasts', 'Não deu para devolver "${p.basename(m.to)}"', error: err, balloon: true);
+      }
+    }
+    if (root != null) removeEmptyParents(root, moves.map((m) => m.to));
+    await rescan();
+  }
+
   List<Playlist> playlists = const [];
   bool scanning = false;
   double scanProgress = 0;
@@ -294,6 +386,10 @@ class AppState extends ChangeNotifier {
     s.player.addListener(s._onPlayerChanged);
     s.player
       ..library = (() => s.tracks)
+      ..isPodcast = s.isPodcast
+      ..podcastProgress = s.podcastProgress
+      ..podcastSpeed = prefs.getDouble('podcastSpeed') ?? 1.0
+      ..onPodcastSpeedChanged = ((v) => prefs.setDouble('podcastSpeed', v))
       // 'mixMode2': a escolha antiga ('mixMode') é esquecida uma vez, para todo mundo começar em "Da mesma vibe"
       ..mixMode = MixMode.values.asNameMap()[prefs.getString('mixMode2')] ?? MixMode.vibe
       ..onMixModeChanged = ((m) => prefs.setString('mixMode2', m.name))
@@ -352,7 +448,10 @@ class AppState extends ChangeNotifier {
   /// (abertura, releitura da pasta, "Recarregar"): favoritar, editar ou mexer em playlists não muda os GIFs,
   /// e reler a pasta inteira a cada toque custava tempo à toa.
   Future<void> reload({bool rereadGifs = false}) async {
-    tracks = await db.allTracks();
+    final all = await db.allTracks();
+    final root = sourceRoot;
+    tracks = [for (final t in all) if (!isPodcastPath(root, t.path)) t];
+    podcasts = [for (final t in all) if (isPodcastPath(root, t.path)) t];
     ArtistNames.current = ArtistNames.fromTracks(tracks);
     MoodClues.tagsOf = gifFetcher.cachedTags;
     MoodClues.learnFrom(tracks);
@@ -422,6 +521,7 @@ class AppState extends ChangeNotifier {
       await reload(rereadGifs: true);
     }
     await _restoreIfFresh(root);
+    _suggestPodcasts();
     // músicas novas na biblioteca: busca GIFs sozinho, em segundo plano
     final added = tracks.where((t) => !before.contains(t.id)).toList();
     unawaited(_afterScan(added));
@@ -549,7 +649,10 @@ class AppState extends ChangeNotifier {
     await db.editTrack(t.id!, title: title, artist: artist, album: album, genre: genre, year: year);
     final root = sourceRoot;
     if (move && root != null) {
-      final target = targetPathFor(root, path, artist, album, title: title);
+      // episódio continua em Podcasts/<Programa>/ (nunca vai para Artista/Álbum)
+      final target = isPodcastPath(root, path)
+          ? podcastTargetPath(root, artist, '${safeFolderName(title)}${p.extension(path).toLowerCase()}')
+          : targetPathFor(root, path, artist, album, title: title);
       if (!p.equals(target, path)) {
         if (File(target).existsSync()) {
           warning = 'Já existe um arquivo com esse nome em ${p.relative(p.dirname(target), from: root)}. Não movi.';
@@ -557,6 +660,7 @@ class AppState extends ChangeNotifier {
           await Directory(p.dirname(target)).create(recursive: true);
           await Organizer.moveFile(File(path), target);
           await db.moveTrack(path, target);
+          podcastProgress.moved(path, target);
           removeEmptyParents(root, [path]);
           path = target;
         }
@@ -657,6 +761,8 @@ class AppState extends ChangeNotifier {
     gifs.gifsFor(fresh).then((g) => nowShowingGif(fresh, g.isEmpty ? null : g.first)).catchError((Object e) {
       errorLog.info('Notificação', 'Não deu para trocar a imagem da notificação', e); // arte é secundária: nunca derruba o player
     });
+    // podcast: sem busca de GIFs/fotos de artista de música (o "artista" é o programa)
+    if (isPodcast(fresh)) return;
     // fotos do artista: baixadas sozinhas, como os GIFs
     artistPhotos.fetch(ArtistNames.current.main(fresh.artist)).then((n) {
       if (n == 0) return;
@@ -757,14 +863,16 @@ class AppState extends ChangeNotifier {
   /// (as telas chamam isto para cada linha; a busca linear deixava listas grandes lentas).
   Track? byId(int? id) {
     if (id == null) return null;
-    if (!identical(_indexed, tracks)) {
+    if (!identical(_indexed, tracks) || !identical(_indexedPods, podcasts)) {
       _indexed = tracks;
-      _byId = {for (final t in tracks) if (t.id != null) t.id!: t};
+      _indexedPods = podcasts;
+      _byId = {for (final t in [...tracks, ...podcasts]) if (t.id != null) t.id!: t};
     }
     return _byId[id];
   }
 
   List<Track>? _indexed;
+  List<Track>? _indexedPods;
   Map<int, Track> _byId = const {};
 
   Future<Recommender> recommender() async => Recommender(tracks, await db.plays());

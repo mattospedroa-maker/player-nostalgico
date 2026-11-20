@@ -12,12 +12,14 @@ import '../mood.dart';
 import '../play_stats.dart';
 import '../smart_collections.dart';
 import '../player_service.dart';
+import '../podcasts.dart';
 import '../theme.dart';
 import '../xp_icons.dart';
 import '../widgets.dart';
 import '../duplicates.dart';
 import 'duplicates_screen.dart';
 import 'organizer_screen.dart';
+import 'podcasts_screen.dart';
 import 'youtube_screen.dart';
 import 'smart_library_widgets.dart';
 import 'track_list_screen.dart';
@@ -90,7 +92,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
     final root = app.sourceRoot;
-    if (_searching) _updateResults(app);
+    final pods = app.libraryMedia == MediaKind.podcasts;
+    if (_searching && !pods) _updateResults(app);
     return Column(
       children: [
         XpTitleBar(
@@ -113,12 +116,28 @@ class _LibraryScreenState extends State<LibraryScreen> {
             ],
           ),
         ]),
-        XpAddressBar(_query.isEmpty ? (_searching ? 'Música\\Filtrar' : 'Música') : 'Música\\Busca: "$_query"'),
+        Builder(
+          builder: (anchor) => XpAddressBar(
+            pods
+                ? (_query.isEmpty ? 'Podcasts' : 'Podcasts\\Busca: "$_query"')
+                : (_query.isEmpty ? (_searching ? 'Música\\Filtrar' : 'Música') : 'Música\\Busca: "$_query"'),
+            icon: pods ? XpIcons.mic : XpIcons.note,
+            onDrop: () => showMediaPicker(anchor),
+          ),
+        ),
         if (app.scanning) Padding(padding: const EdgeInsets.fromLTRB(8, 4, 8, 4), child: XpProgress(value: app.scanProgress, height: 14)),
         Expanded(
           child: ColoredBox(color: Colors.white, child: root == null ? _welcome() : _library(app, root)),
         ),
-        XpStatusBar([app.scanning ? 'Lendo a pasta…' : (_searching ? '${_results.length} de ${app.tracks.length} músicas' : '${app.tracks.length} músicas'), if (root != null) p.basename(root), 'Meu computador']),
+        XpStatusBar([
+          app.scanning
+              ? 'Lendo a pasta…'
+              : pods
+                  ? '${app.podcasts.length} ${app.podcasts.length == 1 ? 'episódio' : 'episódios'}'
+                  : (_searching ? '${_results.length} de ${app.tracks.length} músicas' : '${app.tracks.length} músicas'),
+          if (root != null) p.basename(root),
+          'Meu computador',
+        ]),
       ],
     );
   }
@@ -149,12 +168,15 @@ class _LibraryScreenState extends State<LibraryScreen> {
   /// "início" ↔ "resultados". Antes ele era criado dentro de cada uma das duas
   /// telas, então ao digitar a 1ª letra (ou apagar a última) o Flutter jogava o
   /// campo fora e criava outro: o foco se perdia e o teclado fechava.
-  Widget _library(AppState app, String root) => Column(
-    children: [
-      _searchField(),
-      Expanded(child: _searching ? _resultsView(app) : _home(app, root)),
-    ],
-  );
+  Widget _library(AppState app, String root) {
+    final pods = app.libraryMedia == MediaKind.podcasts;
+    return Column(
+      children: [
+        _searchField(pods),
+        Expanded(child: pods ? PodcastsHome(query: _query) : (_searching ? _resultsView(app) : _home(app, root))),
+      ],
+    );
+  }
 
   Widget _home(AppState app, String root) {
     final ps = context.read<PlayerService>();
@@ -248,7 +270,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     );
   }
 
-  Widget _searchField() => Padding(
+  Widget _searchField(bool pods) => Padding(
     padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
     child: Bevel(
       sunken: true,
@@ -261,8 +283,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
           border: InputBorder.none,
           prefixIcon: const Padding(padding: EdgeInsets.all(8), child: XpIcon(XpIcons.find, size: 18)),
           prefixIconConstraints: const BoxConstraints(minWidth: 34, minHeight: 34),
-          suffixIcon: _searching ? IconButton(icon: const Icon(Icons.close, size: 18), tooltip: 'Limpar busca', onPressed: _clearAll) : null,
-          hintText: 'Buscar música, artista, álbum, gênero, clima…',
+          suffixIcon: _searching || (pods && _query.isNotEmpty) ? IconButton(icon: const Icon(Icons.close, size: 18), tooltip: 'Limpar busca', onPressed: _clearAll) : null,
+          hintText: pods ? 'Buscar episódio ou programa…' : 'Buscar música, artista, álbum, gênero, clima…',
           contentPadding: const EdgeInsets.symmetric(vertical: 10),
         ),
       ),
