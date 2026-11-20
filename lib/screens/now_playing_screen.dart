@@ -458,7 +458,8 @@ class _QueueWindowState extends State<_QueueWindow> {
                       },
                       child: Container(
                         decoration: BoxDecoration(
-                          color: on ? Xp.select : (picked ? const Color(0xFFDCE7FB) : Colors.white),
+                          // amarelo: você pôs com "Tocar a seguir" / "Adicionar à fila"
+                          color: on ? Xp.select : (picked ? const Color(0xFFDCE7FB) : (ps.isUserQueued(t) ? const Color(0xFFFFF6CC) : Colors.white)),
                           border: Border(bottom: const BorderSide(color: Color(0xFFF0F0F0)), left: BorderSide(color: picked ? Xp.select : Colors.transparent, width: 3)),
                         ),
                         padding: const EdgeInsets.only(right: 8),

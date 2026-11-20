@@ -44,6 +44,9 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
   /// depois da atual, na ordem em que entraram; aleatório, mix e reordenações não mexem nelas.
   final Set<int?> _userQueued = {};
 
+  /// Você pôs esta música com "Tocar a seguir" / "Adicionar à fila" e ela ainda não tocou.
+  bool isUserQueued(Track t) => _userQueued.contains(t.id);
+
   /// Muda a cada fila nova escolhida: uma reordenação antiga em andamento desiste no meio.
   int _gen = 0;
   MixMode mixMode = MixMode.vibe;
