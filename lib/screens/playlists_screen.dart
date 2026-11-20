@@ -174,21 +174,10 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
             XpAddressBar('Playlists\\$_name'),
             Padding(
               padding: const EdgeInsets.all(8),
-              child: Row(children: [
-                Expanded(child: XpButton(label: 'Tocar playlist', xpIcon: XpIcons.play, primary: true, onTap: _tracks.isEmpty ? null : () => play(0))),
-                const SizedBox(width: 6),
-                Builder(
-                  builder: (b) => XpButton(
-                    label: 'Fila ▾',
-                    onTap: _tracks.isEmpty
-                        ? null
-                        : () {
-                            final box = b.findRenderObject() as RenderBox?;
-                            final at = box?.localToGlobal(Offset(box.size.width - 280, box.size.height + 2));
-                            showQueueMenu(b, _name, _tracks, at: at);
-                          },
-                  ),
-                ),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                XpButton(label: 'Tocar playlist', xpIcon: XpIcons.play, primary: true, onTap: _tracks.isEmpty ? null : () => play(0)),
+                const SizedBox(height: 5),
+                QueueButtons(_tracks),
               ]),
             ),
             Expanded(

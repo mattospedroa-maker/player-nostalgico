@@ -358,10 +358,30 @@ Future<void> enqueueTracks(BuildContext context, List<Track> list, {required boo
     ..showSnackBar(SnackBar(content: Text(text), duration: const Duration(seconds: 3)));
 }
 
-/// Menu "Fila ▾" de um álbum ou playlist.
-Future<void> showQueueMenu(BuildContext context, String header, List<Track> list, {Offset? at}) {
-  return showXpContextMenu(context, header: header, at: at, items: [
-    XpMenuEntry('Tocar a seguir', list.isEmpty ? null : () => enqueueTracks(context, list, next: true), icon: XpIcons.playNext),
-    XpMenuEntry('Adicionar à fila', list.isEmpty ? null : () => enqueueTracks(context, list, next: false), icon: XpIcons.addQueue),
-  ]);
+/// Segunda linha de botões do álbum e da playlist: "Tocar a seguir" e "À fila".
+class QueueButtons extends StatelessWidget {
+  final List<Track> tracks;
+  const QueueButtons(this.tracks, {super.key});
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+        // celular estreito, ao lado da capa: o nome curto cabe inteiro
+        builder: (context, box) => Row(children: [
+          Expanded(
+            child: XpButton(
+              label: box.maxWidth < 280 ? 'A seguir' : 'Tocar a seguir',
+              xpIcon: XpIcons.playNext,
+              onTap: tracks.isEmpty ? null : () => enqueueTracks(context, tracks, next: true),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: XpButton(
+              label: 'À fila',
+              xpIcon: XpIcons.addQueue,
+              onTap: tracks.isEmpty ? null : () => enqueueTracks(context, tracks, next: false),
+            ),
+          ),
+        ]),
+      );
 }

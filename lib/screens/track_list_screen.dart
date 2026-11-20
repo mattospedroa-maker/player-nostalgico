@@ -80,15 +80,10 @@ class TrackListScreen extends StatelessWidget {
                                   onTap: list.isEmpty ? null : () => playTracks(context, list, shuffle: true),
                                 ),
                               ),
-                              const SizedBox(width: 6),
-                              Builder(
-                                builder: (b) => XpButton(
-                                  label: 'Fila ▾',
-                                  onTap: list.isEmpty ? null : () => _openQueueMenu(b, title, list),
-                                ),
-                              ),
                             ],
                           ),
+                          const SizedBox(height: 5),
+                          QueueButtons(list),
                         ],
                       ),
                     ),
@@ -523,9 +518,3 @@ class ThumbFrame extends StatelessWidget {
   );
 }
 
-/// Abre o menu "Fila ▾" logo abaixo do botão.
-void _openQueueMenu(BuildContext button, String title, List<Track> list) {
-  final box = button.findRenderObject() as RenderBox?;
-  final at = box?.localToGlobal(Offset(box.size.width - 280, box.size.height + 2));
-  showQueueMenu(button, title, list, at: at);
-}
