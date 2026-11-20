@@ -48,6 +48,9 @@ class FakeMain implements FadeDeck {
     _changes.add(null);
   }
 
+  /// O celular atrasou: a música andou sem ninguém avisar (o relógio da transição acorda tarde).
+  void drift(Duration d) => _base += d;
+
   void seek(Duration d) {
     _base = d;
     _since = async.elapsed;
@@ -80,18 +83,26 @@ class FakeTail implements TailDeck {
   bool playing = false;
   double volume = 1;
   int loads = 0;
+  Duration? loadedAt;
+  final seeks = <Duration>[];
+  final volumes = <double>[];
   @override
   Future<void> load(String path, Duration at) async {
     loads++;
     loaded = path;
+    loadedAt = at;
   }
 
   @override
-  Future<void> seek(Duration at) async {}
+  Future<void> seek(Duration at) async => seeks.add(at);
   @override
   void start() => playing = true;
   @override
-  Future<void> setVolume(double v) async => volume = v;
+  Future<void> setVolume(double v) async {
+    volume = v;
+    volumes.add(v);
+  }
+
   @override
   Future<void> stop() async {
     playing = false;
@@ -134,9 +145,10 @@ void main() {
       expect(tail.playing, isFalse);
       a.elapse(const Duration(milliseconds: 1100)); // 56,1s: começou a transição
       expect(tail.playing, isTrue);
+      a.elapse(const Duration(milliseconds: 100)); // depois da troca rápida, o principal passa para a próxima
       expect(m.advances, 1);
       expect(m.currentPath, '/b.mp3');
-      a.elapse(const Duration(seconds: 2));
+      a.elapse(const Duration(milliseconds: 1900));
       expect(tail.playing, isTrue, reason: 'sobreposição real');
       expect(tail.volume, inInclusiveRange(.5, .9));
       expect(m.volume, inInclusiveRange(.5, .9));
@@ -338,5 +350,61 @@ void main() {
     expect(o, closeTo(0, 1e-9));
     expect(i, closeTo(.707, .01));
     expect(fadeVolumes(0, 0), (1.0, 0.0));
+  });
+
+  test('troca sem buraco: o segundo player já espera no ponto certo e só recebe o "toca", sem buscar de novo', () {
+    fakeAsync((a) {
+      final (m, _) = setup(a);
+      m.play();
+      a.elapse(const Duration(milliseconds: 55800));
+      expect(tail.loadedAt, const Duration(seconds: 56));
+      expect(tail.playing, isFalse);
+      expect(tail.volume, 0, reason: 'preparado mudo');
+      a.elapse(const Duration(milliseconds: 160)); // 55,96s: 60 ms antes do ponto, para o som sair na hora
+      expect(tail.playing, isTrue);
+      expect(tail.seeks, isEmpty, reason: 'nada de buscar de novo na hora da troca');
+      expect(m.volume, 1, reason: 'o principal continua soando até o segundo sair');
+      expect(m.advances, 0);
+      // troca rápida: a mesma música nos dois, volumes somando 1 (nunca um buraco)
+      for (var i = 0; i < 6; i++) {
+        a.elapse(const Duration(milliseconds: 25));
+        expect(tail.volume + m.volume, closeTo(1, 1e-9));
+      }
+      expect(m.advances, 0);
+      a.elapse(const Duration(milliseconds: 50));
+      expect(m.advances, 1);
+      expect(m.volumes.last, lessThan(.05), reason: 'o principal só troca de faixa depois de mudo');
+      expect(tail.volume, closeTo(1, .05));
+    });
+  });
+
+  test('celular ocupado (relógio atrasado): o segundo player é reposicionado antes de tocar', () {
+    fakeAsync((a) {
+      final (m, _) = setup(a);
+      m.play();
+      a.elapse(const Duration(milliseconds: 55800));
+      m.drift(const Duration(milliseconds: 120));
+      a.elapse(const Duration(milliseconds: 200));
+      expect(tail.playing, isTrue);
+      expect(tail.seeks, hasLength(1));
+      a.elapse(const Duration(seconds: 1));
+      expect(m.advances, 1);
+    });
+  });
+
+  test('avanço manual na troca rápida: volta tudo ao normal na hora', () {
+    fakeAsync((a) {
+      final (m, c) = setup(a);
+      m.play();
+      a.elapse(const Duration(milliseconds: 56050));
+      expect(tail.playing, isTrue);
+      expect(m.volume, lessThan(1));
+      c.cancel();
+      m.jump(2);
+      a.elapse(const Duration(seconds: 1));
+      expect(tail.playing, isFalse);
+      expect(m.volume, 1);
+      expect(m.advances, 0, reason: 'a troca automática não acontece depois do comando');
+    });
   });
 }
