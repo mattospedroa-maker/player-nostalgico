@@ -174,7 +174,11 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
             XpAddressBar('Playlists\\$_name'),
             Padding(
               padding: const EdgeInsets.all(8),
-              child: XpButton(label: 'Tocar playlist', xpIcon: XpIcons.play, primary: true, onTap: _tracks.isEmpty ? null : () => play(0)),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                XpButton(label: 'Tocar playlist', xpIcon: XpIcons.play, primary: true, onTap: _tracks.isEmpty ? null : () => play(0)),
+                const SizedBox(height: 5),
+                QueueButtons(_tracks),
+              ]),
             ),
             Expanded(
               child: ColoredBox(color: Colors.white, child: _tracks.isEmpty

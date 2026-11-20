@@ -34,6 +34,8 @@ enum XpIcons {
   mic,
   radio,
   book,
+  playNext,
+  addQueue,
 }
 
 const _svg = <XpIcons, String>{
@@ -77,6 +79,9 @@ const _svg = <XpIcons, String>{
       '<path d="M8 10L24 3" stroke="#333" stroke-width="2"/><rect x="2" y="10" width="28" height="18" rx="2" fill="#a8743a" stroke="#4a3010"/><circle cx="10" cy="19" r="5" fill="#2b2b2b" stroke="#000"/><circle cx="10" cy="19" r="2" fill="#666"/><path d="M18 15h9M18 19h9M18 23h9" stroke="#f0e0c0" stroke-width="1.6"/>',
   XpIcons.book:
       '<path d="M3 5h11a2 2 0 0 1 2 2v21a2 2 0 0 0-2-2H3z" fill="#d84a2a" stroke="#7a1d07"/><path d="M29 5H18a2 2 0 0 0-2 2v21a2 2 0 0 1 2-2h11z" fill="#e8613f" stroke="#7a1d07"/><path d="M6 10h6M6 14h6M20 10h6M20 14h6" stroke="#ffd0c0"/>',
+  XpIcons.playNext: '<path d="M4 7v18l12-9z" fill="#1d3c78"/><path d="M15 7v18l12-9z" fill="#1d3c78"/><rect x="26" y="7" width="3.5" height="18" fill="#1d3c78"/>',
+  XpIcons.addQueue:
+      '<rect x="3" y="4" width="20" height="24" fill="#fff" stroke="#555"/><path d="M7 10h12M7 15h12M7 20h7" stroke="#1d3c78" stroke-width="2"/><circle cx="24" cy="23" r="6.5" fill="#3aa83a" stroke="#1b5e1b"/><path d="M24 19v8M20 23h8" stroke="#fff" stroke-width="2.6"/>',
   XpIcons.check: '<circle cx="16" cy="16" r="14" fill="#3aa83a" stroke="#1b5e1b"/><path d="M9 16l5 5 9-10" fill="none" stroke="#fff" stroke-width="3.5"/>',
 };
 

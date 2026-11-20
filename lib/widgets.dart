@@ -201,6 +201,8 @@ Future<void> showTrackMenu(BuildContext context, Track t, {Offset? at}) {
   final fav = (app.byId(t.id) ?? t).favorite;
   return showXpContextMenu(context, header: '${t.title} — ${t.artist}', at: at, items: [
     XpMenuEntry('Tocar agora', () => playTracks(context, [t]), icon: XpIcons.play),
+    XpMenuEntry('Tocar a seguir', () => enqueueTracks(context, [t], next: true), icon: XpIcons.playNext),
+    XpMenuEntry('Adicionar à fila', () => enqueueTracks(context, [t], next: false), icon: XpIcons.addQueue),
     null,
     XpMenuEntry(fav ? 'Tirar das favoritas' : 'Adicionar às favoritas', () => app.toggleFavorite(t), icon: XpIcons.heart),
     XpMenuEntry('Adicionar a uma playlist', () => pickPlaylistAndAdd(context, t), icon: XpIcons.plus, submenu: true),
@@ -326,8 +328,60 @@ void showGifLibraryInfo(BuildContext context) {
 Future<void> playTracks(BuildContext context, List<Track> list, {int start = 0, bool? shuffle}) async {
   if (list.isEmpty) return;
   final ps = context.read<PlayerService>();
-  if (shuffle != null && ps.shuffle != shuffle) await ps.toggleShuffle();
+  // só muda o aleatório para a fila nova: a velha vai embora, não precisa reordenar
+  if (shuffle != null) ps.setShuffleForNextQueue(shuffle);
   if (shuffle == true) start = Random().nextInt(list.length);
   await ps.playQueue(list, start: start);
   if (context.mounted) HomeShell.goTo(context, 0);
+}
+
+/// "Tocar a seguir" / "Adicionar à fila" de uma música, álbum ou playlist: entram depois da que
+/// está tocando e, quando acabam, a fila volta de onde estava. Mostra um aviso curto do que aconteceu.
+Future<void> enqueueTracks(BuildContext context, List<Track> list, {required bool next}) async {
+  if (list.isEmpty) return;
+  final ps = context.read<PlayerService>();
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  final wasPlaying = ps.current != null && !ps.podcastMode;
+  final n = await ps.enqueue(list, next: next);
+  if (messenger == null) return;
+  final one = n == 1;
+  final what = one ? '1 música' : '$n músicas';
+  final text = n == 0
+      ? (list.length == 1 ? 'Essa música já está tocando.' : 'Nada para pôr na fila (podcasts não entram na fila de músicas).')
+      : !wasPlaying
+          ? 'Tocando agora: $what.'
+          : next
+              ? '$what ${one ? 'vai' : 'vão'} tocar depois desta. Depois a fila continua de onde estava.'
+              : '$what ${one ? 'entrou' : 'entraram'} na fila. Depois a fila continua de onde estava.';
+  messenger
+    ..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(content: Text(text), duration: const Duration(seconds: 3)));
+}
+
+/// Segunda linha de botões do álbum e da playlist: "Tocar a seguir" e "À fila".
+class QueueButtons extends StatelessWidget {
+  final List<Track> tracks;
+  const QueueButtons(this.tracks, {super.key});
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+        // celular estreito, ao lado da capa: o nome curto cabe inteiro
+        builder: (context, box) => Row(children: [
+          Expanded(
+            child: XpButton(
+              label: box.maxWidth < 280 ? 'A seguir' : 'Tocar a seguir',
+              xpIcon: XpIcons.playNext,
+              onTap: tracks.isEmpty ? null : () => enqueueTracks(context, tracks, next: true),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: XpButton(
+              label: 'À fila',
+              xpIcon: XpIcons.addQueue,
+              onTap: tracks.isEmpty ? null : () => enqueueTracks(context, tracks, next: false),
+            ),
+          ),
+        ]),
+      );
 }

@@ -82,6 +82,8 @@ class TrackListScreen extends StatelessWidget {
                               ),
                             ],
                           ),
+                          const SizedBox(height: 5),
+                          QueueButtons(list),
                         ],
                       ),
                     ),
@@ -515,3 +517,4 @@ class ThumbFrame extends StatelessWidget {
           ),
   );
 }
+

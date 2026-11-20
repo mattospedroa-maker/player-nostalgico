@@ -39,6 +39,16 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
 
   /// Ids das músicas que entraram sozinhas pelo mix (podem ser trocadas quando o modo muda).
   final Set<int?> _autoAdded = {};
+
+  /// Ids das músicas que você pôs na fila com "Tocar a seguir" / "Adicionar à fila". Ficam logo
+  /// depois da atual, na ordem em que entraram; aleatório, mix e reordenações não mexem nelas.
+  final Set<int?> _userQueued = {};
+
+  /// Você pôs esta música com "Tocar a seguir" / "Adicionar à fila" e ela ainda não tocou.
+  bool isUserQueued(Track t) => _userQueued.contains(t.id);
+
+  /// Muda a cada fila nova escolhida: uma reordenação antiga em andamento desiste no meio.
+  int _gen = 0;
   MixMode mixMode = MixMode.vibe;
   void Function(MixMode)? onMixModeChanged;
 
@@ -118,6 +128,7 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
     _subs.add(player.playingStream.listen((_) => handler?.broadcast()));
     _subs.add(player.currentIndexStream.listen((i) {
       final now = current;
+      _userQueued.remove(now?.id); // começou a tocar: saiu do bloco "a seguir"
       _prepareKind(now);
       if (now?.id != _startedTrackId) {
         _logCurrent(skipped: false);
@@ -211,6 +222,7 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
     crossfader.cancel(); // escolheu outra música: troca na hora, sem transição
     _savePodcastPosition();
     _logCurrent(skipped: true);
+    _gen++; // qualquer reordenação da fila velha que ainda esteja na frente para de mexer
     await _serial(() async {
       _fromMix = mix;
       _podcastMode = podcast;
@@ -225,6 +237,7 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
         first = 0;
       }
       _autoAdded.clear();
+      _userQueued.clear();
       _mixArtist = null;
       _overrides.clear();
       _failed.clear();
@@ -627,7 +640,9 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
   /// Tira uma música da fila (a que está tocando não sai).
   Future<void> removeAt(int index) => _serial(() async {
         if (index == _index || index < 0 || index >= player.sequence.length) return;
+        final id = (player.sequence[index].tag as Track).id;
         await player.removeAudioSourceAt(index);
+        if (!player.sequence.any((x) => (x.tag as Track).id == id)) _userQueued.remove(id);
         notifyListeners();
       });
 
@@ -640,16 +655,87 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
       });
 
   /// Reordena as próximas músicas (a atual não é tocada). Só roda dentro de [_serial].
+  ///
+  /// Troca o pedaço todo de uma vez (antes movia música por música: com a biblioteca inteira na
+  /// fila levava minutos, e escolher um álbum nesse meio tempo ficava esperando e parecia não fazer nada).
+  /// As que você pôs com "Tocar a seguir" / "Adicionar à fila" continuam na frente.
   Future<void> _applyUpcoming(List<Track> desired) async {
+    final gen = _gen;
     final start = _nextPos;
-    for (var i = 0; i < desired.length; i++) {
-      final pos = start + i;
-      final q = queue;
-      final j = q.indexWhere((t) => t.id == desired[i].id, pos);
-      if (j < 0 || j == pos) continue;
-      await player.moveAudioSource(j, pos);
+    final now = upcoming;
+    final want = keepQueuedFirst(desired, now, (t) => _userQueued.contains(t.id), key: (t) => t.id);
+    if (want.length != now.length || start <= 0) return; // fila mudou no meio: não mexe
+    var same = true;
+    for (var i = 0; i < want.length; i++) {
+      if (want[i].id != now[i].id) {
+        same = false;
+        break;
+      }
     }
+    if (same || gen != _gen || start != _nextPos) return;
+    final end = player.sequence.length;
+    await player.removeAudioSourceRange(start, end);
+    await player.addAudioSources([for (final t in want) _source(t)]);
     notifyListeners();
+  }
+
+  /// [desired] com as músicas do bloco "a seguir" (as primeiras de [current] marcadas por [queued])
+  /// na frente, na mesma ordem de antes.
+  @visibleForTesting
+  static List<T> keepQueuedFirst<T>(List<T> desired, List<T> current, bool Function(T) queued, {Object? Function(T)? key}) {
+    final k = key ?? (T t) => t;
+    final lead = <T>[];
+    for (final t in current) {
+      if (!queued(t)) break;
+      lead.add(t);
+    }
+    if (lead.isEmpty) return desired;
+    final leadKeys = {for (final t in lead) k(t)};
+    return [...lead, ...desired.where((t) => !leadKeys.contains(k(t)))];
+  }
+
+  /// Onde "Adicionar à fila" põe as músicas: depois da atual e de tudo que você já pôs na fila,
+  /// antes do resto (assim elas tocam logo e depois a fila volta de onde estava).
+  @visibleForTesting
+  static int queueEndPos<T>(List<T> sequence, int nextPos, bool Function(T) queued) {
+    var p = nextPos;
+    while (p < sequence.length && queued(sequence[p])) {
+      p++;
+    }
+    return p;
+  }
+
+  /// "Tocar a seguir" ([next] = true) ou "Adicionar à fila" ([next] = false).
+  ///
+  /// As músicas entram depois da que está tocando; quando acabam, a fila continua de onde estava.
+  /// "Tocar a seguir" passa na frente de tudo; "Adicionar à fila" entra depois das que você já pôs.
+  /// Podcast nunca entra na fila de músicas. Sem nada tocando (ou com uma fila de podcasts),
+  /// começa a tocar as músicas escolhidas. Devolve quantas músicas entraram.
+  Future<int> enqueue(List<Track> tracks, {required bool next}) async {
+    final songs = tracks.where((t) => !isPodcast(t)).toList();
+    if (songs.isEmpty) return 0;
+    if (current == null || _podcastMode) {
+      await playQueue(songs);
+      return songs.length;
+    }
+    final added = await _serial(() async {
+      final now = current;
+      final list = songs.where((t) => t.id != now?.id).toList();
+      if (list.isEmpty) return 0;
+      final ids = {for (final t in list) t.id};
+      // já estavam mais para frente na fila: saem de lá e vêm para cá (sem tocar duas vezes)
+      final seq = player.sequence;
+      for (var i = seq.length - 1; i >= _nextPos; i--) {
+        if (ids.contains((seq[i].tag as Track).id)) await player.removeAudioSourceAt(i);
+      }
+      final pos = next ? _nextPos : queueEndPos(queue, _nextPos, (t) => _userQueued.contains(t.id));
+      await player.insertAudioSources(pos, [for (final t in list) _source(_display(t))]);
+      _userQueued.addAll(ids);
+      _autoAdded.removeAll(ids);
+      return list.length;
+    });
+    notifyListeners();
+    return added;
   }
 
   Future<void> previous() async {
@@ -657,6 +743,14 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
     if (player.position > const Duration(seconds: 3)) return player.seek(Duration.zero);
     final to = previousIndexFor(_index, player.sequence.length, player.loopMode);
     if (to != null) await player.seek(Duration.zero, index: to);
+  }
+
+  /// Liga/desliga o aleatório sem mexer na fila atual (ela vai ser trocada logo em seguida por uma
+  /// nova, já na ordem certa). Reordenar a fila velha antes era o que travava "Tocar tudo" num álbum.
+  void setShuffleForNextQueue(bool on) {
+    if (on == _shuffle) return;
+    _shuffle = on;
+    notifyListeners();
   }
 
   /// Aleatório feito pelo app (para a fila poder se adaptar ao que você pula e curte).
@@ -708,6 +802,7 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
       }
       _overrides.remove(id);
       _autoAdded.remove(id);
+      _userQueued.remove(id);
     });
     notifyListeners();
   }
