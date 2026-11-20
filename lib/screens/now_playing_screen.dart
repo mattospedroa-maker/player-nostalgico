@@ -70,8 +70,8 @@ class NowPlayingScreen extends StatelessWidget {
           (
             'Mix',
             [
-              XpMenuItem('Do mesmo artista', () => ps.setMixMode(MixMode.artist), checked: ps.mixMode == MixMode.artist),
               XpMenuItem('Da mesma vibe', () => ps.setMixMode(MixMode.vibe), checked: ps.mixMode == MixMode.vibe),
+              XpMenuItem('Do mesmo artista', () => ps.setMixMode(MixMode.artist), checked: ps.mixMode == MixMode.artist),
             ],
           ),
         ]),
@@ -152,7 +152,7 @@ class NowPlayingScreen extends StatelessWidget {
   static String _clock(Duration d) => '${d.inMinutes.toString().padLeft(2, '0')}:${(d.inSeconds % 60).toString().padLeft(2, '0')}';
 }
 
-/// "Depois desta, tocar:" Do mesmo artista / Da mesma vibe, e as 3 próximas.
+/// "Depois desta, tocar:" Da mesma vibe / Do mesmo artista, e as 3 próximas.
 class _MixBox extends StatelessWidget {
   const _MixBox();
 
@@ -193,7 +193,7 @@ class _MixBox extends StatelessWidget {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text('Depois desta, tocar:', style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold, color: Color(0xFF1C3F94))),
           const SizedBox(height: 7),
-          Row(children: [seg('Do mesmo artista', MixMode.artist), const SizedBox(width: 4), seg('Da mesma vibe', MixMode.vibe)]),
+          Row(children: [seg('Da mesma vibe', MixMode.vibe), const SizedBox(width: 4), seg('Do mesmo artista', MixMode.artist)]),
         if (ps.loop != LoopMode.off)
           const Padding(
             padding: EdgeInsets.only(top: 6),

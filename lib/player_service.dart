@@ -47,6 +47,9 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
   /// Música que o usuário escolheu primeiro: o mix "da mesma vibe" segue o clima dela.
   int? mixSeedId;
 
+  /// Artista usado na última vez que o mix "do mesmo artista" completou a fila.
+  String? _mixArtist;
+
   final PlayerAudioHandler? handler;
 
   /// Transição suave entre músicas (só no fim natural de cada uma).
@@ -91,7 +94,7 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
       }
       _publishMediaItem();
       notifyListeners();
-      unawaited(_serial(_extendMix));
+      unawaited(_serial(_followArtist));
       if (_overrides.isNotEmpty) unawaited(_serial(_relinkMoved).catchError((Object e) => errorLog.info('Fila', 'Não deu para trocar o caminho de uma música movida', e)));
     }));
     _subs.add(player.sequenceStream.listen((_) {
@@ -187,6 +190,7 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
         first = 0;
       }
       _autoAdded.clear();
+      _mixArtist = null;
       _overrides.clear();
       _failed.clear();
       _guard.reset();
@@ -309,25 +313,51 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
 
   /// Refaz as próximas músicas que o mix colocou (ex.: mudou o tipo de mix ou o clima da primeira música).
   Future<void> refreshMix() async {
-    await _serial(() async {
-      final q = queue;
-      for (var i = q.length - 1; i >= _nextPos; i--) {
-        if (_autoAdded.remove(q[i].id)) await player.removeAudioSourceAt(i);
-      }
-      await _extendMix(force: true);
-    });
+    await _serial(_rebuildMix);
     notifyListeners();
   }
 
-  /// A música que guia o mix: a primeira escolhida (com o clima atual dela), senão a que está tocando.
+  /// Tira as próximas que o mix colocou e completa de novo. Só roda dentro de [_serial].
+  Future<void> _rebuildMix() async {
+    final q = queue;
+    for (var i = q.length - 1; i >= _nextPos; i--) {
+      if (_autoAdded.remove(q[i].id)) await player.removeAudioSourceAt(i);
+    }
+    await _extendMix(force: true);
+  }
+
+  /// A música mudou. No "do mesmo artista", se agora toca outro artista (ex.: o artista anterior
+  /// acabou e entrou uma da vibe), as próximas do mix passam a ser desse artista. Só roda dentro de [_serial].
+  Future<void> _followArtist() async {
+    final now = current;
+    final was = _mixArtist;
+    if (mixMode == MixMode.artist &&
+        now != null &&
+        was != null &&
+        now.artist != unknownArtist &&
+        !ArtistNames.current.shares(now.artist, was) &&
+        upcoming.any((t) => _autoAdded.contains(t.id))) {
+      await _rebuildMix();
+    } else {
+      await _extendMix();
+    }
+  }
+
+  /// A música que guia o mix. "Do mesmo artista": a que está tocando agora (é o artista dela que
+  /// você quer ouvir). "Da mesma vibe": a primeira escolhida (com o clima atual dela).
   Track? get mixSeed {
+    if (mixMode == MixMode.artist) return current ?? _firstChosen;
+    return _firstChosen ?? current;
+  }
+
+  Track? get _firstChosen {
     final id = mixSeedId;
     if (id != null) {
       for (final t in library()) {
         if (t.id == id) return t;
       }
     }
-    return current;
+    return null;
   }
 
   /// Quando faltam poucas músicas, completa a fila com o mix (a música nunca para).
@@ -343,6 +373,7 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
     try {
       await player.addAudioSources([for (final t in picks) _source(t)]);
       _autoAdded.addAll(picks.map((t) => t.id));
+      _mixArtist = seed.artist;
     } catch (e) {
       errorLog.warn('Mix', 'Não deu para completar a fila com o mix automático', error: e);
     }
