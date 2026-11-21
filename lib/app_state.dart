@@ -149,7 +149,9 @@ class AppState extends ChangeNotifier {
   Future<List<VisualResult>> playerVisualsFor(Track t) {
     if (isPodcast(t)) return Future.value(const []); // GIFs de podcast vêm numa fase própria (estúdio de rádio)
     if (gifSource == GifSource.anime || giphyKey.isEmpty || t.id == null) return Future.value(const []);
-    final key = '${t.id}|${t.mood}|${gifSource.name}|v2'; // v2: sorteio por música (menos repetição no álbum)
+    // v2: sorteio por música (menos repetição no álbum). O nome entra na chave: corrigiu o artista ou o título,
+    // a roda busca de novo com o nome certo (antes ficava 3 dias com os GIFs do nome errado)
+    final key = '${t.id}|${t.mood}|${gifSource.name}|${_namesKey(t)}|v2';
     final rejected = _rejectedFor(t);
     final cached = _playerVisuals[key] ?? _readVisualsDisk(key);
     if (cached != null) {
@@ -185,6 +187,12 @@ class AppState extends ChangeNotifier {
         unawaited(Future<void>(() => _visualsInFlight.remove(key)));
       }
     }();
+  }
+
+  /// Artista e título como entram na chave da roda do GIPHY (sem "|", que separa as partes da chave).
+  static String _namesKey(Track t) {
+    final (title, artist) = GifFetcher.namesFor(t);
+    return '$artist / $title'.toLowerCase().replaceAll('|', ' ').trim();
   }
 
   Set<String> _rejectedFor(Track t) {
@@ -277,6 +285,11 @@ class AppState extends ChangeNotifier {
   }
 
   void _writeVisualsDisk(String key, List<VisualResult> items) {
+    // tira o que já venceu (ex.: a lista do nome antigo de uma música corrigida), para o arquivo não crescer
+    _visualsMap.removeWhere((_, e) {
+      final at = e is Map ? DateTime.tryParse('${e['t']}') : null;
+      return at == null || DateTime.now().difference(at) > _visualsMaxAge;
+    });
     _visualsMap[key] = {
       't': DateTime.now().toIso8601String(),
       'items': [
@@ -710,8 +723,9 @@ class AppState extends ChangeNotifier {
   Future<String?> editTrack(Track t,
       {required String title, required String artist, required String album, required String genre, int? year, bool writeTags = true, bool move = true}) async {
     String? warning;
+    final before = byId(t.id) ?? t;
     // a tela pode ter aberto antes de a música mudar de pasta: usa sempre o caminho atual
-    var path = byId(t.id)?.path ?? t.path;
+    var path = before.path;
     if (writeTags) {
       try {
         FileMetadataReader.fixMp4Date(path); // .m4a do YouTube com a data "20180724" quebrava a gravação
@@ -756,9 +770,37 @@ class AppState extends ChangeNotifier {
     }
     await reload();
     final updated = byId(t.id);
-    if (updated != null) player.replaceTrack(updated);
+    if (updated != null) {
+      player.replaceTrack(updated);
+      _visualsAfterRename(before, updated);
+    }
     unawaited(fetchMissingCovers().catchError(_coversFailed)); // álbum novo: busca a capa
     return warning;
+  }
+
+  /// Corrigiu o artista ou o título: os GIFs automáticos foram buscados com o nome errado (tags do Last.fm,
+  /// letra, clima e pesquisas eram de outra música). Refaz os GIFs salvos (os escolhidos à mão ficam),
+  /// a roda do GIPHY e as fotos do artista com o nome certo.
+  void _visualsAfterRename(Track before, Track after) {
+    if (isPodcast(after)) return;
+    final (oldTitle, oldArtist) = GifFetcher.namesFor(before);
+    final (newTitle, newArtist) = GifFetcher.namesFor(after);
+    if (oldTitle.toLowerCase() == newTitle.toLowerCase() && oldArtist.toLowerCase() == newArtist.toLowerCase()) return;
+    MoodClues.invalidate(); // o clima automático vem das tags do nome certo
+    _playerVisuals.removeWhere((k, _) => k.startsWith('${after.id}|'));
+    _visualsFailedAt.removeWhere((k, _) => k.startsWith('${after.id}|'));
+    visualsEpoch++;
+    notifyListeners();
+    if (newArtist.toLowerCase() != oldArtist.toLowerCase()) {
+      artistPhotos.fetch(ArtistNames.current.main(after.artist)).then((n) {
+        if (n == 0) return;
+        visualsEpoch++;
+        notifyListeners();
+      }).catchError((Object e) {
+        errorLog.info('Fotos', 'Busca de fotos do artista falhou', e);
+      });
+    }
+    if (autoGifs) unawaited(gifFetcher.refetchFor(after).catchError(_gifFetchFailed));
   }
 
   /// Apaga a música do celular (e as pastas de álbum/artista que ficarem vazias).
