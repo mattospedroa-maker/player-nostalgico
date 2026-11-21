@@ -174,6 +174,37 @@ void main() {
       expect(calls, before);
     });
 
+    test('terminou sem GIF nenhum (downloads falharam): tenta de novo na próxima vez, sem esperar 3 dias', () async {
+      final t = await addTrack();
+      var broken = true;
+      var searches = 0;
+      final client = MockClient((req) async {
+        if (req.url.host == 'api.openverse.org') {
+          searches++;
+          return http.Response(jsonEncode({
+            'results': [for (var i = 0; i < 15; i++) {'url': 'https://img.test/Sonne$i.gif', 'title': 'Sonne Rammstein'}]
+          }), 200);
+        }
+        if (req.url.host == 'img.test') {
+          if (broken) return http.Response('erro', 500);
+          return http.Response.bytes([...gifBytes, ...utf8.encode(req.url.path)], 200);
+        }
+        return http.Response('{}', 200);
+      });
+      final f = GifFetcher(gifs, client: client, providers: [OpenverseProvider(client)]);
+      expect(await f.fetchFor(t), 0);
+      expect(searches, greaterThan(0));
+      broken = false;
+      expect(await f.fetchFor(t), greaterThan(0));
+      // com GIFs salvos, a busca recente volta a valer: não repete
+      final before = searches;
+      final pinned = (await db.pinnedGifs(t.id!)).length;
+      await db.unpinGif(t.id!, (await db.pinnedGifs(t.id!)).first);
+      expect(await f.fetchFor(t), 0);
+      expect(searches, before);
+      expect((await db.pinnedGifs(t.id!)).length, pinned - 1);
+    });
+
     test('palavras extras ficam salvas e entram na busca', () async {
       await gifs.setSongExtras('Eminem', 'Till I Collapse', 'gigante de aço');
       expect(gifs.extrasFor('Eminem', 'Till I Collapse'), ['gigante de aço']);
