@@ -143,7 +143,7 @@ Future<void> showEpisodeSummary(BuildContext context, Track t) {
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Text([t.artist, if (t.durationMs > 0) formatDuration(Duration(milliseconds: t.durationMs)), if ((info?.subject ?? '').isNotEmpty) info!.subject].join(' · '),
                     style: const TextStyle(fontSize: 12.5, color: Color(0xFF555555))),
-                if (working) h('Fazendo o resumo… (leva uns segundos)'),
+                if (working) h('Fazendo o resumo… (pode levar até uns minutos)'),
                 if (info == null && !working)
                   Padding(
                     padding: const EdgeInsets.only(top: 10),
@@ -158,8 +158,15 @@ Future<void> showEpisodeSummary(BuildContext context, Track t) {
                   ),
                 if (info != null) ...[
                   if (info.hasSummary) ...[h('Do que se trata'), Text(info.summary, style: const TextStyle(fontSize: 13.5))],
-                  if (!info.hasSummary && info.status != SummaryStatus.none && info.status != SummaryStatus.ok)
-                    Padding(padding: const EdgeInsets.only(top: 8), child: Text('Resumo: ${info.status.label}.', style: const TextStyle(fontSize: 12.5, color: Xp.red))),
+                  // o aviso da tentativa anterior some enquanto uma nova está em andamento
+                  if (!working && info.status != SummaryStatus.none && info.status != SummaryStatus.ok)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(
+                        (info.error ?? '').isNotEmpty ? info.error! : 'Resumo: ${info.status.label}.',
+                        style: TextStyle(fontSize: 12.5, color: info.hasSummary ? const Color(0xFF555555) : Xp.red),
+                      ),
+                    ),
                   if (info.people.isNotEmpty) ...[
                     h('Quem participa'),
                     for (final x in info.people)
@@ -193,7 +200,7 @@ Future<void> showEpisodeSummary(BuildContext context, Track t) {
                   if (info.hasSummary)
                     const Padding(
                       padding: EdgeInsets.only(top: 10),
-                      child: Text('Resumo feito por IA (Gemini) a partir da legenda automática.', style: TextStyle(fontSize: 11, color: Color(0xFF777777))),
+                      child: Text('Resumo feito por IA (Gemini).', style: TextStyle(fontSize: 11, color: Color(0xFF777777))),
                     ),
                 ],
               ]),
