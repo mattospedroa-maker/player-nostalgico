@@ -500,9 +500,15 @@ class DownloadService extends ChangeNotifier {
   static const maxParallel = 2;
   ParallelQueue<YtEntry>? _pool;
 
+  /// Freio para quando o YouTube pede confirmação de que não é robô.
+  final BotGuard botGuard = BotGuard();
+
+  /// Pausa antes de tentar de novo depois do pedido de confirmação (os testes encurtam).
+  Duration botPause = const Duration(seconds: 60);
+
   /// Próximo da fila (já marcado como baixando, para o outro download não pegar o mesmo).
   YtEntry? _takeNext() {
-    if (_cancelAll) return null;
+    if (_cancelAll || botGuard.stopped || botGuard.pausing) return null; // na pausa, ninguém novo pede nada ao YouTube
     final e = queue.where((e) => e.status == YtStatus.queued).firstOrNull;
     if (e == null) return null;
     e.status = YtStatus.downloading;
@@ -517,6 +523,7 @@ class DownloadService extends ChangeNotifier {
     if (root == null) return;
     running = true;
     _cancelAll = false;
+    botGuard.reset();
     notifyListeners();
     final tmpBase = p.join((await getTemporaryDirectory()).path, 'youtube');
     try {
@@ -525,7 +532,14 @@ class DownloadService extends ChangeNotifier {
       await pool.run();
     } finally {
       for (final e in queue) {
-        if (e.status == YtStatus.queued) e.status = YtStatus.canceled;
+        if (e.status != YtStatus.queued) continue;
+        if (botGuard.stopped) {
+          // não tenta as outras: cada tentativa a mais deixa o bloqueio do YouTube mais longo
+          e.status = YtStatus.failed;
+          e.error = notTriedBot;
+        } else {
+          e.status = YtStatus.canceled;
+        }
       }
       _pool = null;
       running = false;
@@ -539,7 +553,7 @@ class DownloadService extends ChangeNotifier {
               if (songs > 0) '$songs ${songs == 1 ? 'música baixada e organizada' : 'músicas baixadas e organizadas'} em Artista/Álbum',
               if (eps > 0) '$eps ${eps == 1 ? 'episódio salvo' : 'episódios salvos'} em Podcasts/Programa',
               if (failed > 0) '$failed com erro',
-            ].join(' · ')}.';
+            ].join(' · ')}.${botGuard.stopped ? ' $botAdvice' : ''}';
       notifyListeners();
       if (lastSummary != null) unawaited(ytdlp.notify('Downloads do YouTube', lastSummary!, done: true));
       if (ok > 0) await _addToLibrary();
@@ -569,6 +583,7 @@ class DownloadService extends ChangeNotifier {
           unawaited(ytdlp.notify('Baixando ${doneCount + 1} de ${queue.length}', e.names.title, progress: prog.round()));
         }
       }));
+      botGuard.success();
       e.savedPath = e.podcast ? await _saveEpisode(File(audio), e.names, root) : await _saveToLibrary(File(audio), e.names, root);
       e.sizeBytes = File(e.savedPath!).lengthSync();
       await _rememberDownload(e.id, e.savedPath!);
@@ -587,6 +602,7 @@ class DownloadService extends ChangeNotifier {
     } on YtDlpException catch (err) {
       e.status = _cancelAll || err.message == 'Cancelado' ? YtStatus.canceled : YtStatus.failed;
       e.error = err.message;
+      if (err.botCheck && !_cancelAll) await _onBotCheck(e);
     } catch (err) {
       e.status = YtStatus.failed;
       e.error = '$err';
@@ -597,6 +613,34 @@ class DownloadService extends ChangeNotifier {
         errorLog.info('YouTube', 'Não deu para limpar a pasta temporária do download', err);
       }
     }
+    notifyListeners();
+  }
+
+  static const notTriedBot = 'Não tentado: o YouTube pediu confirmação de que não é robô e bloqueou por um tempo.';
+  static const botAdvice = 'O YouTube pediu confirmação de que não é robô. Se a VPN estiver ligada, desligue e toque em Baixar de novo; '
+      'senão, espere um pouco (meia hora costuma bastar).';
+
+  /// O YouTube pediu confirmação: passa a baixar um por vez, espera e tenta esta de novo uma vez.
+  /// Se pedir de novo, para a fila (insistir só estende o bloqueio).
+  Future<void> _onBotCheck(YtEntry e) async {
+    final retry = botGuard.hit();
+    _pool?.limit = 1;
+    errorLog.warn('YouTube', retry ? 'O YouTube pediu confirmação de que não é robô: baixando um por vez e tentando de novo'
+        : 'O YouTube pediu confirmação de novo: fila parada');
+    if (!retry) return;
+    e.error = 'O YouTube pediu confirmação de que não é robô. Esperando um pouco para tentar de novo…';
+    notifyListeners();
+    botGuard.pausing = true;
+    final until = DateTime.now().add(botPause);
+    while (DateTime.now().isBefore(until) && !_cancelAll) {
+      await Future<void>.delayed(botPause < const Duration(seconds: 1) ? botPause : const Duration(seconds: 1));
+    }
+    botGuard.pausing = false;
+    if (_cancelAll) return;
+    e
+      ..status = YtStatus.queued
+      ..error = null
+      ..progress = 0;
     notifyListeners();
   }
 
@@ -731,7 +775,8 @@ void writeDownloadTags(String path, {required String title, required String arti
 /// Fila que roda no máximo [limit] trabalhos ao mesmo tempo. [next] entrega o próximo item (null = acabou por ora);
 /// quando um trabalho termina, a vaga é preenchida de novo. [poke] chama mais itens que entraram depois.
 class ParallelQueue<T> {
-  final int limit;
+  /// Pode baixar durante a fila (ex.: o YouTube pediu confirmação de que não é robô: um por vez).
+  int limit;
   final T? Function() next;
   final Future<void> Function(T item) work;
   ParallelQueue(this.limit, this.next, this.work);
@@ -762,5 +807,32 @@ class ParallelQueue<T> {
       });
     }
     if (_active == 0 && !_done.isCompleted) _done.complete();
+  }
+}
+
+/// Decide o que fazer quando o YouTube pede confirmação de que não é robô.
+/// 1ª vez: um download por vez, pausa e tenta de novo. 2ª seguida (sem nenhum sucesso no meio): para a fila.
+/// Se o outro download também levar o pedido durante a pausa, conta como o mesmo bloqueio (espera junto).
+class BotGuard {
+  int _hits = 0;
+  bool stopped = false;
+
+  /// Esperando para tentar de novo: nada novo é pedido ao YouTube.
+  bool pausing = false;
+
+  /// Devolve true se vale esperar e tentar de novo; false = parou a fila.
+  bool hit() {
+    if (pausing) return true;
+    _hits++;
+    if (_hits >= 2) stopped = true;
+    return !stopped;
+  }
+
+  void success() => _hits = 0;
+
+  void reset() {
+    _hits = 0;
+    stopped = false;
+    pausing = false;
   }
 }

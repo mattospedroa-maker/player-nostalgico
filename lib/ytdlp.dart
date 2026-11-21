@@ -20,6 +20,9 @@ class YtDlpException implements Exception {
 
   /// O erro tem cara de yt-dlp velho (o YouTube mudou): vale atualizar e tentar de novo.
   final bool outdated;
+
+  /// O YouTube pediu confirmação de que não é robô (bloqueio por IP: VPN, muitos pedidos seguidos).
+  bool get botCheck => message == YtDlp.botMessage;
   const YtDlpException(this.message, {this.outdated = false});
 
   /// Monta a exceção a partir do texto do yt-dlp: mensagem em português e se parece versão velha.
@@ -230,6 +233,9 @@ class YtDlp {
     return files.firstWhere((f) => f.toLowerCase().endsWith('.m4a'), orElse: () => files.first);
   }
 
+  static const botMessage = 'O YouTube pediu confirmação de que não é robô (acontece muito com VPN ligada). '
+      'Tente sem a VPN ou mais tarde.';
+
   /// Mensagens do yt-dlp em português, para os erros mais comuns.
   static String friendly(String raw) {
     final s = raw.trim();
@@ -237,7 +243,7 @@ class YtDlp {
     if (l.contains('private video')) return 'Vídeo privado.';
     if (l.contains('video unavailable') || l.contains('has been removed')) return 'Vídeo indisponível ou removido.';
     if (l.contains('sign in to confirm your age') || l.contains('age-restricted')) return 'Vídeo com restrição de idade (o YouTube pede login).';
-    if (l.contains('sign in to confirm') && l.contains('bot')) return 'O YouTube pediu confirmação de que não é robô. Tente de novo mais tarde.';
+    if (l.contains('sign in to confirm') && l.contains('bot')) return botMessage;
     if (l.contains('unable to download webpage') || l.contains('failed to resolve') || l.contains('network is unreachable')) {
       return 'Sem internet ou o YouTube não respondeu.';
     }

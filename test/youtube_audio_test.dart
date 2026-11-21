@@ -206,4 +206,58 @@ void main() {
       expect(isAudioFile('/musicas/Linkin Park/Meteora/Numb.m4a'), isTrue);
     });
   });
+
+  group('YouTube pedindo confirmação de que não é robô', () {
+    test('o erro do yt-dlp vira botCheck (e não "yt-dlp velho")', () {
+      final e = YtDlpException.from("ERROR: [youtube] abc: Sign in to confirm you're not a bot. Use --cookies-from-browser or --cookies");
+      expect(e.botCheck, isTrue);
+      expect(e.outdated, isFalse);
+      expect(e.message, contains('VPN'));
+      expect(YtDlpException.from('ERROR: [youtube] abc: Private video').botCheck, isFalse);
+    });
+
+    test('1ª vez espera e tenta de novo; 2ª seguida para a fila; sucesso no meio zera', () {
+      final g = BotGuard();
+      expect(g.hit(), isTrue);
+      g.success();
+      expect(g.hit(), isTrue);
+      expect(g.stopped, isFalse);
+      expect(g.hit(), isFalse);
+      expect(g.stopped, isTrue);
+      g.reset();
+      expect(g.stopped, isFalse);
+    });
+
+    test('o outro download levando o pedido durante a pausa conta como o mesmo bloqueio', () {
+      final g = BotGuard();
+      expect(g.hit(), isTrue);
+      g.pausing = true;
+      expect(g.hit(), isTrue);
+      expect(g.stopped, isFalse);
+    });
+
+    test('a fila passa a um por vez quando o limite baixa', () async {
+      final items = ['a', 'b', 'c', 'd'];
+      final started = <String>[];
+      final gates = {for (final i in items) i: Completer<void>()};
+      late ParallelQueue<String> q;
+      q = ParallelQueue<String>(2, () => items.isEmpty ? null : items.removeAt(0), (i) {
+        started.add(i);
+        return gates[i]!.future;
+      });
+      unawaited(q.run());
+      await pumpEventQueue();
+      expect(started, ['a', 'b']);
+      q.limit = 1;
+      gates['a']!.complete();
+      await pumpEventQueue();
+      expect(started, ['a', 'b']); // b ainda roda: não entra outro
+      gates['b']!.complete();
+      await pumpEventQueue();
+      expect(started, ['a', 'b', 'c']);
+      expect(q.active, 1);
+      gates['c']!.complete();
+      gates['d']!.complete();
+    });
+  });
 }
