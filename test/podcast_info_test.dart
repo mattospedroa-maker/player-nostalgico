@@ -168,4 +168,56 @@ void main() {
     expect(redo?.hasSummary, isTrue);
     expect(s.isWorking(p.join(dir.path, 'x.mp3')), isFalse);
   });
+
+  test('legenda bloqueada (200 vazio): Gemini ouve o vídeo; se isso falhar, usa a descrição e diz o motivo', () async {
+    expect(parseJson3(''), isEmpty);
+    final bodies = <Map<String, dynamic>>[];
+    var videoOk = true;
+    final client = MockClient((r) async {
+      if (r.url.host == 'cap') return http.Response('', 200);
+      final b = jsonDecode(r.body) as Map<String, dynamic>;
+      bodies.add(b);
+      final parts = (b['contents'] as List).first['parts'] as List;
+      final hasVideo = parts.any((x) => (x as Map).containsKey('fileData'));
+      if (hasVideo && !videoOk) return http.Response('{"error":{"message":"Video too long for free tier"}}', 400);
+      return http.Response.bytes(
+          utf8.encode(jsonEncode({
+            'candidates': [
+              {
+                'content': {
+                  'parts': [
+                    {'text': jsonEncode(_ai)},
+                  ],
+                },
+              },
+            ],
+          })),
+          200);
+    });
+    final s = PodcastInfoService(client: client, apiKey: () => 'k');
+    final yt = {..._yt(), 'duration': 5220};
+
+    final viaVideo = await s.build(yt, title: 't', program: 'p');
+    expect(viaVideo.status, SummaryStatus.ok);
+    expect(viaVideo.hasSummary, isTrue);
+    final part = ((bodies.last['contents'] as List).first['parts'] as List).first as Map;
+    expect(part['fileData'], {'fileUri': 'https://www.youtube.com/watch?v=abc123'});
+
+    videoOk = false;
+    final viaDescription = await s.build(yt, title: 't', program: 'p');
+    expect(viaDescription.status, SummaryStatus.noCaptions);
+    expect(viaDescription.hasSummary, isTrue);
+    expect(viaDescription.error, allOf(contains('legenda veio vazia'), contains('Video too long')));
+  });
+
+  test('Gemini falhando com legenda boa: o motivo aparece', () async {
+    final client = MockClient((r) async {
+      if (r.url.host == 'cap') return http.Response.bytes(utf8.encode(_json3), 200);
+      return http.Response('', 429);
+    });
+    final info = await PodcastInfoService(client: client, apiKey: () => 'k').build(_yt(), title: 't', program: 'p');
+    expect(info.status, SummaryStatus.failed);
+    expect(info.error, contains('Limite do plano grátis'));
+    expect(info.chapters.length, 2); // capítulos do canal continuam
+  });
 }

@@ -267,7 +267,12 @@ Uri? captionUrl(Map<String, dynamic> info) {
 /// Trechos da legenda json3: (início em ms, texto).
 List<(int, String)> parseJson3(String body) {
   final out = <(int, String)>[];
-  final m = jsonDecode(body);
+  final Object? m;
+  try {
+    m = jsonDecode(body);
+  } on FormatException {
+    return out; // legenda vazia ou bloqueada (o YouTube às vezes devolve 200 sem nada)
+  }
   if (m is! Map) return out;
   for (final e in (m['events'] as List?) ?? const []) {
     if (e is! Map) continue;
@@ -325,8 +330,7 @@ Título: $title
 Descrição do vídeo:
 ${description.length > 4000 ? description.substring(0, 4000) : description}
 
-Transcrição (legenda automática):
-$transcript
+${transcript.isEmpty ? 'Sem transcrição: use o vídeo anexado (ouça a conversa) ou, se não houver vídeo, só o título e a descrição.' : 'Transcrição (legenda automática):\n$transcript'}
 ''';
 }
 
@@ -350,17 +354,27 @@ class GeminiClient {
       Uri.https('generativelanguage.googleapis.com', '/v1beta/models/$model:generateContent', {'key': key});
 
   /// Devolve o JSON que a IA escreveu.
-  Future<Map<String, dynamic>> generateJson(String prompt, {Duration timeout = const Duration(minutes: 3)}) async {
+  /// [videoUrl]: link do YouTube para o Gemini "assistir" (só o som e uma imagem a cada 20 s, em baixa
+  /// resolução, para caber no plano grátis). Usado quando o vídeo não tem legenda que o app consiga ler.
+  Future<Map<String, dynamic>> generateJson(String prompt, {String? videoUrl, Duration timeout = const Duration(minutes: 3)}) async {
     if (apiKey.trim().isEmpty) throw const GeminiException('Sem chave do Gemini');
     final body = jsonEncode({
       'contents': [
         {
           'parts': [
+            if (videoUrl != null) {
+              'fileData': {'fileUri': videoUrl},
+              'videoMetadata': {'fps': 0.05},
+            },
             {'text': prompt},
           ],
         },
       ],
-      'generationConfig': {'responseMimeType': 'application/json', 'temperature': 0.3},
+      'generationConfig': {
+        'responseMimeType': 'application/json',
+        'temperature': 0.3,
+        if (videoUrl != null) 'mediaResolution': 'MEDIA_RESOLUTION_LOW',
+      },
     });
     GeminiException? last;
     for (final model in models) {
@@ -378,14 +392,32 @@ class GeminiClient {
       }
       if (r.statusCode == 400 && r.body.contains('API_KEY_INVALID')) throw const GeminiException('Chave do Gemini inválida');
       if (r.statusCode == 429) throw const GeminiException('Limite do plano grátis do Gemini atingido (tente mais tarde)');
-      if (r.statusCode != 200) throw GeminiException('Gemini respondeu ${r.statusCode}');
-      final m = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
+      if (r.statusCode != 200) throw GeminiException('Gemini respondeu ${r.statusCode}${_reason(r.body)}');
+      final Map<String, dynamic> m;
+      try {
+        m = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
+      } catch (_) {
+        throw const GeminiException('Resposta do Gemini ilegível');
+      }
+      final block = (m['promptFeedback'] as Map?)?['blockReason'];
+      if (block != null) throw GeminiException('O Gemini recusou o pedido ($block)');
       final parts = ((((m['candidates'] as List?)?.firstOrNull as Map?)?['content'] as Map?)?['parts'] as List?) ?? const [];
       final text = parts.map((x) => x is Map ? '${x['text'] ?? ''}' : '').join().trim();
       if (text.isEmpty) throw const GeminiException('O Gemini não devolveu texto');
       return parseAiJson(text);
     }
     throw last ?? const GeminiException('Nenhum modelo do Gemini respondeu');
+  }
+}
+
+/// Motivo que o Google escreveu no erro (": texto"), curto.
+String _reason(String body) {
+  try {
+    final msg = '${((jsonDecode(body) as Map)['error'] as Map)['message'] ?? ''}'.trim();
+    if (msg.isEmpty) return '';
+    return ': ${msg.length > 160 ? '${msg.substring(0, 160)}…' : msg}';
+  } catch (_) {
+    return '';
   }
 }
 
@@ -461,30 +493,69 @@ class PodcastInfoService extends ChangeNotifier {
     final key = apiKey();
     if (key.trim().isEmpty) return info.copyWith(status: SummaryStatus.noKey);
     onStatus?.call(SummaryStatus.working);
+    // 1) legenda (o jeito mais leve)
+    var transcript = '';
+    String? captionProblem;
     try {
-      var transcript = '';
       final url = captionUrl(ytInfo);
-      if (url != null) {
+      if (url == null) {
+        captionProblem = 'o vídeo não tem legenda';
+      } else {
         final r = await client.get(url).timeout(const Duration(seconds: 40));
-        if (r.statusCode == 200) transcript = transcriptText(parseJson3(utf8.decode(r.bodyBytes)));
+        if (r.statusCode != 200) {
+          captionProblem = 'o YouTube recusou a legenda (HTTP ${r.statusCode})';
+        } else {
+          transcript = transcriptText(parseJson3(utf8.decode(r.bodyBytes, allowMalformed: true)));
+          if (transcript.isEmpty) captionProblem = 'a legenda veio vazia (o YouTube bloqueou)';
+        }
       }
-      if (transcript.isEmpty && info.description.trim().length < 80) {
-        return info.copyWith(status: SummaryStatus.noCaptions);
-      }
-      final ai = await GeminiClient(client, key).generateJson(summaryPrompt(
-        title: title,
-        program: program,
-        description: info.description,
-        chapters: info.chapters,
-        transcript: transcript.isEmpty ? '(sem legenda: use só o título e a descrição)' : transcript,
-      ));
-      info = info.withAi(ai);
-      if (transcript.isEmpty) info = info.copyWith(status: SummaryStatus.noCaptions);
-      return info;
     } catch (e) {
-      errorLog.add(ErrorLog.isNetwork(e) ? LogLevel.info : LogLevel.warning, 'Podcasts', 'Resumo do episódio "$title" não saiu', error: e);
-      return info.copyWith(status: SummaryStatus.failed, error: '$e');
+      captionProblem = ErrorLog.isNetwork(e) ? 'sem conexão para baixar a legenda' : 'erro ao ler a legenda';
     }
+    String prompt() => summaryPrompt(title: title, program: program, description: info.description, chapters: info.chapters, transcript: transcript);
+    final gemini = GeminiClient(client, key);
+    try {
+      if (transcript.isNotEmpty) return info.withAi(await gemini.generateJson(prompt()));
+    } catch (e) {
+      return _failed(info, title, 'A legenda foi lida, mas o Gemini falhou: ${_friendly(e)}', e);
+    }
+    // 2) sem legenda: o Gemini ouve o vídeo direto do YouTube (até 2h30, para caber no plano grátis)
+    final secs = (ytInfo['duration'] as num?)?.toInt() ?? 0;
+    String? videoProblem;
+    if (info.videoId.isNotEmpty && secs > 0 && secs <= 9000) {
+      try {
+        final ai = await gemini.generateJson(prompt(), videoUrl: 'https://www.youtube.com/watch?v=${info.videoId}', timeout: const Duration(minutes: 5));
+        return info.withAi(ai);
+      } catch (e) {
+        videoProblem = _friendly(e);
+        errorLog.info('Podcasts', 'Gemini não conseguiu ouvir o vídeo de "$title"', e);
+      }
+    } else if (secs > 9000) {
+      videoProblem = 'o vídeo é longo demais para o Gemini ouvir no plano grátis';
+    }
+    // 3) só título, descrição e capítulos
+    final why = [captionProblem, if (videoProblem != null) 'ouvir o vídeo falhou: $videoProblem'].whereType<String>().join('; ');
+    if (info.description.trim().length < 80) {
+      return info.copyWith(status: SummaryStatus.noCaptions, error: 'Sem legenda e sem descrição suficiente ($why).');
+    }
+    try {
+      final ai = await gemini.generateJson(prompt());
+      return info.withAi(ai).copyWith(status: SummaryStatus.noCaptions, error: 'Resumo feito só com a descrição ($why).');
+    } catch (e) {
+      return _failed(info, title, 'Sem legenda ($why), e o Gemini falhou: ${_friendly(e)}', e);
+    }
+  }
+
+  EpisodeInfo _failed(EpisodeInfo info, String title, String why, Object e) {
+    errorLog.add(ErrorLog.isNetwork(e) ? LogLevel.info : LogLevel.warning, 'Podcasts', 'Resumo do episódio "$title" não saiu: $why', error: e);
+    return info.copyWith(status: SummaryStatus.failed, error: why);
+  }
+
+  static String _friendly(Object e) {
+    if (e is GeminiException) return e.message;
+    if (e is TimeoutException) return 'demorou demais';
+    if (ErrorLog.isNetwork(e)) return 'sem conexão';
+    return '$e'.length > 160 ? '${'$e'.substring(0, 160)}…' : '$e';
   }
 
   /// Faz (ou refaz) o resumo de um episódio já salvo, buscando as informações do vídeo pelo [url].
