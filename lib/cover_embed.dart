@@ -4,6 +4,8 @@ import 'dart:typed_data';
 
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 
+import 'metadata.dart';
+
 /// Tipo da imagem pelos primeiros bytes (só JPEG e PNG vão dentro do arquivo de música).
 String? imageMime(Uint8List b) {
   if (b.length > 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF) return 'image/jpeg';
@@ -17,6 +19,7 @@ bool embedCoverSync(String path, Uint8List image) {
   final mime = imageMime(image);
   if (mime == null) return false;
   final file = File(path);
+  FileMetadataReader.fixMp4Date(path); // a data "20180724" do yt-dlp quebraria a leitura
   final has = switch (readAllMetadata(file, getImage: true)) {
     Mp4Metadata(:final picture) => picture != null,
     Mp3Metadata(:final pictures) => pictures.isNotEmpty,

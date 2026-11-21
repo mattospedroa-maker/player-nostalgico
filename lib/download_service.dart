@@ -709,6 +709,7 @@ Future<void> _writeTagsInBackground(String path, String title, String artist, St
 /// Lança erro se as tags não ficarem gravadas (conferido relendo o arquivo).
 void writeDownloadTags(String path, {required String title, required String artist, required String album, bool podcast = false}) {
   final file = File(path);
+  FileMetadataReader.fixMp4Date(path); // a data "20180724" do yt-dlp quebraria a leitura e a gravação
   final genre = podcast ? 'Podcast' : (FileMetadataReader.readTagsSync(path)?.genre ?? '');
   updateMetadata(file, (m) {
     m.setTitle(title);

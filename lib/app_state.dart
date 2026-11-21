@@ -42,7 +42,8 @@ import 'visual_search.dart';
 
 /// Estado central do app: pasta-fonte, biblioteca, playlists e serviços.
 /// Suba quando a leitura de nomes/tags mudar, para reler a biblioteca toda.
-const scanVersion = 2;
+// 3: .m4a do YouTube com a data "20180724" não eram lidos (agora são consertados na releitura)
+const scanVersion = 3;
 
 class AppState extends ChangeNotifier {
   final AppDb db;
@@ -713,6 +714,7 @@ class AppState extends ChangeNotifier {
     var path = byId(t.id)?.path ?? t.path;
     if (writeTags) {
       try {
+        FileMetadataReader.fixMp4Date(path); // .m4a do YouTube com a data "20180724" quebrava a gravação
         updateMetadata(File(path), (m) {
           m.setTitle(title);
           m.setArtist(artist);

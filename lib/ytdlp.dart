@@ -190,6 +190,8 @@ class YtDlp {
   static List<String> _commonArgs(String url, String outDir) => [
         '--concurrent-fragments', '$fragments', // o mesmo que -N 4
         '--embed-metadata',
+        // data do vídeo só com o ano: "20180724" em ©day quebra a leitura das tags no celular
+        '--parse-metadata', r'upload_date:(?P<meta_date>\d{4})',
         '--no-playlist', '--no-mtime', '--no-warnings', '--newline',
         '-o', '$outDir${Platform.pathSeparator}%(id)s.%(ext)s',
         url,
