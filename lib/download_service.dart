@@ -572,6 +572,8 @@ class DownloadService extends ChangeNotifier {
       e.savedPath = e.podcast ? await _saveEpisode(File(audio), e.names, root) : await _saveToLibrary(File(audio), e.names, root);
       e.sizeBytes = File(e.savedPath!).lengthSync();
       await _rememberDownload(e.id, e.savedPath!);
+      // a capa do álbum (Cover Art Archive) entra no arquivo depois, em segundo plano, sem segurar a fila
+      if (!e.podcast) await app.queueCoverEmbed(e.savedPath!);
       e.status = YtStatus.done;
       e.progress = 1;
       if (extra != null) {
@@ -609,9 +611,8 @@ class DownloadService extends ChangeNotifier {
 
   /// Grava as tags fora da tela (o arquivo inteiro é relido e regravado; num episódio de 3h isso travaria a interface).
   Future<void> _tag(File audio, String title, String artist, String album, {required bool podcast}) async {
-    final path = audio.path;
     try {
-      await Isolate.run(() => writeDownloadTags(path, title: title, artist: artist, album: album, podcast: podcast));
+      await _writeTagsInBackground(audio.path, title, artist, album, podcast);
     } catch (e) {
       // as tags que o yt-dlp gravou (título e canal do vídeo) continuam no arquivo; o nome e as pastas dizem o resto
       errorLog.warn('YouTube', 'Não deu para gravar as tags em "$title"', error: e);
@@ -698,6 +699,9 @@ class DownloadService extends ChangeNotifier {
     }
   }
 }
+
+Future<void> _writeTagsInBackground(String path, String title, String artist, String album, bool podcast) =>
+    Isolate.run(() => writeDownloadTags(path, title: title, artist: artist, album: album, podcast: podcast));
 
 /// Grava título, artista, álbum e gênero no arquivo baixado. No .m4a vão nos átomos do MP4 (©nam, ©ART, ©alb, ©gen),
 /// pela escrita MP4 do audio_metadata_reader; no .mp3, em ID3. Música: o gênero "Music" que o yt-dlp põe (categoria do
