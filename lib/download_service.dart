@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 import 'package:flutter/foundation.dart';
@@ -97,7 +98,7 @@ class YtEntry {
   }
 }
 
-/// Baixa vídeos/playlists do YouTube em .mp3, corrige os nomes e guarda em Fonte/Artista/Álbum/Título.mp3.
+/// Baixa o áudio de vídeos/playlists do YouTube (.m4a), corrige os nomes e guarda em Fonte/Artista/Álbum/Título.m4a.
 /// Fica fora da tela: dá para sair e continuar usando o app enquanto baixa.
 enum LinkKind { video, playlist, both, unknown }
 
@@ -377,7 +378,7 @@ class DownloadService extends ChangeNotifier {
 
   // ---------- repetidas ----------
 
-  /// Vídeos do YouTube já baixados: id -> caminho do .mp3.
+  /// Vídeos do YouTube já baixados: id -> caminho do arquivo de áudio.
   Map<String, String> get _downloaded {
     try {
       final raw = app.prefs.getString('ytBaixados');
@@ -479,7 +480,11 @@ class DownloadService extends ChangeNotifier {
       ];
     }
     notifyListeners();
-    if (!running) unawaited(_runQueue());
+    if (!running) {
+      unawaited(_runQueue());
+    } else {
+      _pool?.poke(); // um dos dois downloads pode estar livre
+    }
   }
 
   Future<void> cancelAll() async {
@@ -491,6 +496,22 @@ class DownloadService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Downloads ao mesmo tempo. Um terceiro não ajuda: yt-dlp, FFmpeg e disco disputam o mesmo celular.
+  static const maxParallel = 2;
+  ParallelQueue<YtEntry>? _pool;
+
+  /// Próximo da fila (já marcado como baixando, para o outro download não pegar o mesmo).
+  YtEntry? _takeNext() {
+    if (_cancelAll) return null;
+    final e = queue.where((e) => e.status == YtStatus.queued).firstOrNull;
+    if (e == null) return null;
+    e.status = YtStatus.downloading;
+    notifyListeners();
+    return e;
+  }
+
+  DateTime _lastNotify = DateTime.fromMillisecondsSinceEpoch(0);
+
   Future<void> _runQueue() async {
     final root = app.sourceRoot;
     if (root == null) return;
@@ -498,65 +519,15 @@ class DownloadService extends ChangeNotifier {
     _cancelAll = false;
     notifyListeners();
     final tmpBase = p.join((await getTemporaryDirectory()).path, 'youtube');
-    DateTime lastNotify = DateTime.fromMillisecondsSinceEpoch(0);
     try {
       await _maybeUpdate();
-      while (true) {
-        final i = queue.indexWhere((e) => e.status == YtStatus.queued);
-        if (i < 0 || _cancelAll) break;
-        final e = queue[i];
-        e.status = YtStatus.downloading;
-        notifyListeners();
-        final tmp = p.join(tmpBase, e.id.isEmpty ? '${DateTime.now().millisecondsSinceEpoch}' : e.id);
-        // podcast: descrição, capítulos, legenda e resumo da IA andam junto com o download do áudio
-        final Future<EpisodeInfo>? extra = e.podcast ? _episodeInfo(e) : null;
-        try {
-          // plano B: se o YouTube mudou, atualiza o yt-dlp e tenta esta música de novo
-          // podcast: fala não precisa de 192k (arquivo de 3h fica com metade do tamanho)
-          final mp3 = await withFreshYtDlp(entry: e, () => ytdlp.downloadMp3(e.url, tmp, id: e.id, quality: e.podcast ? '96K' : '192K', onProgress: (prog, line) {
-            final converting = line.contains('ExtractAudio') || line.contains('EmbedThumbnail') || line.contains('Metadata');
-            e.status = converting ? YtStatus.converting : YtStatus.downloading;
-            if (prog >= 0) e.progress = (prog / 100).clamp(0, 1);
-            notifyListeners();
-            if (DateTime.now().difference(lastNotify).inMilliseconds > 1000) {
-              lastNotify = DateTime.now();
-              unawaited(ytdlp.notify('Baixando ${doneCount + 1} de ${queue.length}', e.names.title, progress: prog.round()));
-            }
-          }));
-          e.status = YtStatus.converting;
-          notifyListeners();
-          e.savedPath = e.podcast ? await _saveEpisode(File(mp3), e.names, root) : await _saveToLibrary(File(mp3), e.names, root);
-          e.sizeBytes = File(e.savedPath!).lengthSync();
-          await _rememberDownload(e.id, e.savedPath!);
-          e.status = YtStatus.done;
-          e.progress = 1;
-          if (extra != null) {
-            final path = e.savedPath!;
-            unawaited(extra.then((info) async {
-              await app.podcastInfo.save(path, info);
-              e.summary = info.status;
-              notifyListeners();
-            }));
-          }
-        } on YtDlpException catch (err) {
-          e.status = _cancelAll || err.message == 'Cancelado' ? YtStatus.canceled : YtStatus.failed;
-          e.error = err.message;
-        } catch (err) {
-          e.status = YtStatus.failed;
-          e.error = '$err';
-        } finally {
-          try {
-            Directory(tmp).deleteSync(recursive: true);
-          } catch (err) {
-            errorLog.info('YouTube', 'Não deu para limpar a pasta temporária do download', err);
-          }
-        }
-        notifyListeners();
-      }
+      final pool = _pool = ParallelQueue<YtEntry>(maxParallel, _takeNext, (e) => _downloadOne(e, tmpBase, root));
+      await pool.run();
     } finally {
       for (final e in queue) {
         if (e.status == YtStatus.queued) e.status = YtStatus.canceled;
       }
+      _pool = null;
       running = false;
       final ok = okCount;
       final eps = queue.where((e) => e.status == YtStatus.done && e.podcast).length;
@@ -565,7 +536,7 @@ class DownloadService extends ChangeNotifier {
       lastSummary = ok == 0 && failed == 0
           ? null
           : '${[
-              if (songs > 0) '$songs ${songs == 1 ? 'música baixada' : 'músicas baixadas'} em MP3 e organizadas em Artista/Álbum',
+              if (songs > 0) '$songs ${songs == 1 ? 'música baixada e organizada' : 'músicas baixadas e organizadas'} em Artista/Álbum',
               if (eps > 0) '$eps ${eps == 1 ? 'episódio salvo' : 'episódios salvos'} em Podcasts/Programa',
               if (failed > 0) '$failed com erro',
             ].join(' · ')}.';
@@ -575,29 +546,86 @@ class DownloadService extends ChangeNotifier {
     }
   }
 
-  /// Grava as tags com o nome corrigido e move para Fonte/Artista/Álbum/Título.mp3.
-  Future<String> _saveToLibrary(File mp3, YtNames n, String root) async {
+  /// Baixa um vídeo, grava as tags e guarda na Biblioteca. Nunca lança: o erro fica no item.
+  Future<void> _downloadOne(YtEntry e, String tmpBase, String root) async {
+    final tmp = p.join(tmpBase, e.id.isEmpty ? '${DateTime.now().millisecondsSinceEpoch}' : e.id);
+    // podcast: descrição, capítulos, legenda e resumo da IA andam junto com o download do áudio
+    final Future<EpisodeInfo>? extra = e.podcast ? _episodeInfo(e) : null;
     try {
-      // o yt-dlp grava a categoria do vídeo ("Music") como gênero: tira, o gênero real vem do MusicBrainz/Last.fm
-      final genre = FileMetadataReader.readTagsSync(mp3.path)?.genre ?? '';
-      updateMetadata(mp3, (m) {
-        m.setTitle(n.title);
-        m.setArtist(n.artist);
-        m.setAlbum(n.album);
-        m.setGenres(genre.isEmpty ? const [] : [genre]);
-      });
-    } catch (e) {
-      // sem tags: o nome do arquivo e as pastas já dizem tudo
-      errorLog.warn('YouTube', 'Não deu para gravar as tags em "${n.title}"', error: e);
+      // plano B: se o YouTube mudou, atualiza o yt-dlp e tenta esta música de novo.
+      // O AAC é copiado como vem; só sem AAC (Opus) converte, e aí o podcast fica em 96k (fala não precisa de 192k).
+      final audio = await withFreshYtDlp(entry: e, () => ytdlp.downloadAudio(e.url, tmp, id: e.id, fallbackBitrate: e.podcast ? '96k' : '192k',
+          onProgress: (prog, line) {
+        // "convertendo" só quando o FFmpeg converte de verdade (plano B do Opus); a cópia do AAC segue como download
+        if (YtDlp.isConvertingLine(line)) {
+          e.status = YtStatus.converting;
+        } else if (line.startsWith('[download]')) {
+          e.status = YtStatus.downloading;
+        }
+        if (prog >= 0) e.progress = (prog / 100).clamp(0, 1);
+        notifyListeners();
+        if (DateTime.now().difference(_lastNotify).inMilliseconds > 1000) {
+          _lastNotify = DateTime.now();
+          unawaited(ytdlp.notify('Baixando ${doneCount + 1} de ${queue.length}', e.names.title, progress: prog.round()));
+        }
+      }));
+      e.savedPath = e.podcast ? await _saveEpisode(File(audio), e.names, root) : await _saveToLibrary(File(audio), e.names, root);
+      e.sizeBytes = File(e.savedPath!).lengthSync();
+      await _rememberDownload(e.id, e.savedPath!);
+      e.status = YtStatus.done;
+      e.progress = 1;
+      if (extra != null) {
+        final path = e.savedPath!;
+        unawaited(extra.then((info) async {
+          await app.podcastInfo.save(path, info);
+          e.summary = info.status;
+          notifyListeners();
+        }));
+      }
+    } on YtDlpException catch (err) {
+      e.status = _cancelAll || err.message == 'Cancelado' ? YtStatus.canceled : YtStatus.failed;
+      e.error = err.message;
+    } catch (err) {
+      e.status = YtStatus.failed;
+      e.error = '$err';
+    } finally {
+      try {
+        Directory(tmp).deleteSync(recursive: true);
+      } catch (err) {
+        errorLog.info('YouTube', 'Não deu para limpar a pasta temporária do download', err);
+      }
     }
-    var target = targetPathFor(root, mp3.path, n.artist, n.album, title: n.title);
-    final base = p.withoutExtension(target);
-    for (var k = 2; File(target).existsSync(); k++) {
-      target = '$base ($k).mp3';
-    }
+    notifyListeners();
+  }
+
+  /// Grava as tags com o nome corrigido e move para Fonte/Artista/Álbum/Título.m4a.
+  Future<String> _saveToLibrary(File audio, YtNames n, String root) async {
+    await _tag(audio, n.title, n.artist, n.album, podcast: false);
+    final target = _freePath(targetPathFor(root, audio.path, n.artist, n.album, title: n.title));
     await Directory(p.dirname(target)).create(recursive: true);
-    await Organizer.moveFile(mp3, target);
+    await Organizer.moveFile(audio, target);
     return target;
+  }
+
+  /// Grava as tags fora da tela (o arquivo inteiro é relido e regravado; num episódio de 3h isso travaria a interface).
+  Future<void> _tag(File audio, String title, String artist, String album, {required bool podcast}) async {
+    final path = audio.path;
+    try {
+      await Isolate.run(() => writeDownloadTags(path, title: title, artist: artist, album: album, podcast: podcast));
+    } catch (e) {
+      // as tags que o yt-dlp gravou (título e canal do vídeo) continuam no arquivo; o nome e as pastas dizem o resto
+      errorLog.warn('YouTube', 'Não deu para gravar as tags em "$title"', error: e);
+    }
+  }
+
+  /// "Título.m4a" já existe: "Título (2).m4a", "Título (3).m4a"...
+  static String _freePath(String target) {
+    final base = p.withoutExtension(target), ext = p.extension(target);
+    var out = target;
+    for (var k = 2; File(out).existsSync(); k++) {
+      out = '$base ($k)$ext';
+    }
+    return out;
   }
 
   /// Informações do episódio: pega o JSON completo do vídeo (a playlist só traz o resumido) e monta o resumo.
@@ -628,25 +656,12 @@ class DownloadService extends ChangeNotifier {
     return null;
   }
 
-  /// Episódio de podcast: tags com programa/título inteiro e vai para Podcasts/Programa/Episódio.mp3.
-  Future<String> _saveEpisode(File mp3, YtNames n, String root) async {
-    try {
-      updateMetadata(mp3, (m) {
-        m.setTitle(n.title);
-        m.setArtist(n.artist);
-        m.setAlbum(n.artist);
-        m.setGenres(const ['Podcast']);
-      });
-    } catch (e) {
-      errorLog.warn('YouTube', 'Não deu para gravar as tags no episódio "${n.title}"', error: e);
-    }
-    var target = podcastTargetPath(root, n.artist, '${safeFolderName(n.title)}.mp3');
-    final base = p.withoutExtension(target);
-    for (var k = 2; File(target).existsSync(); k++) {
-      target = '$base ($k).mp3';
-    }
+  /// Episódio de podcast: tags com programa/título inteiro e vai para Podcasts/Programa/Episódio.m4a.
+  Future<String> _saveEpisode(File audio, YtNames n, String root) async {
+    await _tag(audio, n.title, n.artist, n.artist, podcast: true);
+    final target = _freePath(podcastTargetPath(root, n.artist, '${safeFolderName(n.title)}${p.extension(audio.path).toLowerCase()}'));
     await Directory(p.dirname(target)).create(recursive: true);
-    await Organizer.moveFile(mp3, target);
+    await Organizer.moveFile(audio, target);
     return target;
   }
 
@@ -681,5 +696,67 @@ class DownloadService extends ChangeNotifier {
         }
       }
     }
+  }
+}
+
+/// Grava título, artista, álbum e gênero no arquivo baixado. No .m4a vão nos átomos do MP4 (©nam, ©ART, ©alb, ©gen),
+/// pela escrita MP4 do audio_metadata_reader; no .mp3, em ID3. Música: o gênero "Music" que o yt-dlp põe (categoria do
+/// vídeo) sai, o gênero real vem do MusicBrainz/Last.fm. Podcast: gênero "Podcast".
+/// Lança erro se as tags não ficarem gravadas (conferido relendo o arquivo).
+void writeDownloadTags(String path, {required String title, required String artist, required String album, bool podcast = false}) {
+  final file = File(path);
+  final genre = podcast ? 'Podcast' : (FileMetadataReader.readTagsSync(path)?.genre ?? '');
+  updateMetadata(file, (m) {
+    m.setTitle(title);
+    m.setArtist(artist);
+    m.setAlbum(album);
+    m.setGenres(genre.isEmpty ? const [] : [genre]);
+    // o yt-dlp grava a data de envio (20261121) em ©day; a leitura do pacote vira um ano absurdo e a escrita
+    // gravaria lixo ("-198271"). Data de envio não é ano de lançamento: sai.
+    if (m is Mp4Metadata) {
+      final y = m.year?.year;
+      if (y != null && (y < 1000 || y > 9999)) m.year = null;
+    }
+  });
+  final back = FileMetadataReader.readTagsSync(path);
+  if (back == null || back.title != title.trim() || back.artist != artist.trim()) {
+    throw StateError('as tags não ficaram gravadas em ${p.basename(path)}');
+  }
+}
+
+/// Fila que roda no máximo [limit] trabalhos ao mesmo tempo. [next] entrega o próximo item (null = acabou por ora);
+/// quando um trabalho termina, a vaga é preenchida de novo. [poke] chama mais itens que entraram depois.
+class ParallelQueue<T> {
+  final int limit;
+  final T? Function() next;
+  final Future<void> Function(T item) work;
+  ParallelQueue(this.limit, this.next, this.work);
+
+  int _active = 0;
+  final _done = Completer<void>();
+
+  /// Trabalhos rodando agora.
+  int get active => _active;
+
+  /// Começa e termina quando não houver mais nada rodando nem na fila.
+  Future<void> run() {
+    poke();
+    return _done.future;
+  }
+
+  void poke() {
+    if (_done.isCompleted) return;
+    while (_active < limit) {
+      final item = next();
+      if (item == null) break;
+      _active++;
+      Future<void>.sync(() => work(item)).catchError((Object e) {
+        errorLog.warn('YouTube', 'Um download parou com erro inesperado', error: e);
+      }).whenComplete(() {
+        _active--;
+        poke();
+      });
+    }
+    if (_active == 0 && !_done.isCompleted) _done.complete();
   }
 }

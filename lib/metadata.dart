@@ -56,11 +56,85 @@ class FileMetadataReader implements MetadataReader {
         genre: realGenre(m.genres), // "Music" (categoria do YouTube) e afins contam como vazio
         year: m.year?.year,
         duration: m.duration,
-        bpm: path.toLowerCase().endsWith('.mp3') ? _bpmOf(path) : null,
+        bpm: _bpmFor(path),
       );
     } catch (_) {
       return null;
     }
+  }
+
+  /// Andamento gravado no arquivo: TBPM do MP3 ou átomo tmpo do M4A. Sem tag ou erro = sem andamento.
+  static int? _bpmFor(String path) {
+    final l = path.toLowerCase();
+    if (l.endsWith('.mp3')) return _bpmOf(path);
+    if (l.endsWith('.m4a')) return mp4BpmOf(path);
+    return null;
+  }
+
+  /// tmpo do MP4/M4A (o audio_metadata_reader não traz). Caminho: moov > udta > meta > ilst > tmpo > data.
+  /// Lê só o moov (pula o áudio), então é barato mesmo em arquivo grande.
+  static int? mp4BpmOf(String path) {
+    RandomAccessFile? f;
+    try {
+      f = File(path).openSync();
+      final len = f.lengthSync();
+      var pos = 0;
+      while (pos + 8 <= len) {
+        f.setPositionSync(pos);
+        final h = f.readSync(16);
+        if (h.length < 8) return null;
+        final bd = ByteData.sublistView(h);
+        var size = bd.getUint32(0);
+        var header = 8;
+        if (size == 1) {
+          if (h.length < 16) return null;
+          size = bd.getUint64(8);
+          header = 16;
+        } else if (size == 0) {
+          size = len - pos;
+        }
+        if (size < header) return null;
+        if (String.fromCharCodes(h, 4, 8) == 'moov') {
+          if (size > 32 * 1024 * 1024) return null; // moov gigante não é de áudio normal
+          f.setPositionSync(pos + header);
+          final moov = f.readSync(size - header);
+          return parseBpm(_tmpoIn(moov, 0, moov.length, 0));
+        }
+        pos += size;
+      }
+    } catch (_) {
+      // arquivo estranho: sem andamento
+    } finally {
+      f?.closeSync();
+    }
+    return null;
+  }
+
+  static const _tmpoPath = ['udta', 'meta', 'ilst', 'tmpo'];
+
+  static int? _tmpoIn(Uint8List b, int start, int end, int depth) {
+    final bd = ByteData.sublistView(b);
+    var p = start;
+    while (p + 8 <= end) {
+      final size = bd.getUint32(p);
+      if (size < 8 || p + size > end) return null;
+      final type = String.fromCharCodes(b, p + 4, p + 8);
+      if (type == _tmpoPath[depth]) {
+        var body = p + 8;
+        final boxEnd = p + size;
+        if (type == 'tmpo') {
+          // data: tamanho(4) 'data'(4) tipo(4) idioma(4) valor (inteiro de 1 ou 2 bytes)
+          if (body + 17 > boxEnd || String.fromCharCodes(b, body + 4, body + 8) != 'data') return null;
+          final v = body + 16;
+          return boxEnd - v >= 2 ? bd.getUint16(v) : b[v];
+        }
+        // meta costuma ter 4 bytes de versão antes dos filhos (alguns arquivos não têm)
+        if (type == 'meta' && body + 8 <= boxEnd && String.fromCharCodes(b, body + 4, body + 8) != 'hdlr') body += 4;
+        return _tmpoIn(b, body, boxEnd, depth + 1);
+      }
+      p += size;
+    }
+    return null;
   }
 
   /// TBPM do ID3 (a leitura simples não traz). Só arquivos MP3; erro = sem andamento.

@@ -26,7 +26,8 @@ import java.util.concurrent.Executors
 class YtDlpBridge(private val context: Context, messenger: BinaryMessenger) : MethodChannel.MethodCallHandler {
     private val main = Handler(Looper.getMainLooper())
     private val infoPool = Executors.newFixedThreadPool(2)
-    private val downloadPool = Executors.newSingleThreadExecutor()
+    // até 2 downloads ao mesmo tempo (a fila do Dart nunca pede mais; um terceiro só disputaria CPU e disco)
+    private val downloadPool = Executors.newFixedThreadPool(2)
     private var events: EventChannel.EventSink? = null
 
     @Volatile private var ready = false
