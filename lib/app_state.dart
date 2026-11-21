@@ -15,6 +15,7 @@ import 'artist_names.dart';
 import 'artist_photos.dart';
 import 'audio_handler.dart';
 import 'backup.dart';
+import 'cover_embed.dart';
 import 'cover_service.dart';
 import 'crossfade.dart';
 import 'db.dart';
@@ -576,6 +577,57 @@ class AppState extends ChangeNotifier {
     final n = await covers.fetchMissing(tracks, tried, onEach: notifyListeners);
     await prefs.setStringList('coverTried2', tried.toList());
     if (n > 0) notifyListeners();
+    unawaited(embedPendingCovers());
+    return n;
+  }
+
+  static const _coverEmbedKey = 'capaEmbutirPendente';
+  bool _embeddingCovers = false;
+
+  /// Música baixada do YouTube que ainda vai receber a capa do álbum dentro do arquivo.
+  /// Fica guardado: se o app fechar antes, termina na próxima abertura.
+  Future<void> queueCoverEmbed(String path) async {
+    final list = prefs.getStringList(_coverEmbedKey) ?? <String>[];
+    if (!list.contains(path)) await prefs.setStringList(_coverEmbedKey, [...list, path]);
+  }
+
+  /// Embute a capa já baixada do Cover Art Archive nas músicas pendentes, uma por vez, fora da tela.
+  /// Sem capa por enquanto (sem internet): tenta de novo depois. Álbum sem capa no Cover Art Archive: desiste.
+  Future<int> embedPendingCovers() async {
+    if (_embeddingCovers) return 0;
+    final pending = prefs.getStringList(_coverEmbedKey) ?? const <String>[];
+    if (pending.isEmpty) return 0;
+    _embeddingCovers = true;
+    var n = 0;
+    final keep = <String>[];
+    try {
+      final tried = (prefs.getStringList('coverTried2') ?? const []).toSet();
+      final playing = player.current?.path;
+      for (final path in pending) {
+        if (!File(path).existsSync()) continue; // apagada ou movida
+        final t = tracks.where((t) => p.equals(t.path, path)).firstOrNull;
+        // ainda não entrou na Biblioteca, ou está tocando agora: fica para a próxima
+        if (t == null || (playing != null && p.equals(playing, path))) {
+          keep.add(path);
+          continue;
+        }
+        final cover = covers.fileFor(t);
+        if (cover == null) {
+          if (!tried.contains(CoverService.fileKey(t))) keep.add(path);
+          continue;
+        }
+        try {
+          if (await embedCoverInBackground(path, await cover.readAsBytes())) n++;
+        } catch (e) {
+          errorLog.info('Capas', 'Não deu para embutir a capa em ${p.basename(path)}', e);
+        }
+      }
+    } finally {
+      // o que entrou na lista enquanto isso continua lá
+      final now = prefs.getStringList(_coverEmbedKey) ?? const <String>[];
+      await prefs.setStringList(_coverEmbedKey, [...keep, ...now.where((x) => !pending.contains(x))]);
+      _embeddingCovers = false;
+    }
     return n;
   }
 
