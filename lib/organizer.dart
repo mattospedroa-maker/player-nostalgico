@@ -245,7 +245,11 @@ String _usableArtist(String a) {
 
 /// Artista pela pasta: Fonte/Artista/Álbum/música.m4a -> "Artista". Null se o arquivo está solto
 /// ou a pasta é genérica ("Desconhecido", "Download", "Music"...).
-String? folderArtistHint(String path) {
+///
+/// Com [root] (a pasta da fonte), só vale se o arquivo está mesmo em root/Artista/Álbum/: um arquivo
+/// solto na fonte não pode usar o nome da pasta de cima como artista.
+String? folderArtistHint(String path, {String? root}) {
+  if (root != null && (!p.isWithin(root, path) || p.split(p.relative(path, from: root)).length < 3)) return null;
   final album = p.dirname(path);
   final artist = p.basename(p.dirname(album));
   if (artist.isEmpty || artist == unknownArtist || artist == '.' || artist == p.separator) return null;
@@ -327,7 +331,7 @@ class Organizer {
     // 2. Pesquisa o título limpo (e o artista, se souber) no MusicBrainz.
     if (useOnline && title.isNotEmpty) {
       // a pista de artista pode estar errada (nome do canal do YouTube, cantora virtual em vez do produtor...)
-      final folder = folderArtistHint(path);
+      final folder = folderArtistHint(path, root: sourceRoot);
       final found = await mb.lookupSmart(title, artist: artistHint, moreHints: [?folder]);
       // até 60% = o MusicBrainz só achou outro artista: sozinho não mexe, fica com o que a música já diz
       final hadHint = (artistHint ?? '').isNotEmpty || folder != null;

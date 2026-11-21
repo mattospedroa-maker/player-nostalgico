@@ -294,6 +294,8 @@ void main() {
     test('pasta genérica não vira pista', () {
       expect(folderArtistHint('/storage/emulated/0/Download/x.m4a'), isNull);
       expect(folderArtistHint('/m/YouTube/Artista desconhecido/Álbum desconhecido/x.m4a'), isNull);
+      expect(folderArtistHint('/m/Fonte/solta.m4a', root: '/m/Fonte'), isNull);
+      expect(folderArtistHint('/m/Fonte/Tame Impala/Currents/x.m4a', root: '/m/Fonte'), 'Tame Impala');
     });
   });
 }
