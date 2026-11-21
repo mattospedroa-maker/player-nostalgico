@@ -75,7 +75,29 @@ List<String> artistNameVariants(String artist) {
   final stripped = stripChannelSuffix(artist);
   add(stripped);
   add(_splitCamel(stripped));
+  // "The Foo Fighters" -> "Foo Fighters" (títulos de vídeo costumam pôr o "The" a mais)
+  add(stripped.replaceFirst(RegExp(r'^the\s+', caseSensitive: false), ''));
   return out;
+}
+
+/// Começo de título que diz quem toca, sem o " - ": "Foo Fighters w David Lee Roth playing Van Halen",
+/// "Metallica performs Enter Sandman", "Nirvana covering Bowie". ("feat.", "with" e "live at" ficam de fora:
+/// costumam vir depois do nome da música, como em "Bohemian Rhapsody Live at Wembley".)
+final _leadArtist = RegExp(
+    r'^(.{2,40}?)\s+(?:w/|w\.|w|joined\s+by|playing|plays|performs?|performing|covers?|covering)\s+\S',
+    caseSensitive: false);
+
+/// Artista pelo começo do título do vídeo, ou null se o título não começa dizendo quem toca.
+/// Vem antes do nome do canal: vídeo de show postado por um fã ficava com o nome do fã como artista.
+String? artistFromTitleLead(String title) {
+  final m = _leadArtist.firstMatch(title.trim());
+  if (m == null) return null;
+  final lead = m.group(1)!.trim();
+  // "I was playing...", "How to play...": frase, não nome de artista
+  if (lead.split(RegExp(r'\s+')).length > 5 || RegExp(r'^(i|we|me|my|how|when|why|what|this|eu|nós|quando|como)\b', caseSensitive: false).hasMatch(lead)) {
+    return null;
+  }
+  return cleanArtistName(lead);
 }
 
 /// "Artista A, Artista B" (campo artist do YouTube Music) -> "Artista A".
@@ -111,7 +133,15 @@ YtNames guessYoutubeNames(Map<String, dynamic> info) {
     title = parsed.title;
     artist = parsed.artist;
   }
-  artist ??= artistFromChannel(channel);
+  if (artist == null) {
+    final fromChannel = artistFromChannel(channel);
+    final cleanTitle = preCleanYoutubeTitle(videoTitle);
+    // o canal é do artista quando o nome dele aparece no título; senão, o começo do título diz quem toca
+    // canal oficial (Official, VEVO, - Topic) também é do artista
+    final official = channel != stripChannelSuffix(channel);
+    final channelIsArtist = fromChannel != null && (official || cleanTitle.toLowerCase().contains(fromChannel.toLowerCase()));
+    artist = channelIsArtist ? fromChannel : (artistFromTitleLead(cleanTitle) ?? fromChannel);
+  }
   final album = s('album');
   return YtNames(
     artist: (artist == null || artist.isEmpty) ? unknownArtist : artist,

@@ -66,4 +66,24 @@ void main() {
     expect(artistNameVariants('Madrugada'), ['Madrugada']);
     expect(artistNameVariants('Roxy Music').first, 'Roxy Music');
   });
+
+  group('vídeo de show postado por fã', () {
+    test('o começo do título diz quem toca, não o nome do canal', () {
+      final n = guessYoutubeNames({'title': 'The Foo Fighters w David Lee Roth playing Van Halen Panama', 'channel': 'Dan Li'});
+      expect(n.artist, 'The Foo Fighters');
+      expect(guessYoutubeNames({'title': 'Metallica performs Enter Sandman', 'channel': 'Fulano'}).artist, 'Metallica');
+    });
+    test('canal do artista continua valendo', () {
+      expect(guessYoutubeNames({'title': 'Rammstein playing Du Hast in Berlin', 'channel': 'Rammstein'}).artist, 'Rammstein');
+      expect(guessYoutubeNames({'title': 'Du Hast playing in Berlin', 'channel': 'Rammstein Official'}).artist, 'Rammstein');
+      expect(guessYoutubeNames({'title': 'Bohemian Rhapsody Live at Wembley', 'channel': 'Queen'}).artist, 'Queen');
+    });
+    test('frase não vira artista', () {
+      expect(artistFromTitleLead('I was playing guitar all night'), isNull);
+      expect(artistFromTitleLead('Panama'), isNull);
+    });
+    test('"The" a mais vira variante para o MusicBrainz', () {
+      expect(artistNameVariants('The Foo Fighters'), contains('Foo Fighters'));
+    });
+  });
 }
