@@ -328,7 +328,7 @@ class Organizer {
     if (useOnline && title.isNotEmpty) {
       // a pista de artista pode estar errada (nome do canal do YouTube, cantora virtual em vez do produtor...)
       final folder = folderArtistHint(path);
-      final found = await mb.lookupSmart(title, artist: artistHint, moreHints: [if (folder != null) folder]);
+      final found = await mb.lookupSmart(title, artist: artistHint, moreHints: [?folder]);
       // até 60% = o MusicBrainz só achou outro artista: sozinho não mexe, fica com o que a música já diz
       final hadHint = (artistHint ?? '').isNotEmpty || folder != null;
       if (found != null && !(hadHint && found.score <= 60)) return found;

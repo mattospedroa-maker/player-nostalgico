@@ -66,7 +66,7 @@ class _EditTrackScreenState extends State<EditTrackScreen> {
       final mb = MusicBrainzClient();
       final folder = folderArtistHint(widget.track.path);
       final info = await mb.lookupSmart(_title.text.trim(),
-          artist: _artist.text.trim().isEmpty ? null : _artist.text.trim(), moreHints: [if (folder != null) folder]);
+          artist: _artist.text.trim().isEmpty ? null : _artist.text.trim(), moreHints: [?folder]);
       if (info == null) {
         messenger.showSnackBar(const SnackBar(content: Text('O MusicBrainz não achou esta música. Confira o título e o artista.')));
       } else {
