@@ -257,4 +257,43 @@ void main() {
     expect(found?.album, 'Industrial Silence');
     expect(asked.first, contains('MadrugadaOfficial'));
   });
+
+  group('cover lofi no lugar da original', () {
+    Map<String, dynamic> rec(String artist, String album, {List<String> secondary = const []}) => {
+          'score': 100,
+          'title': 'The Less I Know the Better',
+          'artist-credit': [
+            {'name': artist}
+          ],
+          'releases': [
+            {'title': album, 'status': 'Official', 'release-group': {'primary-type': 'Album', 'secondary-types': secondary}}
+          ],
+        };
+
+    test('prefere a original a um cover lofi com a mesma pontuação', () {
+      final info = MusicBrainzClient.parseRecordingSearch({
+        'recordings': [rec('Lofi Fruits Music & Chill Fruits Music', 'Lofi Fruits Music 2021'), rec('Tame Impala', 'Currents')]
+      }, title: 'The Less I Know the Better');
+      expect(info?.artist, 'Tame Impala');
+    });
+
+    test('a pasta do artista vira pista e o resultado só pelo título não fica com 100%', () async {
+      final asked = <String>[];
+      final client = MockClient((req) async {
+        final q = req.url.queryParameters['query']!;
+        asked.add(q);
+        final onlyTitle = !q.contains('artist:');
+        return http.Response(jsonEncode({'recordings': onlyTitle ? [rec('Lofi Fruits Music', 'Lofi 2021')] : []}), 200);
+      });
+      final mb = MusicBrainzClient(client: client, minInterval: Duration.zero);
+      final found = await mb.lookupSmart('The Less I Know the Better', moreHints: [folderArtistHint('/m/Musicas/Tame Impala/Currents/x.m4a')!]);
+      expect(asked.first, contains('artist:"Tame Impala"'));
+      expect(found?.score, lessThanOrEqualTo(60));
+    });
+
+    test('pasta genérica não vira pista', () {
+      expect(folderArtistHint('/storage/emulated/0/Download/x.m4a'), isNull);
+      expect(folderArtistHint('/m/YouTube/Artista desconhecido/Álbum desconhecido/x.m4a'), isNull);
+    });
+  });
 }

@@ -56,22 +56,32 @@ class _EditTrackScreenState extends State<EditTrackScreen> {
     });
   }
 
+  String? _artistHintBefore;
+
   Future<void> _fromMusicBrainz() async {
     if (_busy) return;
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _busy = true);
     try {
       final mb = MusicBrainzClient();
-      final info = await mb.lookupSmart(_title.text.trim(), artist: _artist.text.trim().isEmpty ? null : _artist.text.trim());
+      final folder = folderArtistHint(widget.track.path);
+      final info = await mb.lookupSmart(_title.text.trim(),
+          artist: _artist.text.trim().isEmpty ? null : _artist.text.trim(), moreHints: [if (folder != null) folder]);
       if (info == null) {
         messenger.showSnackBar(const SnackBar(content: Text('O MusicBrainz não achou esta música. Confira o título e o artista.')));
       } else {
+        _artistHintBefore = [_artist.text.trim(), folder ?? ''].firstWhere((h) => h.isNotEmpty && h != unknownArtist, orElse: () => '');
+        if (_artistHintBefore!.isEmpty) _artistHintBefore = null;
         _title.text = info.title;
         _artist.text = info.artist;
         _album.text = info.album;
         final genre = await mb.artistGenre(info.artist);
         if (genre != null && _genre.text.trim().isEmpty) _genre.text = genre;
-        messenger.showSnackBar(SnackBar(content: Text('Preenchido pelo MusicBrainz (${info.score}% de certeza). Confira e salve.')));
+        final hint = _artistHintBefore;
+        messenger.showSnackBar(SnackBar(
+            content: Text(info.score <= 60 && hint != null
+                ? 'O MusicBrainz só achou outro artista (${info.artist}), não $hint. Confira antes de salvar.'
+                : 'Preenchido pelo MusicBrainz (${info.score}% de certeza). Confira e salve.')));
       }
     } catch (e) {
       errorLog.info('Editar música', 'MusicBrainz não respondeu', e);

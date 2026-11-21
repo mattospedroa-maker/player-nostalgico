@@ -322,8 +322,12 @@ class DownloadService extends ChangeNotifier {
       try {
         final n = e.names;
         final hint = n.artist == unknownArtist ? null : n.artist;
-        final found = await mb.lookupSmart(n.title, artist: hint, titleOnlyMinScore: 101);
-        if (found != null && !e.edited && !e.podcast && (hint == null || _sameArtist(found.artist, hint))) {
+        // o nome do canal também é pista (sem ela, uma busca só pelo título trazia covers lofi com o mesmo nome)
+        final channel = e.channel.trim();
+        final found = await mb.lookupSmart(n.title, artist: hint, moreHints: [if (channel.isNotEmpty) channel], titleOnlyMinScore: hint == null ? 90 : 101);
+        final trusted = found != null &&
+            (hint != null ? _sameArtist(found.artist, hint) : (channel.isEmpty ? !MusicBrainzClient.looksLikeCover(found) : found.score > 60));
+        if (found != null && trusted && !e.edited && !e.podcast) {
           e.names = YtNames(artist: found.artist, title: found.title, album: found.album);
           markExisting([e], uncheck: !identical(e, single));
         }
