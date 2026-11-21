@@ -44,6 +44,7 @@ void main() {
       }
       expect(a, containsAll(['--embed-metadata', '--no-playlist', '--no-mtime', '--no-warnings', '--newline']));
       expect(a[a.indexOf('--concurrent-fragments') + 1], '4');
+      expect(a[a.indexOf('--parse-metadata') + 1], r'upload_date:(?P<meta_date>\d{4})'); // só o ano em ©day
       expect(a, isNot(contains('-N'))); // -N é o mesmo que --concurrent-fragments: um só, no máximo 4
       expect(a.last, 'https://youtu.be/abc');
     });
@@ -174,7 +175,7 @@ void main() {
       final t = FileMetadataReader.readTagsSync(f.path)!;
       expect([t.title, t.artist, t.album, t.genre], ['Numb', 'Linkin Park', 'Meteora', '']);
       expect(t.duration, isNotNull); // o áudio continua inteiro
-      expect(t.year, isNull); // não fica ano absurdo
+      expect(t.year, 2026); // a data "20261121" do yt-dlp vira só o ano
     });
 
     test('podcast leva gênero "Podcast"', () {
@@ -200,6 +201,19 @@ void main() {
       final f = copyFixture();
       writeDownloadTags(f.path, title: 'X', artist: 'Y', album: 'Z'); // a escrita reconstrói a lista de tags sem tmpo
       expect(FileMetadataReader.mp4BpmOf(f.path), isNull);
+    });
+
+    test('data "20261121" do yt-dlp em ©day é consertada no lugar (vira o ano), sem mudar o tamanho', () {
+      final f = copyFixture();
+      final before = f.lengthSync();
+      expect(FileMetadataReader.fixMp4Date(f.path), isTrue);
+      expect(f.lengthSync(), before);
+      expect(String.fromCharCodes(f.readAsBytesSync()).contains('2026    '), isTrue);
+      expect(FileMetadataReader.fixMp4Date(f.path), isFalse); // já consertado
+      final t = FileMetadataReader.readTagsSync(f.path)!;
+      expect([t.title, t.year], ['Video Title', 2026]);
+      expect(t.bpm, 128); // o resto do arquivo ficou igual
+      expect(FileMetadataReader.fixMp4Date('test/fixtures/tagged.mp3'), isFalse);
     });
 
     test('.m4a passa em isAudioFile', () {

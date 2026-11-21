@@ -37,12 +37,12 @@ void main() {
     expect(await const FileMetadataReader().cover(f.path), fakeJpeg(1));
   });
 
-  test('arquivo que não é imagem não entra; ano absurdo do yt-dlp não é regravado', () {
+  test('arquivo que não é imagem não entra; data do yt-dlp vira só o ano', () {
     final f = m4a();
     expect(embedCoverSync(f.path, Uint8List.fromList(List.filled(3000, 1))), isFalse);
     expect(imageMime(Uint8List.fromList([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0]))!, 'image/png');
     expect(embedCoverSync(f.path, fakeJpeg()), isTrue); // o fixture tem ©day 20261121
-    expect(FileMetadataReader.readTagsSync(f.path)!.year, isNull);
+    expect(FileMetadataReader.readTagsSync(f.path)!.year, 2026); // ©day 20261121 consertado para o ano
   });
 
   test('em segundo plano (isolate) também grava', () async {
