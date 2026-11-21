@@ -29,4 +29,14 @@ void main() {
       expect(PlayerService.keepQueuedFirst(['q9', 'a'], ['a', 'q9'], (t) => t.startsWith('q')), ['q9', 'a']);
     });
   });
+
+  group('Trocar o mix com uma lista na fila', () {
+    test('sobrou música da lista: o painel troca pelo mix', () {
+      expect(PlayerService.listAhead(['q1', 'album2', 'mix1'], (t) => t.startsWith('q') || t.startsWith('mix')), isTrue);
+    });
+    test('só mix e músicas postas por você: nada da lista', () {
+      expect(PlayerService.listAhead(['q1', 'mix1', 'mix2'], (t) => t.startsWith('q') || t.startsWith('mix')), isFalse);
+      expect(PlayerService.listAhead(<String>[], (_) => false), isFalse);
+    });
+  });
 }
