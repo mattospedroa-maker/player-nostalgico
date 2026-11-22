@@ -99,4 +99,40 @@ void main() {
     expect(summaryRetryWait(2), const Duration(hours: 2));
     expect(summaryRetryWait(7), const Duration(days: 1));
   });
+
+  test('capítulo de espera da live não vira tema; convidado só com nome e sobrenome, depois dos assuntos', () {
+    final t2 = [
+      'SÉRGIO SACANI (BURACOS NEGROS) - Inteligência Ltda. Podcast #1',
+      'SÉRGIO SACANI (CHUVA DE METEOROS) - Inteligência Ltda. Podcast #2',
+      'A ORIGEM DA LUA: SACANI E ALBERTO LINDNER - Inteligência Ltda. Podcast #3',
+      'PAULO MIRANDA (COZINHA) - Inteligência Ltda. Podcast #4',
+      'PAULO SOUZA (FUTEBOL) - Inteligência Ltda. Podcast #5',
+      'CARLOS LIMA (ROBÔS) - Inteligência Ltda. Podcast #6',
+      'ANA DIAS (ROBÔS) - Inteligência Ltda. Podcast #7',
+      'BETO REIS (ROBÔS) - Inteligência Ltda. Podcast #8',
+    ];
+    final e2 = [for (var i = 0; i < t2.length; i++) _ep(100 + i, t2[i])];
+    final live = {
+      for (final e in e2) e.path: const ['Aguarde', 'Vem aí', 'Introdução'],
+    };
+    EpisodeInfo? info2(String path) => EpisodeInfo(chapters: [for (final c in live[path]!) Chapter(startMs: 0, title: c)]);
+    final themes = LocalThemes.build(program, e2, info2);
+    final names = [for (final t in themes) t.name];
+    expect(names, isNot(contains('Aguarde')));
+    expect(names, isNot(contains('Vem')));
+    expect(names, isNot(contains('Paulo')), reason: 'Paulo Miranda e Paulo Souza são pessoas diferentes');
+    expect(names, contains('Robôs'));
+    final sacani = themes.firstWhere((t) => t.name == 'Sérgio Sacani');
+    expect(sacani.files, ['ep100.m4a', 'ep101.m4a', 'ep102.m4a']);
+    expect(themes.indexWhere((t) => t.name == 'Robôs'), lessThan(themes.indexOf(sacani)), reason: 'assunto antes de pessoa');
+  });
+
+  test('nomes de convidados no título', () {
+    expect(LocalThemes.guestNames('DR. GUSTAVO CABRAL (IMUNOLOGISTA)'), ['GUSTAVO CABRAL']);
+    expect(LocalThemes.guestNames('AGRO: ROBERTO RODRIGUES E GUSTAVO SPADOTTI'), ['ROBERTO RODRIGUES', 'GUSTAVO SPADOTTI']);
+    expect(LocalThemes.guestNames('A TECNOLOGIA DOS PRÓXIMOS MIL ANOS'), isEmpty);
+    expect(LocalThemes.isWaitingChapter('Aguarde'), isTrue);
+    expect(LocalThemes.isWaitingChapter('Já vamos começar!'), isTrue);
+    expect(LocalThemes.isWaitingChapter('Buracos negros'), isFalse);
+  });
 }
