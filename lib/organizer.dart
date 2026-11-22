@@ -389,31 +389,78 @@ class Organizer {
   }
 
   /// Move os arquivos selecionados e grava um registro para poder desfazer.
+  ///
+  /// O registro ([undoLogPath]) ganha uma linha logo depois de cada arquivo movido, então ele nunca fica
+  /// para trás dos arquivos. Se um arquivo falhar, os que já foram movidos voltam para o lugar e sai um
+  /// [OrganizeException]; o que não deu para devolver fica no registro, e o Desfazer continua valendo.
   Future<List<MoveRecord>> execute(List<PlanItem> plan, {required String undoLogPath}) async {
     final done = <MoveRecord>[];
-    for (final item in plan.where((i) => i.selected && i.status == PlanStatus.move && i.targetPath != null)) {
-      final src = File(item.sourcePath);
-      if (!src.existsSync()) continue;
-      await Directory(p.dirname(item.targetPath!)).create(recursive: true);
-      await _move(src, item.targetPath!);
-      done.add(MoveRecord(from: item.sourcePath, to: item.targetPath!, artist: item.info!.artist, album: item.info!.album, title: item.info!.title));
+    final log = File(undoLogPath);
+    await log.parent.create(recursive: true);
+    await log.writeAsString('', flush: true); // registro novo antes do primeiro arquivo
+    try {
+      for (final item in plan.where((i) => i.selected && i.status == PlanStatus.move && i.targetPath != null)) {
+        final src = File(item.sourcePath);
+        if (!src.existsSync()) continue;
+        // apareceu um arquivo com o mesmo nome depois da prévia: usa outro nome em vez de substituir
+        final target = _uniqueTarget(item.targetPath!, const {});
+        await Directory(p.dirname(target)).create(recursive: true);
+        await _safeMove(src, target);
+        final m = MoveRecord(from: item.sourcePath, to: target, artist: item.info!.artist, album: item.info!.album, title: item.info!.title);
+        done.add(m);
+        await log.writeAsString('${jsonEncode(m.toJson())}\n', mode: FileMode.append, flush: true);
+      }
+    } catch (e) {
+      errorLog.warn('Organizador', 'Erro ao mover; devolvendo ${done.length} arquivo(s) para o lugar', error: e);
+      final stillMoved = <MoveRecord>[];
+      for (final m in done.reversed) {
+        try {
+          final cur = File(m.to);
+          if (cur.existsSync() && !File(m.from).existsSync()) {
+            await Directory(p.dirname(m.from)).create(recursive: true);
+            await _safeMove(cur, m.from);
+          }
+        } catch (e2) {
+          errorLog.warn('Organizador', 'Não deu para devolver ${p.basename(m.to)}', error: e2);
+          stillMoved.insert(0, m);
+        }
+      }
+      if (stillMoved.isEmpty) {
+        if (log.existsSync()) await log.delete();
+      } else {
+        await log.writeAsString(stillMoved.map((m) => '${jsonEncode(m.toJson())}\n').join(), flush: true);
+      }
+      _removeEmptyDirs(Directory(sourceRoot));
+      throw OrganizeException(e, stillMoved);
     }
-    await File(undoLogPath).writeAsString(jsonEncode(done.map((m) => m.toJson()).toList()));
     _removeEmptyDirs(Directory(sourceRoot));
     return done;
+  }
+
+  /// Lê o registro: uma linha JSON por arquivo (formato novo) ou uma lista JSON (formato antigo).
+  static List<MoveRecord> readLog(String text) {
+    final t = text.trim();
+    if (t.isEmpty) return const [];
+    if (t.startsWith('[')) {
+      return (jsonDecode(t) as List).map((e) => MoveRecord.fromJson(e as Map<String, dynamic>)).toList();
+    }
+    return [
+      for (final line in t.split('\n'))
+        if (line.trim().isNotEmpty) MoveRecord.fromJson(jsonDecode(line) as Map<String, dynamic>),
+    ];
   }
 
   /// Desfaz a última organização (volta cada arquivo para onde estava).
   static Future<List<MoveRecord>> undo(String undoLogPath, String sourceRoot) async {
     final f = File(undoLogPath);
     if (!f.existsSync()) return const [];
-    final list = (jsonDecode(await f.readAsString()) as List).map((e) => MoveRecord.fromJson(e as Map<String, dynamic>)).toList();
+    final list = readLog(await f.readAsString());
     final undone = <MoveRecord>[];
     for (final m in list.reversed) {
       final cur = File(m.to);
       if (!cur.existsSync() || File(m.from).existsSync()) continue;
       await Directory(p.dirname(m.from)).create(recursive: true);
-      await _move(cur, m.from);
+      await _safeMove(cur, m.from);
       undone.add(m);
     }
     await f.delete();
@@ -433,6 +480,26 @@ class Organizer {
     }
   }
 
+  /// Igual a [_move], mas nunca substitui um arquivo que já existe e, na cópia entre partições,
+  /// só apaga o original depois de conferir que a cópia ficou do mesmo tamanho.
+  static Future<void> _safeMove(File src, String target) async {
+    if (File(target).existsSync()) throw FileSystemException('Já existe um arquivo com esse nome', target);
+    try {
+      await src.rename(target);
+      return;
+    } on FileSystemException {
+      // rename falha entre partições (ex.: cartão SD): copia, confere e só então apaga
+    }
+    final copy = await src.copy(target);
+    if (await copy.length() != await src.length()) {
+      try {
+        await copy.delete();
+      } catch (_) {}
+      throw FileSystemException('A cópia ficou incompleta', target);
+    }
+    await src.delete();
+  }
+
   static void _removeEmptyDirs(Directory root) {
     if (!root.existsSync()) return;
     for (final d in root.listSync(recursive: true).whereType<Directory>().toList()
@@ -444,6 +511,17 @@ class Organizer {
       }
     }
   }
+}
+
+/// Erro no meio da organização. [stillMoved]: arquivos que não deu para devolver (ficam no registro).
+class OrganizeException implements Exception {
+  final Object cause;
+  final List<MoveRecord> stillMoved;
+  const OrganizeException(this.cause, this.stillMoved);
+  @override
+  String toString() => stillMoved.isEmpty
+      ? '$cause (nada foi mudado de lugar)'
+      : '$cause (${stillMoved.length} arquivo(s) ficaram na pasta nova; use Desfazer)';
 }
 
 class MoveRecord {
