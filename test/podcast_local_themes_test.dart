@@ -82,4 +82,21 @@ void main() {
     expect(PodcastThemesService.retryWait(2), const Duration(hours: 2));
     expect(PodcastThemesService.retryWait(5), const Duration(days: 1));
   });
+
+  test('resumo: erro temporário tenta de novo, erro fixo não', () {
+    expect(
+      isTemporarySummaryError(
+        'Sem legenda (o YouTube recusou a legenda (HTTP 429); ouvir o vídeo falhou: o vídeo é longo demais), e o Gemini falhou: Gemini respondeu 503: high demand',
+      ),
+      isTrue,
+    );
+    expect(isTemporarySummaryError('O Gemini demorou demais para responder'), isTrue);
+    expect(isTemporarySummaryError('Sem legenda e sem descrição suficiente (o vídeo não tem legenda).'), isFalse);
+    expect(isTemporarySummaryError('Chave do Gemini inválida'), isFalse);
+    expect(isTemporarySummaryError(null), isFalse);
+    expect(summaryRetryWait(0), Duration.zero);
+    expect(summaryRetryWait(1), const Duration(minutes: 30));
+    expect(summaryRetryWait(2), const Duration(hours: 2));
+    expect(summaryRetryWait(7), const Duration(days: 1));
+  });
 }

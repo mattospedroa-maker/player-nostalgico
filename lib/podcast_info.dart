@@ -57,6 +57,29 @@ enum SummaryStatus {
   const SummaryStatus(this.label);
 }
 
+/// O resumo falhou por algo que passa sozinho (Gemini sobrecarregado, limite do plano grátis por minuto,
+/// YouTube recusando a legenda por excesso de pedidos, sem internet)? Então vale tentar de novo mais tarde.
+bool isTemporarySummaryError(String? error) {
+  if (error == null || error.isEmpty) return false;
+  final e = error.toLowerCase();
+  if (e.contains('chave do gemini inválida') || e.contains('sem chave')) return false;
+  return RegExp(r'\b(429|500|502|503|504)\b').hasMatch(e) ||
+      e.contains('demorou demais') ||
+      e.contains('limite do plano') ||
+      e.contains('sem conexão') ||
+      e.contains('high demand') ||
+      e.contains('unavailable') ||
+      e.contains('bloqueou');
+}
+
+/// Espera antes da próxima tentativa automática depois de [fails] falhas temporárias seguidas.
+Duration summaryRetryWait(int fails) => switch (fails) {
+      <= 0 => Duration.zero,
+      1 => const Duration(minutes: 30),
+      2 => const Duration(hours: 2),
+      _ => const Duration(days: 1),
+    };
+
 /// Assuntos fixos (a "vibe" do podcast): o mix "Da mesma vibe" procura outro episódio do mesmo assunto.
 const podcastSubjects = [
   'religião/bíblico', 'ciência', 'tecnologia', 'humor', 'crime real', 'esporte', 'política', 'saúde', 'games',

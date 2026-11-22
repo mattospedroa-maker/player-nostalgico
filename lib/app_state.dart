@@ -142,14 +142,52 @@ class AppState extends ChangeNotifier {
   void _ensureSummary(Track t) {
     if (geminiKey.isEmpty || podcastInfo.isWorking(t.path)) return;
     final info = podcastInfo.infoFor(t.path);
-    if (info != null && (info.hasSummary || info.status == SummaryStatus.noCaptions)) return;
-    // tentou e falhou há pouco: não insiste a cada play (limite do plano grátis)
+    if (info != null && info.hasSummary) return;
+    // já tentou: só tenta de novo sozinho se o erro foi temporário (Gemini sobrecarregado, 429...)
+    final fails = prefs.getInt('summaryFails:${t.path}') ?? 0;
+    if (info != null && info.status != SummaryStatus.none && !isTemporarySummaryError(info.error) && fails > 0) return;
+    // falhou há pouco: espera cada vez mais (30 min, 2 h, 1 dia) para não gastar a cota grátis
     final tried = prefs.getInt('summaryTried:${t.path}') ?? 0;
-    if (DateTime.now().millisecondsSinceEpoch - tried < const Duration(hours: 6).inMilliseconds) return;
+    if (DateTime.now().millisecondsSinceEpoch - tried < summaryRetryWait(fails).inMilliseconds) return;
     final id = info?.videoId.isNotEmpty == true ? info!.videoId : downloads.youtubeIdFor(t.path);
     if (id == null || id.isEmpty) return; // arquivo que não veio do YouTube pelo app: sem como achar a legenda
     prefs.setInt('summaryTried:${t.path}', DateTime.now().millisecondsSinceEpoch);
-    unawaited(podcastInfo.summarize(t.path, 'https://www.youtube.com/watch?v=$id', title: t.title, program: t.artist));
+    unawaited(podcastInfo.summarize(t.path, 'https://www.youtube.com/watch?v=$id', title: t.title, program: t.artist).then((r) {
+      if (r != null && r.hasSummary) {
+        prefs.remove('summaryFails:${t.path}');
+      } else {
+        prefs.setInt('summaryFails:${t.path}', fails + 1);
+      }
+    }));
+  }
+
+  Timer? _summaryRetryTimer;
+
+  /// A cada 15 min (com o app aberto): um episódio cujo resumo falhou por erro temporário tenta de novo.
+  /// Um por vez, e só quando a espera daquele episódio já passou.
+  void _startSummaryRetries() {
+    _summaryRetryTimer?.cancel();
+    _summaryRetryTimer = Timer.periodic(const Duration(minutes: 15), (_) => retryFailedSummaries());
+  }
+
+  /// Escolhe o próximo episódio que falhou por erro temporário e tenta de novo (devolve se começou).
+  bool retryFailedSummaries() {
+    if (geminiKey.isEmpty) return false;
+    for (final t in podcasts) {
+      if (podcastInfo.isWorking(t.path)) return false; // já tem um resumo em andamento
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final t in podcasts) {
+      final info = podcastInfo.infoFor(t.path);
+      if (info == null || info.hasSummary || !isTemporarySummaryError(info.error)) continue;
+      final fails = prefs.getInt('summaryFails:${t.path}') ?? 1;
+      final tried = prefs.getInt('summaryTried:${t.path}') ?? 0;
+      if (now - tried < summaryRetryWait(fails).inMilliseconds) continue;
+      if (fails == 0) prefs.setInt('summaryFails:${t.path}', 1);
+      _ensureSummary(t);
+      return true;
+    }
+    return false;
   }
 
   /// Chave da API do GIPHY (só no celular). Vazia = sem GIPHY, só anime.
@@ -492,6 +530,7 @@ class AppState extends ChangeNotifier {
     // quem já usava o app antes do backup existir: banco com dados = pode começar a copiar para a pasta
     if (prefs.getBool('backupReady') == null && (await db.playlists()).isNotEmpty) await prefs.setBool('backupReady', true);
     await s.reload(rereadGifs: true);
+    s._startSummaryRetries();
     // capas que faltam (inclusive as que falharam antes), em segundo plano
     unawaited(Future<void>.delayed(const Duration(seconds: 5), () => s.fetchMissingCovers()).catchError(_coversFailed));
     // músicas que ficaram sem artista/álbum: algumas por vez, depois das capas
