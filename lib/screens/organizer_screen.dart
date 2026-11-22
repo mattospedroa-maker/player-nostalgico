@@ -80,6 +80,8 @@ class _OrganizerScreenState extends State<OrganizerScreen> {
         });
       }
     } catch (e, st) {
+      // o que não deu para devolver ao lugar: o banco passa a apontar para onde o arquivo está
+      if (e is OrganizeException && e.stillMoved.isNotEmpty) await app.applyMoves(e.stillMoved);
       errorLog.fail('Organizador', 'Erro ao mover as músicas', error: e, stack: st);
       if (mounted) {
         setState(() {

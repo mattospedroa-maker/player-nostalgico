@@ -14,14 +14,24 @@ import 'podcasts.dart';
 class LibraryScanner {
   final AppDb db;
   final MetadataReader metadata;
-  LibraryScanner(this.db, this.metadata);
+
+  /// Como listar a pasta (os testes trocam para simular uma leitura que falha no meio).
+  final Stream<FileSystemEntity> Function(Directory dir) lister;
+  LibraryScanner(this.db, this.metadata, {Stream<FileSystemEntity> Function(Directory dir)? lister})
+      : lister = lister ?? ((d) => d.list(recursive: true, followLinks: false));
 
   /// [force] relê todas (ex.: quando a limpeza de nomes melhora).
   Future<int> scan(String root, {void Function(int done, int total)? onProgress, bool force = false}) async {
     final dir = Directory(root);
     if (!dir.existsSync()) return 0;
     final files = <File>[];
-    await for (final e in dir.list(recursive: true, followLinks: false).handleError((_) {})) {
+    // Se o Android negar alguma pasta, as músicas dela não aparecem na lista. Nesse caso a leitura
+    // não apaga nada do banco: senão elas sumiriam junto com playlists, histórico e GIFs fixados.
+    Object? listError;
+    await for (final e in lister(dir).handleError((Object err) {
+      listError ??= err;
+      errorLog.warn('Biblioteca', 'Não deu para ler uma parte da pasta; nada foi removido da biblioteca', error: err);
+    })) {
       if (e is File && isAudioFile(e.path)) {
         final rel = p.split(p.relative(e.path, from: root));
         if (rel.isNotEmpty && rel.first.toLowerCase() == 'gifs') continue;
@@ -117,6 +127,10 @@ class LibraryScanner {
       if (pending.length >= 50) await flush();
     }
     await flush();
+    if (listError != null) {
+      onProgress?.call(files.length, files.length);
+      return changed;
+    }
     final present = files.map((f) => f.path).toSet();
     final removed = known.keys.where((k) => !present.contains(k)).toList();
     await db.deleteTracksNotIn(present);

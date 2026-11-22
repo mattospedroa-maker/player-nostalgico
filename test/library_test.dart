@@ -73,6 +73,36 @@ void main() {
     expect((await db.playlistTracks(pl)).single.id, after.id);
   });
 
+  test('leitura que falha no meio não apaga músicas que já estavam no banco', () async {
+    touch('tagged.mp3');
+    final escondida = touch('Bloqueada/Sumida.mp3');
+    final scanner = LibraryScanner(db, FakeMeta());
+    await scanner.scan(root.path);
+    final antes = await db.allTracks();
+    expect(antes.length, 2);
+    final sumida = antes.firstWhere((t) => t.path == escondida.path);
+    await db.setFavorite(sumida.id!, true);
+    final pl = await db.createPlaylist('Minha');
+    await db.addToPlaylist(pl, sumida.id!);
+
+    // o Android nega a subpasta: a lista traz a música da raiz e depois dá erro
+    Stream<FileSystemEntity> falha(Directory d) async* {
+      yield File(p.join(root.path, 'tagged.mp3'));
+      throw const FileSystemException('Permissão negada', '/Bloqueada');
+    }
+
+    escondida.parent.deleteSync(recursive: true); // nem aparece mais, como se estivesse bloqueada
+    await LibraryScanner(db, FakeMeta(), lister: falha).scan(root.path);
+    final depois = await db.allTracks();
+    expect(depois.length, 2, reason: 'nada é removido quando a leitura falhou');
+    expect(depois.firstWhere((t) => t.path == escondida.path).favorite, isTrue);
+    expect((await db.playlistTracks(pl)).single.id, sumida.id);
+
+    // leitura completa sem erro: aí sim a música que sumiu sai do banco
+    await scanner.scan(root.path);
+    expect((await db.allTracks()).length, 1);
+  });
+
   test('GIFs: fixados primeiro, depois os da subpasta do artista, depois gerais', () async {
     touch('GIFs/geral.gif');
     touch('GIFs/ryo/miku1.gif');

@@ -350,8 +350,8 @@ class GeminiClient {
   /// Modelos tentados em ordem (o primeiro é o apelido que o Google mantém apontando para o Flash atual).
   static const models = ['gemini-flash-latest', 'gemini-2.5-flash'];
 
-  static Uri urlFor(String model, String key) =>
-      Uri.https('generativelanguage.googleapis.com', '/v1beta/models/$model:generateContent', {'key': key});
+  /// A chave vai no cabeçalho x-goog-api-key, nunca no link (o link pode aparecer em registros de erro).
+  static Uri urlFor(String model) => Uri.https('generativelanguage.googleapis.com', '/v1beta/models/$model:generateContent');
 
   /// Devolve o JSON que a IA escreveu.
   /// [videoUrl]: link do YouTube para o Gemini "assistir" (só o som e uma imagem a cada 20 s, em baixa
@@ -380,7 +380,7 @@ class GeminiClient {
     for (final model in models) {
       final http.Response r;
       try {
-        r = await client.post(urlFor(model, apiKey), headers: {'Content-Type': 'application/json'}, body: body).timeout(timeout);
+        r = await client.post(urlFor(model), headers: {'Content-Type': 'application/json', 'x-goog-api-key': apiKey.trim()}, body: body).timeout(timeout);
       } on TimeoutException {
         throw const GeminiException('O Gemini demorou demais para responder');
       } on SocketException {

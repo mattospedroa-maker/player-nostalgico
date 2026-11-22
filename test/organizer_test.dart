@@ -209,6 +209,65 @@ void main() {
       expect(File(p.join(root.path, 'Ghost', 'Opus Eponymous', 'Elizabeth.mp3')).existsSync(), isTrue);
     });
 
+    Organizer simpleOrg() => Organizer(
+          sourceRoot: root.path,
+          mb: MusicBrainzClient(client: MockClient((_) async => http.Response('{}', 200)), minInterval: Duration.zero),
+          metadata: FakeMeta(const {}),
+        );
+    PlanItem moveItem(String name, String artist) => PlanItem(
+          sourcePath: p.join(root.path, name),
+          targetPath: p.join(root.path, artist, 'Album', name),
+          info: SongInfo(title: p.basenameWithoutExtension(name), artist: artist, album: 'Album', score: 100, source: 'tags'),
+          status: PlanStatus.move,
+        );
+
+    test('falha no meio devolve os arquivos já movidos e não deixa registro errado', () async {
+      for (final n in ['a.mp3', 'b.mp3', 'c.mp3']) {
+        touch(n);
+      }
+      // "C" é um arquivo: a pasta C/Album não pode ser criada e o 3º move falha
+      File(p.join(root.path, 'C')).writeAsStringSync('bloqueio');
+      final undoLog = p.join(root.path, '..', 'undo_${DateTime.now().microsecondsSinceEpoch}.json');
+      final plan = [moveItem('a.mp3', 'A'), moveItem('b.mp3', 'B'), moveItem('c.mp3', 'C')];
+
+      await expectLater(simpleOrg().execute(plan, undoLogPath: undoLog),
+          throwsA(isA<OrganizeException>().having((e) => e.stillMoved, 'stillMoved', isEmpty)));
+      for (final n in ['a.mp3', 'b.mp3', 'c.mp3']) {
+        expect(File(p.join(root.path, n)).existsSync(), isTrue, reason: '$n voltou para o lugar');
+      }
+      expect(Directory(p.join(root.path, 'A')).existsSync(), isFalse);
+      expect(Directory(p.join(root.path, 'B')).existsSync(), isFalse);
+      expect(File(undoLog).existsSync(), isFalse, reason: 'nada ficou movido, então não há o que desfazer');
+    });
+
+    test('registro é gravado a cada arquivo e o Desfazer lê o formato antigo', () async {
+      touch('a.mp3');
+      touch('b.mp3');
+      final undoLog = p.join(root.path, '..', 'undo_${DateTime.now().microsecondsSinceEpoch}.json');
+      final moved = await simpleOrg().execute([moveItem('a.mp3', 'A'), moveItem('b.mp3', 'B')], undoLogPath: undoLog);
+      expect(Organizer.readLog(File(undoLog).readAsStringSync()).map((m) => m.to), moved.map((m) => m.to));
+
+      // registro antigo (uma lista JSON) continua desfazendo
+      File(undoLog).writeAsStringSync(jsonEncode(moved.map((m) => m.toJson()).toList()));
+      final undone = await Organizer.undo(undoLog, root.path);
+      expect(undone.length, 2);
+      expect(File(p.join(root.path, 'a.mp3')).existsSync(), isTrue);
+      expect(File(p.join(root.path, 'b.mp3')).existsSync(), isTrue);
+    });
+
+    test('arquivo que apareceu no destino depois da prévia não é substituído', () async {
+      touch('a.mp3');
+      final plan = [moveItem('a.mp3', 'A')];
+      final existing = File(plan.single.targetPath!)
+        ..createSync(recursive: true)
+        ..writeAsStringSync('outro');
+      final undoLog = p.join(root.path, '..', 'undo_${DateTime.now().microsecondsSinceEpoch}.json');
+      final moved = await simpleOrg().execute(plan, undoLogPath: undoLog);
+      expect(existing.readAsStringSync(), 'outro');
+      expect(p.basename(moved.single.to), 'a (2).mp3');
+      File(undoLog).deleteSync();
+    });
+
     test('não sobrescreve arquivo com o mesmo nome no destino', () async {
       touch('Ghost/Opus Eponymous/Ritual.mp3');
       touch('Ritual.mp3');
