@@ -43,7 +43,7 @@ class ProgramThemes {
   /// Episódios que o usuário mudou de tema (arquivo → nome do tema; '' = Outros). Valem depois de reagrupar.
   final Map<String, String> manual;
 
-  /// Quem agrupou: 'local' (títulos e capítulos, na hora) ou 'ia' (Gemini, melhora os nomes depois).
+  /// Quem agrupou: 'local…' (títulos e capítulos, na hora) ou 'ia' (Gemini, melhora os nomes depois).
   final String source;
   const ProgramThemes(this.signature, this.themes, {this.manual = const {}, this.source = 'ia'});
 
@@ -165,12 +165,12 @@ class PodcastThemesService extends ChangeNotifier {
     var have = themesFor(programDir);
     // 1) na hora, sem internet: temas pelos títulos e capítulos (quando ainda não tem, ou chegou episódio
     //    e os temas atuais também são locais). Temas da IA ficam; episódio novo cai em "Outros" até ela refazer.
-    if ((have == null || (have.signature != sig && !have.byAi)) && _localTried[programDir] != sig) {
+    if ((have == null || (!have.byAi && (have.signature != sig || have.source != LocalThemes.source))) && _localTried[programDir] != sig) {
       _localTried[programDir] = sig;
       final local = LocalThemes.build(program, episodes, infoFor, previous: have?.themes ?? const []);
       if (local.isNotEmpty) {
         await Future<void>.delayed(Duration.zero); // chamado de dentro do build da tela: salva/avisa depois
-        have = ProgramThemes(sig, local, source: 'local').withManual(have?.manual ?? const {});
+        have = ProgramThemes(sig, local, source: LocalThemes.source).withManual(have?.manual ?? const {});
         await _save(programDir, have);
       }
     }
@@ -221,7 +221,8 @@ class PodcastThemesService extends ChangeNotifier {
   static String promptFor(String program, List<Track> episodes, EpisodeInfo? Function(String path) infoFor) {
     final b = StringBuffer()
       ..writeln('Programa de podcast: "$program".')
-      ..writeln('Agrupe os episódios abaixo em temas em comum (assuntos, séries, convidados que voltam, quadros fixos).')
+      ..writeln('Agrupe os episódios abaixo em temas em comum pelo ASSUNTO da conversa (séries e quadros fixos também valem).')
+      ..writeln('- tema de convidado só se os episódios não tiverem outro assunto em comum, e com nome e sobrenome;')
       ..writeln('Regras:')
       ..writeln('- de 2 a ${LocalThemes.maxThemes} temas; cada tema com pelo menos 2 episódios; cada episódio em no máximo 1 tema;')
       ..writeln('- episódio que não combina com nenhum fica de fora (vai para "Outros");')
@@ -236,7 +237,7 @@ class PodcastThemesService extends ChangeNotifier {
       final info = infoFor(episodes[i].path);
       final caps = [
         for (final c in info?.chapters ?? const <Chapter>[])
-          if (c.title.trim().isNotEmpty) c.title.trim(),
+          if (c.title.trim().isNotEmpty && !LocalThemes.isWaitingChapter(c.title)) c.title.trim(),
       ].take(6).toList();
       final title = shortTitle(episodes[i].title, program);
       b.writeln('${i + 1}. $title${caps.isEmpty ? '' : ' | ${caps.join('; ')}'}');

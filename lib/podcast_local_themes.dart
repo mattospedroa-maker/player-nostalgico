@@ -14,6 +14,9 @@ import 'podcast_themes.dart';
 class LocalThemes {
   static const maxThemes = 12;
 
+  /// Versão do jeito de agrupar: quando muda, os temas locais guardados são refeitos (os da IA ficam).
+  static const source = 'local2';
+
   /// Palavras que não dizem nada sobre o assunto (já sem acento).
   static const _stop = {
     // português
@@ -31,7 +34,8 @@ class LocalThemes {
     'podcast', 'podcasts', 'episodio', 'episodios', 'programa', 'temporada', 'introducao', 'abertura', 'encerramento',
     'final', 'finais', 'intro', 'inicio', 'comeco', 'convidado', 'convidada', 'convidados', 'apresentacao', 'perguntas',
     'pergunta', 'resposta', 'respostas', 'recado', 'recados', 'patrocinio', 'patrocinador', 'live', 'ltda', 'oficial',
-    'completo', 'completa', 'especial', 'cortes', 'corte', 'react',
+    'completo', 'completa', 'especial', 'cortes', 'corte', 'react', 'aguarde', 'aguardando', 'espera', 'esperando',
+    'comecar', 'comecando', 'breve', 'chegando',
     // inglês
     'with', 'from', 'that', 'this', 'what', 'about', 'your', 'have', 'will', 'they', 'their', 'there', 'when', 'where',
     'which', 'would', 'could', 'should', 'into', 'just', 'like', 'more', 'than', 'then', 'them', 'were', 'been', 'being',
@@ -42,21 +46,44 @@ class LocalThemes {
   static List<EpisodeTheme> build(String program, List<Track> episodes, EpisodeInfo? Function(String path) infoFor, {List<EpisodeTheme> previous = const []}) {
     final programWords = _words(program).toSet();
     final display = <String, String>{}; // palavra sem acento -> como aparece (com acento)
-    final docs = <Map<String, double>>[]; // por episódio: palavra -> peso
+    final docs = <Map<String, double>>[]; // por episódio: palavra -> peso (só assunto)
+    final namesOf = <List<String>>[]; // por episódio: nomes completos dos convidados ("Sérgio Sacani")
+    final nameWords = <String>{}; // palavras que são nome de gente (ficam fora dos temas de assunto)
 
     for (final e in episodes) {
       final title = _cleanTitle(e.title, program);
-      final chapters = [for (final c in infoFor(e.path)?.chapters ?? const <Chapter>[]) c.title];
+      final names = guestNames(title);
+      for (final x in infoFor(e.path)?.people ?? const <Participant>[]) {
+        if (!x.role.toLowerCase().startsWith('apresent') && x.name.trim().contains(' ')) names.add(x.name.trim());
+      }
+      namesOf.add(names);
+      // título curto inteiro ("BURACOS NEGROS") pode ser assunto: só os nomes com pista forte saem dos assuntos
+      for (final nm in [
+        ...guestNames(title, includeShort: false),
+        for (final x in names)
+          if (!title.contains(x)) x,
+      ]) {
+        nameWords.addAll(_words(nm));
+      }
+    }
+
+    for (var idx = 0; idx < episodes.length; idx++) {
+      final e = episodes[idx];
+      final title = _cleanTitle(e.title, program);
+      final chapters = [
+        for (final c in infoFor(e.path)?.chapters ?? const <Chapter>[])
+          if (!isWaitingChapter(c.title)) c.title,
+      ];
       final w = <String, double>{};
       void add(String text, double value) {
         for (final (key, shown) in _wordsWithDisplay(text)) {
-          if (programWords.contains(key)) continue;
+          if (programWords.contains(key) || nameWords.contains(key)) continue;
           display.putIfAbsent(key, () => shown);
           if ((w[key] ?? 0) < value) w[key] = value;
         }
       }
 
-      // "FULANO DE TAL (ASTROBIÓLOGO)": o que está entre parênteses costuma ser o assunto; fora, o nome do convidado
+      // "FULANO DE TAL (ASTROBIÓLOGO)": o que está entre parênteses costuma ser o assunto
       final inParens = [for (final m in RegExp(r'\(([^)]*)\)').allMatches(title)) m.group(1)!];
       if (inParens.isNotEmpty) {
         add(title.replaceAll(RegExp(r'\([^)]*\)'), ' '), 0.5);
@@ -122,8 +149,83 @@ class LocalThemes {
       final old = previous.where((x) => x.name.toLowerCase() == name.toLowerCase()).firstOrNull;
       out.add(EpisodeTheme(name: name, gifQuery: display[best] ?? best, files: [for (final i in bestSet) p.basename(episodes[i].path)], gif: old?.gif ?? ''));
     }
+    // 2ª rodada: o que sobrou e repete o mesmo convidado vira tema com o nome completo dele. Fica por
+    // último porque o foco é o assunto: só junta por pessoa quem não entrou em nenhum tema de assunto.
+    final usedNames = <String>{};
+    while (out.length < maxThemes) {
+      String? bestKey;
+      var bestSet = <int>[];
+      final shown = <String, String>{};
+      final members = <String, Set<int>>{};
+      for (final i in free) {
+        for (final nm in namesOf[i]) {
+          if (!nm.contains(' ')) continue; // só com pelo menos dois nomes
+          final key = normalizeText(nm);
+          if (usedNames.contains(key)) continue;
+          shown.putIfAbsent(key, () => nm);
+          (members[key] ??= {}).add(i);
+        }
+      }
+      // episódio que cita só o sobrenome ("SACANI E ALBERTO LINDNER") entra no grupo do nome completo
+      for (final key in members.keys) {
+        final last = key.split(' ').last;
+        if (last.length < 4) continue;
+        for (final i in free) {
+          if (namesOf[i].any((nm) => normalizeText(nm).split(' ').last == last)) members[key]!.add(i);
+        }
+      }
+      for (final en in members.entries) {
+        if (en.value.length < 2) continue;
+        if (en.value.length > bestSet.length || (en.value.length == bestSet.length && bestKey != null && en.key.compareTo(bestKey) < 0)) {
+          bestKey = en.key;
+          bestSet = en.value.toList()..sort();
+        }
+      }
+      if (bestKey == null) break;
+      usedNames.add(bestKey);
+      free.removeAll(bestSet);
+      final name = _titleCase(shown[bestKey]!);
+      final old = previous.where((x) => x.name.toLowerCase() == name.toLowerCase()).firstOrNull;
+      out.add(EpisodeTheme(name: name, gifQuery: name, files: [for (final i in bestSet) p.basename(episodes[i].path)], gif: old?.gif ?? ''));
+    }
     return out;
   }
+
+  /// Capítulo de espera de live ("Aguarde", "Vem aí", "Já vamos começar"...): não diz nada do assunto.
+  static bool isWaitingChapter(String title) {
+    final t = normalizeText(title);
+    return RegExp(
+      r'\b(aguard\w*|esper\w*|vem ai|ja (vai|vamos) comecar|vai comecar|comecando|comeca (ja|em)|em breve|pre ?live|'
+      r'starting( soon)?|waiting|soon|chegando|bem vindos?|boas vindas)\b',
+    ).hasMatch(t);
+  }
+
+  /// Nomes de convidados no título: fora dos parênteses ("SÉRGIO SACANI (ASTRONOMIA)"), depois dos dois-pontos
+  /// separados por "e"/vírgula ("AGRO: ROBERTO RODRIGUES E GUSTAVO SPADOTTI") ou o título inteiro curto ("AMIT GOSWAMI").
+  static List<String> guestNames(String title, {bool includeShort = true}) {
+    final out = <String>[];
+    void chunks(String text) {
+      for (var c in text.split(RegExp(r',|\s+e\s+|\s+&\s+|\s+x\s+', caseSensitive: false))) {
+        c = c.replaceAll(RegExp(r'\b(dr|dra|prof|profa|pastor|padre)\.?\s+', caseSensitive: false), '').trim();
+        final words = c.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+        if (words.isEmpty || words.length > 3) continue;
+        if (words.any((w) => RegExp(r'\d').hasMatch(w) || _stop.contains(normalizeText(w)))) continue;
+        out.add(words.join(' '));
+      }
+    }
+
+    final noParens = title.replaceAll(RegExp(r'\([^)]*\)'), ' ').trim();
+    if (noParens.length < title.trim().length) {
+      chunks(noParens.contains(':') ? noParens.substring(noParens.lastIndexOf(':') + 1) : noParens);
+    } else if (title.contains(':')) {
+      chunks(title.substring(title.lastIndexOf(':') + 1));
+    } else if (includeShort && title.trim().split(RegExp(r'\s+')).length <= 3) {
+      chunks(title);
+    }
+    return out;
+  }
+
+  static String _titleCase(String s) => s.toLowerCase().split(' ').map((w) => w.isEmpty ? w : w[0].toUpperCase() + w.substring(1)).join(' ');
 
   /// Tira do título o nome do programa, "Podcast #123", "Ep. 12" e o que vem depois de " - Programa".
   static String _cleanTitle(String title, String program) {
