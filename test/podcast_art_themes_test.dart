@@ -25,6 +25,10 @@ void main() {
       expect(ProgramArtService.avatarFromChannelPage('<meta property="og:image" content="https://i.ytimg.com/vi/a/hq.jpg">'), isNull);
     });
 
+    test('miniatura do vídeo fica ao lado do episódio', () {
+      expect(ProgramArtService.episodeThumbPath('/m/Podcasts/JRE/Ep 1.m4a'), '/m/Podcasts/JRE/Ep 1.jpg');
+    });
+
     test('pede a versão pequena (176 px)', () {
       expect(ProgramArtService.smallAvatar('https://yt3.ggpht.com/abc=s900-c-k-no'), 'https://yt3.ggpht.com/abc=s176-c-k-no');
       expect(ProgramArtService.smallAvatar('https://yt3.ggpht.com/abc'), 'https://yt3.ggpht.com/abc=s176');
@@ -67,6 +71,15 @@ void main() {
       expect(themes.map((t) => t.name), ['Livro de Rute', 'Salmos']);
       expect(themes[1].files, ['ep3.m4a', 'ep4.m4a']);
       expect(themes[0].gifQuery, 'wheat field');
+    });
+
+    test('aceita os números dos episódios vindo como texto', () {
+      final themes = PodcastThemesService.parseThemes({
+        'temas': [
+          {'nome': 'Rute', 'gif': 'wheat', 'eps': ['1', ' 2 ']},
+        ],
+      }, eps);
+      expect(themes.single.files, ['ep1.m4a', 'ep2.m4a']);
     });
 
     test('mantém o GIF de um tema que já existia', () {
