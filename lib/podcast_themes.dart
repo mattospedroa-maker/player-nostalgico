@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -10,6 +11,7 @@ import 'error_log.dart';
 import 'gif_providers.dart';
 import 'models.dart';
 import 'podcast_info.dart';
+import 'podcast_local_themes.dart';
 
 /// Um tema dentro de um programa: nome curto, palavras para o GIF e os episódios (nomes de arquivo).
 class EpisodeTheme {
@@ -40,10 +42,16 @@ class ProgramThemes {
 
   /// Episódios que o usuário mudou de tema (arquivo → nome do tema; '' = Outros). Valem depois de reagrupar.
   final Map<String, String> manual;
-  const ProgramThemes(this.signature, this.themes, {this.manual = const {}});
+
+  /// Quem agrupou: 'local' (títulos e capítulos, na hora) ou 'ia' (Gemini, melhora os nomes depois).
+  final String source;
+  const ProgramThemes(this.signature, this.themes, {this.manual = const {}, this.source = 'ia'});
+
+  bool get byAi => source == 'ia';
 
   Map<String, dynamic> toJson() => {
     'assinatura': signature,
+    'fonte': source,
     'temas': [for (final t in themes) t.toJson()],
     'manual': manual,
   };
@@ -55,6 +63,7 @@ class ProgramThemes {
         if (t is Map) EpisodeTheme.fromJson(t.cast<String, dynamic>()),
     ],
     manual: {for (final e in ((m['manual'] as Map?) ?? const {}).entries) '${e.key}': '${e.value}'},
+    source: '${m['fonte'] ?? 'ia'}',
   );
 
   /// Tema de cada arquivo, com as mudanças do usuário por cima.
@@ -73,7 +82,7 @@ class ProgramThemes {
           ),
       ];
     }
-    return ProgramThemes(signature, out, manual: moves);
+    return ProgramThemes(signature, out, manual: moves, source: source);
   }
 }
 
@@ -96,6 +105,7 @@ class PodcastThemesService extends ChangeNotifier {
   final Map<String, ProgramThemes?> _cache = {};
   final Set<String> _working = {};
   final Map<String, DateTime> _gifTried = {};
+  final Map<String, String> _localTried = {};
 
   bool isWorking(String programDir) => _working.contains(programDir);
 
@@ -129,53 +139,91 @@ class PodcastThemesService extends ChangeNotifier {
     final f = _file(programDir);
     await f.parent.create(recursive: true);
     await f.writeAsString(const JsonEncoder.withIndent('  ').convert(t.toJson()));
+    _cleanGifs(programDir, t);
     notifyListeners();
+  }
+
+  /// Apaga GIFs de temas que não existem mais (a IA renomeou, episódio saiu...).
+  void _cleanGifs(String programDir, ProgramThemes t) {
+    try {
+      final keep = {for (final x in t.themes) x.gif};
+      final dir = Directory(p.join(programDir, folder));
+      if (!dir.existsSync()) return;
+      for (final f in dir.listSync().whereType<File>()) {
+        final name = p.basename(f.path);
+        if (name.startsWith('gif_') && !keep.contains(name)) f.deleteSync();
+      }
+    } catch (e) {
+      errorLog.info('Podcasts', 'Não deu para apagar GIFs de temas antigos', e);
+    }
   }
 
   /// Agrupa (ou reagrupa, se os episódios mudaram) e busca os GIFs que faltam. Em segundo plano.
   Future<void> ensure(String programDir, String program, List<Track> episodes, EpisodeInfo? Function(String path) infoFor, {bool force = false}) async {
-    if (episodes.length < minEpisodes || geminiKey().isEmpty) return;
+    if (episodes.length < minEpisodes) return;
     final sig = signatureOf(episodes);
-    final have = themesFor(programDir);
-    if (!force && have != null && have.signature == sig) {
-      await _fetchGifs(programDir);
-      return;
+    var have = themesFor(programDir);
+    // 1) na hora, sem internet: temas pelos títulos e capítulos (quando ainda não tem, ou chegou episódio
+    //    e os temas atuais também são locais). Temas da IA ficam; episódio novo cai em "Outros" até ela refazer.
+    if ((have == null || (have.signature != sig && !have.byAi)) && _localTried[programDir] != sig) {
+      _localTried[programDir] = sig;
+      final local = LocalThemes.build(program, episodes, infoFor, previous: have?.themes ?? const []);
+      if (local.isNotEmpty) {
+        await Future<void>.delayed(Duration.zero); // chamado de dentro do build da tela: salva/avisa depois
+        have = ProgramThemes(sig, local, source: 'local').withManual(have?.manual ?? const {});
+        await _save(programDir, have);
+      }
     }
-    final key = 'themesTried2:$programDir';
-    // falhou há pouco (sem internet, limite do plano grátis): não insiste a cada vez que a tela redesenha
-    final last = prefs.getInt(key) ?? 0;
-    if (!force && DateTime.now().millisecondsSinceEpoch - last < const Duration(hours: 6).inMilliseconds) return;
+    unawaited(_fetchGifs(programDir));
+    // 2) a IA melhora (nomes e agrupamento) quando estiver disponível
+    final needsAi = have == null || !have.byAi || have.signature != sig;
+    if (!needsAi && !force) return;
+    if (geminiKey().isEmpty) return;
+    final failKey = 'themesFails:$programDir';
+    final lastKey = 'themesTried3:$programDir';
+    final fails = prefs.getInt(failKey) ?? 0;
+    final last = prefs.getInt(lastKey) ?? 0;
+    // falhou: espera cada vez mais (30 min, 2 h, 1 dia) para não gastar a cota grátis nem a bateria
+    if (!force && fails > 0 && DateTime.now().millisecondsSinceEpoch - last < retryWait(fails).inMilliseconds) return;
     if (!_working.add(programDir)) return;
-    // esta função é chamada de dentro do build da tela: avisa a tela só depois
     await Future<void>.delayed(Duration.zero);
     notifyListeners();
     try {
-      final ai = await GeminiClient(client, geminiKey()).generateJson(promptFor(program, episodes, infoFor), timeout: const Duration(minutes: 2));
+      await prefs.setInt(lastKey, DateTime.now().millisecondsSinceEpoch);
+      final ai = await GeminiClient(client, geminiKey()).generateJson(promptFor(program, episodes, infoFor), timeout: const Duration(minutes: 3));
       final themes = parseThemes(ai, episodes, previous: have?.themes ?? const []);
       if (themes.isEmpty) throw const GeminiException('A IA não achou temas em comum entre os episódios');
       await _save(programDir, ProgramThemes(sig, themes).withManual(have?.manual ?? const {}));
-      await prefs.remove(key);
+      await prefs.remove(failKey);
       await prefs.remove('themesError:$programDir');
       await _fetchGifs(programDir);
     } catch (e) {
-      await prefs.setInt(key, DateTime.now().millisecondsSinceEpoch);
+      await prefs.setInt(failKey, fails + 1);
       await prefs.setString('themesError:$programDir', '$e');
-      errorLog.warn('Podcasts', 'Não deu para separar "$program" por tema', error: e);
+      errorLog.info('Podcasts', 'A IA não melhorou os temas de "$program" (fica com os temas pelos títulos)', e);
     } finally {
       _working.remove(programDir);
       notifyListeners();
     }
   }
 
+  /// Espera depois de [fails] falhas seguidas da IA.
+  static Duration retryWait(int fails) => switch (fails) {
+    <= 1 => const Duration(minutes: 30),
+    2 => const Duration(hours: 2),
+    _ => const Duration(days: 1),
+  };
+
   /// Motivo da última falha ao separar por tema (null = sem falha guardada).
   String? errorFor(String programDir) => prefs.getString('themesError:$programDir');
 
+  /// Pedido curto: só o título limpo e até 6 capítulos de cada episódio (84 episódios cabem em poucos KB).
   static String promptFor(String program, List<Track> episodes, EpisodeInfo? Function(String path) infoFor) {
     final b = StringBuffer()
       ..writeln('Programa de podcast: "$program".')
-      ..writeln('Agrupe os episódios abaixo em temas em comum (séries, assuntos, convidados que voltam, quadros fixos).')
+      ..writeln('Agrupe os episódios abaixo em temas em comum (assuntos, séries, convidados que voltam, quadros fixos).')
       ..writeln('Regras:')
-      ..writeln('- de 2 a 8 temas; cada tema com pelo menos 2 episódios; cada episódio em no máximo 1 tema;')
+      ..writeln('- de 2 a ${LocalThemes.maxThemes} temas; cada tema com pelo menos 2 episódios; cada episódio em no máximo 1 tema;')
       ..writeln('- episódio que não combina com nenhum fica de fora (vai para "Outros");')
       ..writeln('- "nome": curto, em português, até 3 palavras, sem repetir o nome do programa;')
       ..writeln(
@@ -183,16 +231,24 @@ class PodcastThemesService extends ChangeNotifier {
         '(ex.: "wheat field sunset", "old library books", "football stadium"); nada de nomes de pessoas.',
       )
       ..writeln('Responda só JSON: {"temas":[{"nome":"...","gif":"...","eps":[1,2]}]}')
-      ..writeln('Episódios:');
+      ..writeln('Episódios (título | capítulos):');
     for (var i = 0; i < episodes.length; i++) {
       final info = infoFor(episodes[i].path);
-      final extra = [
-        if (info != null && info.topics.isNotEmpty) 'temas: ${info.topics.take(5).join(', ')}',
-        if (info != null && info.subject.isNotEmpty) 'assunto: ${info.subject}',
-      ];
-      b.writeln('${i + 1}. ${episodes[i].title}${extra.isEmpty ? '' : ' — ${extra.join(' — ')}'}');
+      final caps = [
+        for (final c in info?.chapters ?? const <Chapter>[])
+          if (c.title.trim().isNotEmpty) c.title.trim(),
+      ].take(6).toList();
+      final title = shortTitle(episodes[i].title, program);
+      b.writeln('${i + 1}. $title${caps.isEmpty ? '' : ' | ${caps.join('; ')}'}');
     }
     return b.toString();
+  }
+
+  /// "FULANO (ASSUNTO) - Programa. Podcast #108" -> "FULANO (ASSUNTO)".
+  static String shortTitle(String title, String program) {
+    final cut = title.lastIndexOf(' - ');
+    final t = cut > 0 && title.substring(cut).toLowerCase().contains(program.toLowerCase().split(' ').first) ? title.substring(0, cut) : title;
+    return t.length > 120 ? t.substring(0, 120) : t;
   }
 
   /// Lê a resposta da IA. Mantém o GIF de um tema que já existia com o mesmo nome.
@@ -219,7 +275,7 @@ class PodcastThemesService extends ChangeNotifier {
           gif: old?.gif ?? '',
         ),
       );
-      if (out.length == 8) break;
+      if (out.length == LocalThemes.maxThemes) break;
     }
     return out;
   }
@@ -250,7 +306,12 @@ class PodcastThemesService extends ChangeNotifier {
           if (res.statusCode != 200 || res.bodyBytes.length < 500) continue;
           await File(p.join(programDir, folder, saved)).writeAsBytes(res.bodyBytes, flush: true);
           taken.add(saved);
-          t = ProgramThemes(t!.signature, [...t.themes]..[i] = th.copyWith(gif: saved), manual: t.manual);
+          t = ProgramThemes(
+            t!.signature,
+            [...t.themes]..[i] = th.copyWith(gif: saved),
+            manual: t.manual,
+            source: t.source,
+          );
           changed = true;
           break;
         }
@@ -266,7 +327,7 @@ class PodcastThemesService extends ChangeNotifier {
   Future<void> move(String programDir, String file, String? toTheme) async {
     final t = themesFor(programDir);
     if (t == null) return;
-    await _save(programDir, ProgramThemes(t.signature, t.themes, manual: t.manual).withManual({...t.manual, file: toTheme ?? ''}));
+    await _save(programDir, t.withManual({...t.manual, file: toTheme ?? ''}));
   }
 
   /// Pasta do programa foi movida/renomeada.
