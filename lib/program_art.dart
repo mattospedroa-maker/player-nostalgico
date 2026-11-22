@@ -53,7 +53,7 @@ class ProgramArtService extends ChangeNotifier {
     if (!force && fileFor(programDir) != null) return false;
     if ((videoId == null || videoId.isEmpty) && (channelUrl == null || channelUrl.isEmpty)) return false;
     if (!_running.add(programDir)) return false;
-    final key = 'programArtTried:$programDir';
+    final key = 'programArtTried2:$programDir';
     try {
       final last = prefs.getInt(key) ?? 0;
       if (!force && DateTime.now().millisecondsSinceEpoch - last < retryAfter.inMilliseconds) return false;
@@ -112,6 +112,64 @@ class ProgramArtService extends ChangeNotifier {
     if (f.existsSync()) await f.delete();
     _changed(programDir);
     if (fileFor(programDir) == null) await ensure(programDir, videoId: videoId, force: true);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Miniatura do vídeo de cada episódio (a imagem grande do Tocando agora)
+
+  /// "Episódio.m4a" -> "Episódio.jpg" (ao lado, como o .json do resumo).
+  static String episodeThumbPath(String audioPath) => '${p.withoutExtension(audioPath)}.jpg';
+
+  final Map<String, File?> _thumbs = {};
+
+  /// Miniatura do vídeo guardada para o episódio, ou null.
+  File? episodeThumb(String audioPath) {
+    if (_thumbs.containsKey(audioPath)) return _thumbs[audioPath];
+    final f = File(episodeThumbPath(audioPath));
+    return _thumbs[audioPath] = f.existsSync() ? f : null;
+  }
+
+  /// Baixa a miniatura do vídeo (uma vez): 1280x720 quando existe, senão 480x360. Devolve se tem agora.
+  Future<bool> ensureEpisodeThumb(String audioPath, String? videoId) async {
+    if (episodeThumb(audioPath) != null) return true;
+    if (videoId == null || videoId.isEmpty || !_running.add(audioPath)) return false;
+    final key = 'episodeThumbTried:$audioPath';
+    try {
+      final last = prefs.getInt(key) ?? 0;
+      if (DateTime.now().millisecondsSinceEpoch - last < const Duration(hours: 12).inMilliseconds) return false;
+      await prefs.setInt(key, DateTime.now().millisecondsSinceEpoch);
+      for (final name in thumbNames) {
+        final res = await client.get(Uri.https('i.ytimg.com', '/vi/$videoId/$name')).timeout(const Duration(seconds: 20));
+        // o YouTube devolve uma imagem cinza pequena (~1 KB) quando aquele tamanho não existe
+        if (res.statusCode != 200 || res.bodyBytes.length < 2048) continue;
+        await File(episodeThumbPath(audioPath)).writeAsBytes(res.bodyBytes, flush: true);
+        _thumbs.remove(audioPath);
+        await prefs.remove(key);
+        notifyListeners();
+        return true;
+      }
+      return false;
+    } catch (e) {
+      errorLog.info('Podcasts', 'Não deu para baixar a miniatura do vídeo do episódio', e);
+      return false;
+    } finally {
+      _running.remove(audioPath);
+    }
+  }
+
+  /// Tamanhos tentados em ordem (o 1º é 16:9 sem faixas pretas; o último sempre existe).
+  static const thumbNames = ['hq720.jpg', 'maxresdefault.jpg', 'hqdefault.jpg'];
+
+  /// O episódio mudou de lugar: a miniatura vai junto.
+  void episodeMoved(String from, String to) {
+    try {
+      final f = File(episodeThumbPath(from));
+      if (f.existsSync()) f.renameSync(episodeThumbPath(to));
+    } catch (e) {
+      errorLog.info('Podcasts', 'Não deu para mover a miniatura junto com o episódio', e);
+    }
+    _thumbs.remove(from);
+    _thumbs.remove(to);
   }
 
   /// Pasta foi renomeada/movida: o cache antigo não vale mais.

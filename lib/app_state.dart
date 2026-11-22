@@ -115,6 +115,13 @@ class AppState extends ChangeNotifier {
     return id != null && id.isNotEmpty ? id : downloads.youtubeIdFor(t.path);
   }
 
+  /// Episódio mudou de lugar: o .json do resumo, a miniatura do vídeo e o id do YouTube vão junto.
+  void _podcastMoved(String from, String to) {
+    podcastInfo.moved(from, to);
+    programArt.episodeMoved(from, to);
+    unawaited(downloads.moved(from, to));
+  }
+
   /// Pasta do programa (Podcasts/`<Programa>`/) pelo arquivo de um episódio.
   static String programDirOf(Track episode) => p.dirname(episode.path);
 
@@ -402,7 +409,7 @@ class AppState extends ChangeNotifier {
         await player.forgetTrack(e.key.id); // o arquivo vai mudar de lugar: sai da fila de músicas
         await Directory(p.dirname(target)).create(recursive: true);
         await Organizer.moveFile(File(from), target);
-        podcastInfo.moved(from, target);
+        _podcastMoved(from, target);
         done.add(MoveRecord(from: from, to: target, artist: e.value, album: e.value, title: e.key.title));
       } catch (err) {
         errorLog.warn('Podcasts', 'Não deu para mover "${p.basename(from)}" para Podcasts', error: err, balloon: true);
@@ -425,7 +432,7 @@ class AppState extends ChangeNotifier {
         await Directory(p.dirname(m.from)).create(recursive: true);
         await Organizer.moveFile(File(m.to), m.from);
         podcastProgress.moved(m.to, m.from);
-        podcastInfo.moved(m.to, m.from);
+        _podcastMoved(m.to, m.from);
       } catch (err) {
         errorLog.warn('Podcasts', 'Não deu para devolver "${p.basename(m.to)}"', error: err, balloon: true);
       }
@@ -792,7 +799,7 @@ class AppState extends ChangeNotifier {
           await Organizer.moveFile(File(path), target);
           await db.moveTrack(path, target);
           podcastProgress.moved(path, target);
-          podcastInfo.moved(path, target);
+          _podcastMoved(path, target);
           removeEmptyParents(root, [path]);
           path = target;
         }

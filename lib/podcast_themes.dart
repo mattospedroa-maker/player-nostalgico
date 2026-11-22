@@ -133,34 +133,42 @@ class PodcastThemesService extends ChangeNotifier {
   }
 
   /// Agrupa (ou reagrupa, se os episódios mudaram) e busca os GIFs que faltam. Em segundo plano.
-  Future<void> ensure(String programDir, String program, List<Track> episodes, EpisodeInfo? Function(String path) infoFor) async {
+  Future<void> ensure(String programDir, String program, List<Track> episodes, EpisodeInfo? Function(String path) infoFor, {bool force = false}) async {
     if (episodes.length < minEpisodes || geminiKey().isEmpty) return;
     final sig = signatureOf(episodes);
     final have = themesFor(programDir);
-    if (have != null && have.signature == sig) {
+    if (!force && have != null && have.signature == sig) {
       await _fetchGifs(programDir);
       return;
     }
+    final key = 'themesTried2:$programDir';
+    // falhou há pouco (sem internet, limite do plano grátis): não insiste a cada vez que a tela redesenha
+    final last = prefs.getInt(key) ?? 0;
+    if (!force && DateTime.now().millisecondsSinceEpoch - last < const Duration(hours: 6).inMilliseconds) return;
     if (!_working.add(programDir)) return;
-    final key = 'themesTried:$programDir';
+    // esta função é chamada de dentro do build da tela: avisa a tela só depois
+    await Future<void>.delayed(Duration.zero);
+    notifyListeners();
     try {
-      // falhou há pouco (sem internet, limite do plano grátis): não insiste a cada vez que abre
-      final last = prefs.getInt(key) ?? 0;
-      if (DateTime.now().millisecondsSinceEpoch - last < const Duration(hours: 6).inMilliseconds) return;
-      notifyListeners();
-      final ai = await GeminiClient(client, geminiKey()).generateJson(promptFor(program, episodes, infoFor), timeout: const Duration(minutes: 1));
+      final ai = await GeminiClient(client, geminiKey()).generateJson(promptFor(program, episodes, infoFor), timeout: const Duration(minutes: 2));
       final themes = parseThemes(ai, episodes, previous: have?.themes ?? const []);
+      if (themes.isEmpty) throw const GeminiException('A IA não achou temas em comum entre os episódios');
       await _save(programDir, ProgramThemes(sig, themes).withManual(have?.manual ?? const {}));
       await prefs.remove(key);
+      await prefs.remove('themesError:$programDir');
       await _fetchGifs(programDir);
     } catch (e) {
       await prefs.setInt(key, DateTime.now().millisecondsSinceEpoch);
+      await prefs.setString('themesError:$programDir', '$e');
       errorLog.warn('Podcasts', 'Não deu para separar "$program" por tema', error: e);
     } finally {
       _working.remove(programDir);
       notifyListeners();
     }
   }
+
+  /// Motivo da última falha ao separar por tema (null = sem falha guardada).
+  String? errorFor(String programDir) => prefs.getString('themesError:$programDir');
 
   static String promptFor(String program, List<Track> episodes, EpisodeInfo? Function(String path) infoFor) {
     final b = StringBuffer()
@@ -195,8 +203,8 @@ class PodcastThemesService extends ChangeNotifier {
       final name = '${t['nome'] ?? ''}'.trim();
       if (name.isEmpty || name.toLowerCase() == 'outros') continue;
       final idx = <int>[
-        for (final n in (t['eps'] as List? ?? const []))
-          if (n is num && n >= 1 && n <= episodes.length && used.add(n.toInt() - 1)) n.toInt() - 1,
+        for (final n in [for (final x in (t['eps'] as List? ?? const [])) x is num ? x.toInt() : int.tryParse('$x'.trim())])
+          if (n != null && n >= 1 && n <= episodes.length && used.add(n - 1)) n - 1,
       ];
       if (idx.length < 2) {
         used.removeAll(idx);

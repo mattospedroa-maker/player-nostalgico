@@ -12,7 +12,7 @@ import '../main.dart' show HomeShell;
 import '../models.dart';
 import '../organizer.dart' show MoveRecord;
 import '../player_service.dart';
-import '../podcast_themes.dart' show EpisodeTheme;
+import '../podcast_themes.dart' show EpisodeTheme, PodcastThemesService;
 import '../podcasts.dart';
 import '../skip_notice.dart' show appMessengerKey, appNavigatorKey;
 import '../theme.dart';
@@ -370,6 +370,7 @@ class PodcastProgramScreen extends StatelessWidget {
     }
     final groups = eps.isEmpty ? const <_ThemeGroup>[] : _themeGroups(app, dir, eps);
     final working = dir.isNotEmpty && app.podcastThemes.isWorking(dir);
+    final themeError = dir.isEmpty || eps.length < PodcastThemesService.minEpisodes ? null : app.podcastThemes.errorFor(dir);
     final canTheme = groups.isNotEmpty;
     final byTheme = canTheme && (app.prefs.getString(_viewKey) ?? 'themes') == 'themes';
 
@@ -423,6 +424,26 @@ class PodcastProgramScreen extends StatelessWidget {
               color: const Color(0xFFFFFFE1),
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
               child: const Text('Separando os episódios por tema…', style: TextStyle(fontSize: 12.5)),
+            )
+          else if (!canTheme && themeError != null)
+            Container(
+              width: double.infinity,
+              color: const Color(0xFFFFFFE1),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              child: Text.rich(
+                TextSpan(children: [
+                  TextSpan(text: 'Não deu para separar por tema: $themeError. '),
+                  WidgetSpan(
+                    alignment: PlaceholderAlignment.baseline,
+                    baseline: TextBaseline.alphabetic,
+                    child: GestureDetector(
+                      onTap: () => app.podcastThemes.ensure(dir, program, eps, app.podcastInfo.infoFor, force: true),
+                      child: const Text('Tentar de novo', style: TextStyle(fontSize: 12.5, color: Xp.linkBlue, decoration: TextDecoration.underline)),
+                    ),
+                  ),
+                ]),
+                style: const TextStyle(fontSize: 12.5),
+              ),
             ),
           Expanded(
             child: ColoredBox(

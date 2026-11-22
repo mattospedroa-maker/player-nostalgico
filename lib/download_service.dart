@@ -579,6 +579,7 @@ class DownloadService extends ChangeNotifier {
       if (e.podcast) {
         final ch = '${e.rawInfo['channel_url'] ?? e.rawInfo['uploader_url'] ?? ''}';
         unawaited(app.programArt.ensure(p.dirname(e.savedPath!), videoId: e.id, channelUrl: ch.isEmpty ? null : ch));
+        unawaited(app.programArt.ensureEpisodeThumb(e.savedPath!, e.id));
       }
       // a capa do álbum (Cover Art Archive) entra no arquivo depois, em segundo plano, sem segurar a fila
       if (!e.podcast) await app.queueCoverEmbed(e.savedPath!);
@@ -659,10 +660,30 @@ class DownloadService extends ChangeNotifier {
 
   /// Vídeo do YouTube de onde veio o arquivo (null = não foi baixado pelo app).
   String? youtubeIdFor(String path) {
-    for (final en in _downloaded.entries) {
+    final all = _downloaded;
+    for (final en in all.entries) {
       if (p.equals(en.value, path)) return en.key;
     }
+    // arquivo movido antes desta lista acompanhar (ex.: de Músicas para Podcasts): mesmo nome de arquivo
+    // e o caminho guardado não existe mais
+    final name = p.basename(path).toLowerCase();
+    for (final en in all.entries) {
+      if (p.basename(en.value).toLowerCase() == name && !File(en.value).existsSync()) return en.key;
+    }
     return null;
+  }
+
+  /// O arquivo mudou de lugar: a lista de baixados acompanha (para achar o vídeo de origem depois).
+  Future<void> moved(String from, String to) async {
+    final m = _downloaded;
+    var changed = false;
+    for (final k in m.keys.toList()) {
+      if (p.equals(m[k]!, from)) {
+        m[k] = to;
+        changed = true;
+      }
+    }
+    if (changed) await app.prefs.setString('ytBaixados', jsonEncode(m));
   }
 
   /// Episódio de podcast: tags com programa/título inteiro e vai para Podcasts/Programa/Episódio.m4a.

@@ -644,7 +644,20 @@ class _GifCarouselState extends State<GifCarousel> {
     final gifs = [...own, ...lend.where((g) => !own.contains(g))].take(maxGifsPerTrack).toList();
     final extras = pod ? const <String>[] : app.gifExtrasFor(widget.track);
     Uint8List? cover;
-    if (gifs.isEmpty && extras.isEmpty) cover = await app.covers.fileFor(widget.track)?.readAsBytes() ?? await app.metadata.cover(widget.track.path);
+    if (pod) {
+      // podcast: a miniatura do vídeo do episódio; enquanto não tem, o ícone do programa
+      final thumb = app.programArt.episodeThumb(widget.track.path);
+      cover = await thumb?.readAsBytes() ?? await app.programArt.fileFor(AppState.programDirOf(widget.track))?.readAsBytes();
+      if (thumb == null) {
+        final track = widget.track;
+        app.programArt.ensureEpisodeThumb(track.path, app.youtubeIdOf(track)).then((ok) {
+          if (ok && mounted && widget.track.id == track.id) _load();
+        });
+      }
+      cover ??= await app.metadata.cover(widget.track.path);
+    } else if (gifs.isEmpty && extras.isEmpty) {
+      cover = await app.covers.fileFor(widget.track)?.readAsBytes() ?? await app.metadata.cover(widget.track.path);
+    }
     if (!mounted) return;
     final showing = _gifs.isEmpty ? null : _gifs[_i.clamp(0, _gifs.length - 1)];
     setState(() {
