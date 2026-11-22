@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
@@ -10,11 +12,13 @@ import '../main.dart' show HomeShell;
 import '../models.dart';
 import '../organizer.dart' show MoveRecord;
 import '../player_service.dart';
+import '../podcast_themes.dart' show EpisodeTheme;
 import '../podcasts.dart';
 import '../skip_notice.dart' show appMessengerKey, appNavigatorKey;
 import '../theme.dart';
 import '../widgets.dart';
 import '../xp_icons.dart';
+import 'track_list_screen.dart' show GroupThumb, ThumbFrame;
 import 'youtube_screen.dart';
 
 // ---------------------------------------------------------------------------
@@ -146,9 +150,15 @@ class PodcastsHome extends StatelessWidget {
 
   void _push(BuildContext context, Widget w) => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => w));
 
+  static const _viewKey = 'groupView_podcasts';
+
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
+    return ListenableBuilder(listenable: app.programArt, builder: (context, _) => _build(context, app));
+  }
+
+  Widget _build(BuildContext context, AppState app) {
     context.select<PlayerService, int?>((p) => p.current?.id); // "onde parou" muda quando o episódio troca
     final eps = app.podcasts;
     final resume = app.podcastProgress.lastInProgress(eps);
@@ -181,18 +191,148 @@ class PodcastsHome extends StatelessWidget {
           ),
         )
       else
-        IpodBox(title: 'Programas', trailing: 'Episódios', children: [
-          for (final pr in programs)
-            IpodRow(
-              icon: XpIcons.radio,
-              label: pr.name,
-              detail: '${pr.episodes.length}',
-              onTap: () => _push(context, PodcastProgramScreen(program: pr.name)),
-            ),
-        ]),
+        ..._programs(context, app, programs),
       const SizedBox(height: 12),
     ]);
   }
+
+  List<Widget> _programs(BuildContext context, AppState app, List<PodcastProgram> programs) {
+    for (final pr in programs) {
+      app.ensureProgramArt(pr.episodes);
+    }
+    final grid = (app.prefs.getString(_viewKey) ?? 'grid') == 'grid';
+    void open(PodcastProgram pr) => _push(context, PodcastProgramScreen(program: pr.name));
+    int fresh(PodcastProgram pr) => pr.episodes.where((e) => !app.podcastProgress.listened(e.path)).length;
+    Widget toggle(String label, String value, bool on) => GestureDetector(
+      onTap: () async {
+        await app.prefs.setString(_viewKey, value);
+        app.touch();
+      },
+      child: Bevel(
+        sunken: on,
+        color: on ? const Color(0xFFE3E1D4) : Xp.beige,
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+        child: Text(label, style: TextStyle(fontSize: 13, fontWeight: on ? FontWeight.bold : FontWeight.normal)),
+      ),
+    );
+    return [
+      Container(
+        margin: const EdgeInsets.only(top: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        decoration: const BoxDecoration(
+          color: Xp.beige,
+          border: Border.symmetric(horizontal: BorderSide(color: Color(0xFFD4D0C8))),
+        ),
+        child: Row(children: [
+          const Text('Exibir:', style: TextStyle(fontSize: 13)),
+          const SizedBox(width: 6),
+          toggle('Miniaturas', 'grid', grid),
+          const SizedBox(width: 4),
+          toggle('Detalhes', 'list', !grid),
+          const Spacer(),
+          Text('${programs.length} ${programs.length == 1 ? 'programa' : 'programas'}', style: const TextStyle(fontSize: 12, color: Color(0xFF666666))),
+        ]),
+      ),
+      if (grid)
+        GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(6, 12, 6, 8),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, mainAxisExtent: 178),
+          itemCount: programs.length,
+          itemBuilder: (context, i) {
+            final pr = programs[i];
+            final n = pr.episodes.length;
+            return GestureDetector(
+              onTap: () => open(pr),
+              onLongPressStart: (d) => showProgramMenu(context, pr, d.globalPosition),
+              child: Column(children: [
+                ThumbFrame(thumb: programThumb(app, pr), size: 104, name: pr.name, badge: 'PODCAST', count: fresh(pr), placeholderIcon: XpIcons.mic),
+                const SizedBox(height: 4),
+                Text(pr.name, maxLines: 2, textAlign: TextAlign.center, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12.5, height: 1.15)),
+                Text('$n ${n == 1 ? 'episódio' : 'episódios'}', maxLines: 1, style: const TextStyle(fontSize: 11, color: Color(0xFF666666))),
+              ]),
+            );
+          },
+        )
+      else ...[
+        const XpColumnHeader('Programa', right: 'Novos / Total'),
+        for (final pr in programs)
+          InkWell(
+            onTap: () => open(pr),
+            onLongPress: () => showProgramMenu(context, pr, null),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0xFFF0F0F0)))),
+              child: Row(children: [
+                ThumbFrame(thumb: programThumb(app, pr), size: 44, name: pr.name, padding: 2, placeholderIcon: XpIcons.mic),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(pr.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14.5)),
+                    Text('Último: ${pr.episodes.first.title}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: Color(0xFF666666))),
+                  ]),
+                ),
+                const SizedBox(width: 6),
+                Text.rich(TextSpan(children: [
+                  TextSpan(text: '${fresh(pr)}', style: TextStyle(fontWeight: FontWeight.bold, color: fresh(pr) > 0 ? Xp.red : const Color(0xFF666666))),
+                  TextSpan(text: ' / ${pr.episodes.length}'),
+                ]), style: const TextStyle(fontSize: 12.5, color: Xp.blueText)),
+              ]),
+            ),
+          ),
+      ],
+    ];
+  }
+}
+
+/// Miniatura do programa: imagem escolhida/ícone do canal > capa do episódio mais recente > microfone cinza.
+GroupThumb programThumb(AppState app, PodcastProgram pr) {
+  final color = colorFor(pr.name);
+  final f = app.programArt.fileFor(AppState.programDirOf(pr.episodes.first));
+  if (f != null) return GroupThumb(file: f, color: color);
+  for (final e in pr.episodes) {
+    final c = app.covers.fileFor(e);
+    if (c != null) return GroupThumb(file: c, color: color);
+  }
+  return GroupThumb(color: color);
+}
+
+void _say(String text) => appMessengerKey.currentState?.showSnackBar(SnackBar(content: Text(text)));
+
+/// Segurar um programa: trocar a imagem ou voltar ao ícone do canal.
+Future<void> showProgramMenu(BuildContext context, PodcastProgram pr, Offset? at) {
+  final app = context.read<AppState>();
+  final dir = AppState.programDirOf(pr.episodes.first);
+  final custom = File(p.join(dir, 'folder.png')).existsSync();
+  String? anyId() {
+    for (final e in pr.episodes) {
+      final id = app.youtubeIdOf(e);
+      if (id != null) return id;
+    }
+    return null;
+  }
+
+  return showXpContextMenu(context, header: pr.name, at: at, items: [
+    XpMenuEntry('Trocar imagem…', () async {
+      final res = await FilePicker.pickFiles(type: FileType.image);
+      final path = res.map((f) => f.path).whereType<String>().firstOrNull;
+      if (path == null) return;
+      try {
+        await app.programArt.setCustom(dir, path);
+      } catch (e) {
+        _say('Não deu para usar essa imagem.');
+      }
+    }, icon: XpIcons.folder),
+    if (custom)
+      XpMenuEntry('Voltar ao ícone do canal', () => app.programArt.resetCustom(dir, videoId: anyId()), icon: XpIcons.refresh)
+    else
+      XpMenuEntry('Baixar ícone do canal de novo', () async {
+        final id = anyId();
+        final ok = id != null && await app.programArt.ensure(dir, videoId: id, force: true);
+        if (!ok) _say(id == null ? 'Esse programa não veio do YouTube pelo app.' : 'Não deu para baixar o ícone agora. Tente mais tarde.');
+      }, icon: XpIcons.youtube),
+  ]);
 }
 
 /// Toca um episódio escolhido na área de Podcasts: depois dele vêm os próximos não ouvidos da lista.
@@ -203,31 +343,122 @@ Future<void> playEpisode(BuildContext context, Track ep, {List<Track> following 
   if (context.mounted) HomeShell.goTo(context, 0);
 }
 
-/// Episódios de um programa.
+/// Episódios de um programa: imagem do programa no topo e os episódios separados por tema (ou todos).
 class PodcastProgramScreen extends StatelessWidget {
   final String program;
   const PodcastProgramScreen({super.key, required this.program});
 
+  static const _viewKey = 'programView';
+
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
+    return ListenableBuilder(
+      listenable: Listenable.merge([app.programArt, app.podcastThemes]),
+      builder: (context, _) => _build(context, app),
+    );
+  }
+
+  Widget _build(BuildContext context, AppState app) {
     final eps = [for (final t in app.podcasts) if (t.artist == program) t]..sort((a, b) => b.addedAt.compareTo(a.addedAt));
+    final pr = PodcastProgram(program, eps);
+    final dir = eps.isEmpty ? '' : AppState.programDirOf(eps.first);
+    final prog = app.podcastProgress;
+    final fresh = eps.where((e) => !prog.listened(e.path)).toList();
+    if (eps.isNotEmpty) {
+      unawaited(app.podcastThemes.ensure(dir, program, eps, app.podcastInfo.infoFor));
+    }
+    final groups = eps.isEmpty ? const <_ThemeGroup>[] : _themeGroups(app, dir, eps);
+    final working = dir.isNotEmpty && app.podcastThemes.isWorking(dir);
+    final canTheme = groups.isNotEmpty;
+    final byTheme = canTheme && (app.prefs.getString(_viewKey) ?? 'themes') == 'themes';
+
+    Widget toggle(String label, String value, bool on) => GestureDetector(
+      onTap: () async {
+        await app.prefs.setString(_viewKey, value);
+        app.touch();
+      },
+      child: Bevel(
+        sunken: on,
+        color: on ? const Color(0xFFE3E1D4) : Xp.beige,
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+        child: Text(label, style: TextStyle(fontSize: 13, fontWeight: on ? FontWeight.bold : FontWeight.normal)),
+      ),
+    );
+
     return Scaffold(
       backgroundColor: Xp.beige,
       body: SafeArea(
         child: Column(children: [
-          XpTitleBar(title: program, icon: XpIcons.radio, actions: [
+          XpTitleBar(title: program, icon: XpIcons.mic, actions: [
             XpTitleButton(icon: Icons.close, tooltip: 'Fechar', onTap: () => Navigator.pop(context)),
           ]),
           XpAddressBar('Podcasts\\$program', icon: XpIcons.mic),
+          if (eps.isNotEmpty)
+            _InfoHeader(
+              thumb: programThumb(app, pr),
+              title: program,
+              lines: [
+                '${eps.length} ${eps.length == 1 ? 'episódio' : 'episódios'} · ${fresh.length} ${fresh.length == 1 ? 'novo' : 'novos'}'
+                    '${canTheme ? ' · ${groups.where((g) => g.theme != null).length} temas' : ''}',
+              ],
+              action: fresh.isEmpty ? null : ('Tocar os não ouvidos', () => playEpisode(context, fresh.last, following: fresh.reversed.toList())),
+              onLongPress: (at) => showProgramMenu(context, pr, at),
+            ),
+          if (canTheme)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+              decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0xFFD4D0C8)))),
+              child: Row(children: [
+                const Text('Exibir:', style: TextStyle(fontSize: 13)),
+                const SizedBox(width: 6),
+                toggle('Por tema', 'themes', byTheme),
+                const SizedBox(width: 4),
+                toggle('Todos os episódios', 'all', !byTheme),
+              ]),
+            ),
+          if (working)
+            Container(
+              width: double.infinity,
+              color: const Color(0xFFFFFFE1),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              child: const Text('Separando os episódios por tema…', style: TextStyle(fontSize: 12.5)),
+            ),
           Expanded(
             child: ColoredBox(
               color: Colors.white,
               child: eps.isEmpty
                   ? const EmptyHint(Icons.mic_off, 'Nenhum episódio neste programa.')
-                  : ListView(padding: EdgeInsets.zero, children: [
-                      for (var i = 0; i < eps.length; i++) EpisodeTile(episode: eps[i], following: eps.sublist(i + 1)),
-                    ]),
+                  : byTheme
+                      ? GridView.builder(
+                          padding: const EdgeInsets.fromLTRB(6, 12, 6, 8),
+                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, mainAxisExtent: 178),
+                          itemCount: groups.length,
+                          itemBuilder: (context, i) {
+                            final g = groups[i];
+                            final n = g.episodes.length;
+                            return GestureDetector(
+                              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                                builder: (_) => PodcastThemeScreen(program: program, themeName: g.theme?.name),
+                              )),
+                              child: Column(children: [
+                                ThumbFrame(
+                                  thumb: g.thumb,
+                                  size: 104,
+                                  name: g.name,
+                                  count: g.episodes.where((e) => !prog.listened(e.path)).length,
+                                  placeholderIcon: g.theme == null ? XpIcons.mic : null,
+                                ),
+                                const SizedBox(height: 4),
+                                Text(g.name, maxLines: 2, textAlign: TextAlign.center, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12.5, height: 1.15)),
+                                Text('$n ${n == 1 ? 'episódio' : 'episódios'}', style: const TextStyle(fontSize: 11, color: Color(0xFF666666))),
+                              ]),
+                            );
+                          },
+                        )
+                      : ListView(padding: EdgeInsets.zero, children: [
+                          for (var i = 0; i < eps.length; i++) EpisodeTile(episode: eps[i], following: eps.sublist(i + 1)),
+                        ]),
             ),
           ),
           XpStatusBar(['${eps.length} ${eps.length == 1 ? 'episódio' : 'episódios'}', 'Podcasts']),
@@ -237,13 +468,152 @@ class PodcastProgramScreen extends StatelessWidget {
   }
 }
 
+/// Um quadradinho da tela do programa: um tema (com GIF) ou "Outros" ([theme] null).
+class _ThemeGroup {
+  final EpisodeTheme? theme;
+  final List<Track> episodes;
+  final GroupThumb thumb;
+  const _ThemeGroup(this.theme, this.episodes, this.thumb);
+  String get name => theme?.name ?? 'Outros';
+}
+
+/// Temas guardados do programa aplicados aos episódios de agora. Vazio = programa sem temas (ainda).
+List<_ThemeGroup> _themeGroups(AppState app, String dir, List<Track> eps) {
+  final saved = app.podcastThemes.themesFor(dir);
+  if (saved == null || saved.themes.isEmpty) return const [];
+  final byFile = {for (final e in eps) p.basename(e.path): e};
+  final placed = <String>{};
+  final out = <_ThemeGroup>[];
+  for (final t in saved.themes) {
+    final list = [for (final f in t.files) if (byFile[f] != null && placed.add(f)) byFile[f]!]..sort((a, b) => b.addedAt.compareTo(a.addedAt));
+    if (list.isEmpty) continue;
+    final gif = app.podcastThemes.gifFile(dir, t);
+    out.add(_ThemeGroup(t, list, GroupThumb(file: gif, isGif: gif != null, color: colorFor(t.name))));
+  }
+  final rest = [for (final e in eps) if (!placed.contains(p.basename(e.path))) e];
+  if (rest.isNotEmpty) out.add(_ThemeGroup(null, rest, GroupThumb(color: colorFor('Outros'))));
+  return out;
+}
+
+/// Episódios de um tema (ou de "Outros", [themeName] null).
+class PodcastThemeScreen extends StatelessWidget {
+  final String program;
+  final String? themeName;
+  const PodcastThemeScreen({super.key, required this.program, required this.themeName});
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
+    return ListenableBuilder(listenable: app.podcastThemes, builder: (context, _) => _build(context, app));
+  }
+
+  Widget _build(BuildContext context, AppState app) {
+    final eps = [for (final t in app.podcasts) if (t.artist == program) t];
+    final dir = eps.isEmpty ? '' : AppState.programDirOf(eps.first);
+    final groups = eps.isEmpty ? const <_ThemeGroup>[] : _themeGroups(app, dir, eps);
+    final g = groups.where((x) => x.theme?.name == themeName).firstOrNull;
+    final list = g?.episodes ?? const <Track>[];
+    final name = themeName ?? 'Outros';
+    final fresh = list.where((e) => !app.podcastProgress.listened(e.path)).toList();
+    final others = [for (final x in groups) if (x.theme != null && x.theme!.name != themeName) x.theme!.name];
+    // ordem de ouvir: do mais antigo para o mais novo
+    final inOrder = list.reversed.toList();
+    return Scaffold(
+      backgroundColor: Xp.beige,
+      body: SafeArea(
+        child: Column(children: [
+          XpTitleBar(title: name, icon: XpIcons.mic, actions: [
+            XpTitleButton(icon: Icons.close, tooltip: 'Fechar', onTap: () => Navigator.pop(context)),
+          ]),
+          XpAddressBar('Podcasts\\$program\\$name', icon: XpIcons.mic),
+          if (g != null)
+            _InfoHeader(
+              thumb: g.thumb,
+              title: name,
+              placeholderIcon: g.theme == null ? XpIcons.mic : null,
+              lines: ['${list.length} ${list.length == 1 ? 'episódio' : 'episódios'} · ${fresh.length} ${fresh.length == 1 ? 'novo' : 'novos'}'],
+              action: list.isEmpty ? null : ('Tocar este tema', () => playEpisode(context, inOrder.first, following: inOrder)),
+            ),
+          Expanded(
+            child: ColoredBox(
+              color: Colors.white,
+              child: list.isEmpty
+                  ? const EmptyHint(Icons.mic_off, 'Nenhum episódio neste tema.')
+                  : ListView(padding: EdgeInsets.zero, children: [
+                      // tema costuma ser série: do mais antigo para o mais novo (parte 1, parte 2...)
+                      for (var i = 0; i < inOrder.length; i++)
+                        EpisodeTile(
+                          episode: inOrder[i],
+                          following: inOrder.sublist(i + 1),
+                          moveTargets: [...others, if (themeName != null) null],
+                          onMove: (to) => app.podcastThemes.move(dir, p.basename(inOrder[i].path), to),
+                        ),
+                    ]),
+            ),
+          ),
+          XpStatusBar(['${list.length} ${list.length == 1 ? 'episódio' : 'episódios'}', program]),
+        ]),
+      ),
+    );
+  }
+}
+
+/// Topo estilo "Informações do álbum" do WMP: imagem grande, nome, contagem e um link de ação.
+class _InfoHeader extends StatelessWidget {
+  final GroupThumb thumb;
+  final String title;
+  final List<String> lines;
+  final (String, VoidCallback)? action;
+  final void Function(Offset at)? onLongPress;
+  final XpIcons? placeholderIcon;
+  const _InfoHeader({required this.thumb, required this.title, required this.lines, this.action, this.onLongPress, this.placeholderIcon = XpIcons.mic});
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    onLongPressStart: onLongPress == null ? null : (d) => onLongPress!(d.globalPosition),
+    child: Container(
+      padding: const EdgeInsets.all(10),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Xp.bgTop, Xp.bgBottom]),
+        border: Border(bottom: BorderSide(color: Color(0xFF9FB3D6))),
+      ),
+      child: Row(children: [
+        ThumbFrame(thumb: thumb, size: 76, name: title, padding: 3, badge: '', placeholderIcon: placeholderIcon),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: Xp.navy)),
+            for (final l in lines) Text(l, style: const TextStyle(fontSize: 12.5, color: Xp.blueText)),
+            if (action != null)
+              InkWell(
+                onTap: action!.$2,
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 3),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    const XpIcon(XpIcons.play, size: 14),
+                    const SizedBox(width: 4),
+                    Text(action!.$1, style: const TextStyle(fontSize: 13, color: Xp.linkBlue)),
+                  ]),
+                ),
+              ),
+          ]),
+        ),
+      ]),
+    ),
+  );
+}
+
 /// Linha de episódio: título, duração e onde parou ("novo", "parou em 1:02:10", "ouvido ✓").
 class EpisodeTile extends StatelessWidget {
   final Track episode;
 
   /// Episódios que tocam depois dele quando tocado daqui.
   final List<Track> following;
-  const EpisodeTile({super.key, required this.episode, required this.following});
+
+  /// Temas para onde dá para mudar o episódio (null = "Outros"). Vazio = sem a opção no menu.
+  final List<String?> moveTargets;
+  final void Function(String? toTheme)? onMove;
+  const EpisodeTile({super.key, required this.episode, required this.following, this.moveTargets = const [], this.onMove});
 
   @override
   Widget build(BuildContext context) {
@@ -276,6 +646,10 @@ class EpisodeTile extends StatelessWidget {
                   prog.setListened(episode.path, true);
                   app.touch();
                 }, icon: XpIcons.check),
+          if (onMove != null && moveTargets.isNotEmpty) ...[
+            null,
+            for (final to in moveTargets) XpMenuEntry('Mover para: ${to ?? 'Outros'}', () => onMove!(to), icon: XpIcons.folder),
+          ],
         ]),
         child: InkWell(
           onTap: () => playEpisode(context, episode, following: following),
@@ -283,7 +657,7 @@ class EpisodeTile extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
             decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0xFFF0F0F0)))),
             child: Row(children: [
-              const XpIcon(XpIcons.mic, size: 30),
+              _art(app),
               const SizedBox(width: 9),
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -296,6 +670,18 @@ class EpisodeTile extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+
+  /// Imagem do programa pequenininha no lugar do microfone (se tiver).
+  Widget _art(AppState app) {
+    final f = app.programArt.fileFor(AppState.programDirOf(episode));
+    if (f == null) return const XpIcon(XpIcons.mic, size: 30);
+    return Container(
+      width: 30,
+      height: 30,
+      decoration: BoxDecoration(border: Border.all(color: const Color(0xFFB8C4D8))),
+      child: Image.file(f, fit: BoxFit.cover, cacheWidth: 90, gaplessPlayback: true, errorBuilder: (_, _, _) => const XpIcon(XpIcons.mic, size: 26)),
     );
   }
 }

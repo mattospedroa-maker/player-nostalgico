@@ -576,6 +576,10 @@ class DownloadService extends ChangeNotifier {
       e.savedPath = e.podcast ? await _saveEpisode(File(audio), e.names, root) : await _saveToLibrary(File(audio), e.names, root);
       e.sizeBytes = File(e.savedPath!).lengthSync();
       await _rememberDownload(e.id, e.savedPath!);
+      if (e.podcast) {
+        final ch = '${e.rawInfo['channel_url'] ?? e.rawInfo['uploader_url'] ?? ''}';
+        unawaited(app.programArt.ensure(p.dirname(e.savedPath!), videoId: e.id, channelUrl: ch.isEmpty ? null : ch));
+      }
       // a capa do álbum (Cover Art Archive) entra no arquivo depois, em segundo plano, sem segurar a fila
       if (!e.podcast) await app.queueCoverEmbed(e.savedPath!);
       e.status = YtStatus.done;

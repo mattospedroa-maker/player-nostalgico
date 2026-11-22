@@ -455,7 +455,26 @@ class ThumbFrame extends StatelessWidget {
   final String name;
   final bool selected;
   final double padding;
-  const ThumbFrame({super.key, required this.thumb, required this.size, required this.name, this.selected = false, this.padding = 4});
+
+  /// Selo no canto (padrão: "GIF" quando a miniatura é um GIF; '' = nenhum).
+  final String? badge;
+
+  /// Bolinha vermelha no canto de cima (ex.: episódios não ouvidos). 0 = sem bolinha.
+  final int count;
+
+  /// Sem imagem: este ícone sobre cinza claro, em vez do quadro colorido com o nome.
+  final XpIcons? placeholderIcon;
+  const ThumbFrame({
+    super.key,
+    required this.thumb,
+    required this.size,
+    required this.name,
+    this.selected = false,
+    this.padding = 4,
+    this.badge,
+    this.count = 0,
+    this.placeholderIcon,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -463,7 +482,7 @@ class ThumbFrame extends StatelessWidget {
     final inner = f != null
         ? Image.file(f, fit: BoxFit.cover, cacheWidth: (size * 2.5).round(), gaplessPlayback: true, errorBuilder: (_, _, _) => _placeholder())
         : _placeholder();
-    return Container(
+    final frame = Container(
       width: size,
       height: size,
       padding: EdgeInsets.all(padding),
@@ -476,7 +495,7 @@ class ThumbFrame extends StatelessWidget {
         fit: StackFit.expand,
         children: [
           inner,
-          if (thumb.isGif && size >= 60)
+          if ((badge ?? (thumb.isGif ? 'GIF' : '')).isNotEmpty && size >= 60)
             Positioned(
               right: 2,
               bottom: 2,
@@ -486,18 +505,43 @@ class ThumbFrame extends StatelessWidget {
                   color: Xp.navy,
                   border: Border.all(color: const Color(0xFF9CB8FF)),
                 ),
-                child: const Text(
-                  'GIF',
-                  style: TextStyle(color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.bold),
+                child: Text(
+                  badge ?? 'GIF',
+                  style: const TextStyle(color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.bold),
                 ),
               ),
             ),
         ],
       ),
     );
+    if (count <= 0 || size < 60) return frame;
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        frame,
+        Positioned(
+          right: -6,
+          top: -6,
+          child: Container(
+            constraints: const BoxConstraints(minWidth: 21),
+            height: 21,
+            padding: const EdgeInsets.symmetric(horizontal: 5),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(color: Xp.red, borderRadius: BorderRadius.circular(11), border: Border.all(color: Colors.white)),
+            child: Text(count > 99 ? '99+' : '$count', style: const TextStyle(color: Colors.white, fontSize: 11.5, fontWeight: FontWeight.bold)),
+          ),
+        ),
+      ],
+    );
   }
 
-  Widget _placeholder() => Container(
+  Widget _placeholder() => placeholderIcon != null
+      ? Container(
+          color: const Color(0xFFDADDE3),
+          alignment: Alignment.center,
+          child: XpIcon(placeholderIcon!, size: size * .45),
+        )
+      : Container(
     decoration: BoxDecoration(
       gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [thumb.color, Color.lerp(thumb.color, Colors.black, .5)!]),
     ),

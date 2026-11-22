@@ -38,6 +38,8 @@ import 'play_stats.dart';
 import 'player_service.dart';
 import 'podcast_info.dart';
 import 'podcasts.dart';
+import 'podcast_themes.dart';
+import 'program_art.dart';
 import 'recommender.dart';
 import 'visual_search.dart';
 
@@ -99,6 +101,35 @@ class AppState extends ChangeNotifier {
     apiKey: () => geminiKey,
     fetchInfo: (url) => downloads.ytdlp.info(url, playlist: false),
   );
+
+  /// Imagem de cada programa de podcast (ícone do canal do YouTube, guardado na pasta do programa).
+  late final ProgramArtService programArt = ProgramArtService(client: gifFetcher.client, prefs: prefs);
+
+  /// Episódios de cada programa separados por tema (Gemini + um GIF por tema).
+  late final PodcastThemesService podcastThemes =
+      PodcastThemesService(client: gifFetcher.client, prefs: prefs, geminiKey: () => geminiKey, giphy: () => giphy);
+
+  /// Id do vídeo do YouTube de onde veio o episódio (do .json do resumo ou da lista de baixados).
+  String? youtubeIdOf(Track t) {
+    final id = podcastInfo.infoFor(t.path)?.videoId;
+    return id != null && id.isNotEmpty ? id : downloads.youtubeIdFor(t.path);
+  }
+
+  /// Pasta do programa (Podcasts/`<Programa>`/) pelo arquivo de um episódio.
+  static String programDirOf(Track episode) => p.dirname(episode.path);
+
+  /// Baixa o ícone do canal dos programas que ainda não têm (uma vez; falhou = tenta de novo dias depois).
+  void ensureProgramArt(List<Track> episodes) {
+    for (final t in episodes) {
+      final dir = programDirOf(t);
+      if (programArt.fileFor(dir) != null) return;
+      final id = youtubeIdOf(t);
+      if (id != null) {
+        unawaited(programArt.ensure(dir, videoId: id));
+        return;
+      }
+    }
+  }
 
   /// Tocou um episódio sem resumo (baixado antes do resumo existir): faz agora, em segundo plano.
   void _ensureSummary(Track t) {
