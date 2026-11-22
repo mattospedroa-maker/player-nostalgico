@@ -32,6 +32,7 @@ import 'library_scanner.dart';
 import 'metadata.dart';
 import 'models.dart';
 import 'mood.dart';
+import 'info_retry.dart';
 import 'organizer.dart';
 import 'play_stats.dart';
 import 'player_service.dart';
@@ -455,6 +456,10 @@ class AppState extends ChangeNotifier {
     await s.reload(rereadGifs: true);
     // capas que faltam (inclusive as que falharam antes), em segundo plano
     unawaited(Future<void>.delayed(const Duration(seconds: 5), () => s.fetchMissingCovers()).catchError(_coversFailed));
+    // músicas que ficaram sem artista/álbum: algumas por vez, depois das capas
+    unawaited(Future<void>.delayed(const Duration(seconds: 40), () => s.retryMissingInfo()).catchError((Object e) {
+      errorLog.info('Informações', 'Nova tentativa de artista/álbum falhou', e);
+    }));
     // Android 13+: a notificação com os controles precisa desta permissão
     if (Platform.isAndroid) {
       unawaited(Permission.notification.request().catchError((Object e) {
@@ -898,9 +903,85 @@ class AppState extends ChangeNotifier {
     }).catchError((Object e) {
       errorLog.info('Fotos', 'Busca de fotos do artista falhou', e);
     });
-    if (!autoGifs || t.id == _lastAutoFetchId) return;
-    _lastAutoFetchId = t.id;
+    if (InfoRetry.missing(fresh) && _infoDue(fresh)) {
+      // sem artista/álbum: tenta as informações primeiro; se vierem, o editar já refaz os GIFs com o nome certo
+      unawaited(retryInfo(fresh).then((renamed) {
+        if (!renamed) _autoGifsFor(t.id, byId(t.id) ?? fresh);
+      }).catchError((Object e) {
+        errorLog.info('Informações', 'Nova tentativa de buscar artista/álbum falhou', e);
+        _autoGifsFor(t.id, fresh);
+      }));
+      return;
+    }
+    _autoGifsFor(t.id, fresh);
+  }
+
+  void _autoGifsFor(int? id, Track fresh) {
+    if (!autoGifs || id == _lastAutoFetchId) return;
+    _lastAutoFetchId = id;
     gifFetcher.fetchFor(fresh).catchError(_gifFetchFailed);
+  }
+
+  // ---------- informações que faltaram (artista/álbum) ----------
+  (int, DateTime?) _infoTries(Track t) {
+    final raw = prefs.getString('infoTry:${t.path}');
+    final parts = raw?.split('|');
+    if (parts == null || parts.length != 2) return (0, null);
+    final ms = int.tryParse(parts[1]);
+    return (int.tryParse(parts[0]) ?? 0, ms == null ? null : DateTime.fromMillisecondsSinceEpoch(ms));
+  }
+
+  bool _infoDue(Track t) {
+    final (tries, last) = _infoTries(t);
+    return InfoRetry.due(tries, last, DateTime.now());
+  }
+
+  bool _retryingInfo = false;
+
+  /// Tenta de novo achar artista/álbum de uma música que ficou sem (MusicBrainz, com a pasta e o nome do
+  /// arquivo como pista). Se achar, grava como o Editar faz: tags, pasta Artista/Álbum e GIFs refeitos.
+  /// Devolve true se o artista ou o título mudou (aí os GIFs já foram refeitos). Sem internet não conta como tentativa (tenta na próxima vez que tocar).
+  Future<bool> retryInfo(Track t) async {
+    if (_retryingInfo || isPodcast(t)) return false;
+    _retryingInfo = true;
+    try {
+      final hints = InfoRetry.hints(t, root: sourceRoot);
+      final (tries, _) = _infoTries(t);
+      SongInfo? found;
+      var reached = true;
+      if (hints.isNotEmpty) {
+        try {
+          found = await MusicBrainzClient().lookupSmart(t.title, artist: hints.first, moreHints: hints.skip(1).toList());
+        } catch (e) {
+          reached = false; // sem internet / MusicBrainz ocupado
+          errorLog.info('Informações', 'MusicBrainz não respondeu (${t.title}); tento de novo depois', e);
+        }
+      }
+      final change = InfoRetry.decide(t, found, hints);
+      if (reached || change != null) {
+        await prefs.setString('infoTry:${t.path}', '${tries + 1}|${DateTime.now().millisecondsSinceEpoch}');
+      }
+      if (change == null) return false;
+      if (change.artist == t.artist && change.album == t.album && change.title == t.title) return false;
+      final warning = await editTrack(t, title: change.title, artist: change.artist, album: change.album, genre: t.genre, year: t.year);
+      if (warning != null) errorLog.info('Informações', warning);
+      return change.artist.toLowerCase() != t.artist.toLowerCase() || change.title.toLowerCase() != t.title.toLowerCase();
+    } finally {
+      _retryingInfo = false;
+    }
+  }
+
+  /// Ao abrir o app: tenta de novo as informações de poucas músicas que ficaram sem (no máximo [max],
+  /// uma por vez, no ritmo do MusicBrainz). As outras esperam a vez delas ou tocar.
+  Future<void> retryMissingInfo({int max = 5}) async {
+    var done = 0;
+    for (final t in List.of(tracks)) {
+      if (done >= max) break;
+      if (isPodcast(t) || !InfoRetry.missing(t) || !_infoDue(t)) continue;
+      if (InfoRetry.hints(t, root: sourceRoot).isEmpty) continue; // sem pista nenhuma: só tentaria adivinhar
+      done++;
+      await retryInfo(t);
+    }
   }
 
   /// O carrossel avisa qual GIF está passando; ele vira a arte da notificação e da tela de bloqueio.
