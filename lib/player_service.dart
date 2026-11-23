@@ -342,8 +342,10 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
 
   Future<void> togglePlay() async {
     if (player.playing) {
-      crossfader.cancel();
+      // pausa primeiro: se o segundo player estava soando a música, ele para junto e o principal
+      // (já pausado) é quem volta a tocar depois, sem os dois soarem juntos nem por um instante
       await player.pause();
+      crossfader.cancel();
       _savePodcastPosition();
     } else {
       unawaited(player.play());
