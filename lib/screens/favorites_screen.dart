@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
+import '../list_search.dart';
 import '../main.dart';
 import '../models.dart';
 import '../player_service.dart';
@@ -21,7 +22,7 @@ class FavoritesScreen extends StatefulWidget {
 
 enum _Sort { recent, plays, az, artist }
 
-class _FavoritesScreenState extends State<FavoritesScreen> {
+class _FavoritesScreenState extends State<FavoritesScreen> with InListSearch {
   _Sort _sort = _Sort.recent;
   Map<int, int> _playCounts = const {};
   List<Recommendation> _mix = const [], _radio = const [], _rediscover = const [];
@@ -84,6 +85,14 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
         favs.sort((a, b) => a.artist.toLowerCase().compareTo(b.artist.toLowerCase()));
     }
     final top = [...app.tracks.where((t) => (_playCounts[t.id] ?? 0) > 0)]..sort((a, b) => (_playCounts[b.id] ?? 0).compareTo(_playCounts[a.id] ?? 0));
+    // lupa: cada grupo mostra só o que bate (título, artista, álbum) e fica aberto enquanto busca
+    bool hit(Track t) => !searching || textMatches(searchQuery, [t.title, t.artist, t.album]);
+    List<Recommendation> recs(List<Recommendation> l) => searching ? [for (final r in l) if (hit(r.track)) r] : l;
+    final favsAll = favs;
+    final favsShown = searching ? favs.where(hit).toList() : favs;
+    final topShown = searching ? top.take(50).where(hit).toList() : top;
+    final rediscover = recs(_rediscover), radio = recs(_radio), mix = recs(_mix);
+    final hl = searching ? searchQuery : null;
     const sorts = [(_Sort.recent, 'Recentes'), (_Sort.plays, 'Mais tocadas'), (_Sort.az, 'A–Z'), (_Sort.artist, 'Artista')];
 
     return Column(
@@ -91,7 +100,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
         XpTitleBar(
           title: 'Favoritas e Para você',
           icon: XpIcons.heart,
-          actions: [XpTitleButton(icon: Icons.refresh, tooltip: 'Atualizar', onTap: _refresh)],
+          actions: [searchButton(), XpTitleButton(icon: Icons.refresh, tooltip: 'Atualizar', onTap: _refresh)],
         ),
         XpMenuBar([
           ('Exibir', [for (final (s, label) in sorts) XpMenuItem('Favoritas: $label', () => setState(() => _sort = s), checked: _sort == s)]),
@@ -104,6 +113,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
             ],
           ),
         ]),
+        searchBox('Pesquisar nas favoritas e sugestões…'),
         Expanded(
           child: ColoredBox(
             color: Colors.white,
@@ -114,29 +124,35 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
                     child: ListView(
                       padding: EdgeInsets.zero,
                       children: [
-                        _profile(playing),
-                        _group('fav', 'Favoritas', favs.length, [
-                          if (favs.isEmpty) _hint('Toque no ♥ de qualquer música para ela aparecer aqui.'),
-                          for (var i = 0; i < favs.length; i++)
-                            _buddy(favs[i], XpIcons.heart, '${favs[i].artist} · ${_playCounts[favs[i].id] ?? 0} plays', () => _play(favs, i)),
-                        ]),
-                        if (_rediscover.isNotEmpty)
-                          _group('rediscover', 'Redescobrir · não toca há meses', _rediscover.length, [
-                            for (var i = 0; i < _rediscover.length; i++)
-                              _buddy(_rediscover[i].track, XpIcons.person, _rediscover[i].reason, () => _playRecs(_rediscover, i)),
+                        if (!searching) _profile(playing),
+                        if (!searching || favsShown.isNotEmpty)
+                          _group('fav', 'Favoritas', favsShown.length, [
+                            if (favsAll.isEmpty) _hint('Toque no ♥ de qualquer música para ela aparecer aqui.'),
+                            for (var i = 0; i < favsShown.length; i++)
+                              _buddy(favsShown[i], XpIcons.heart, '${favsShown[i].artist} · ${_playCounts[favsShown[i].id] ?? 0} plays',
+                                  () => _play(favsAll, favsAll.indexOf(favsShown[i])), hl),
                           ]),
-                        if (_seed != null && _radio.isNotEmpty)
-                          _group('radio', 'Rádio: ${_seed!.title}', _radio.length, [
-                            for (var i = 0; i < _radio.length; i++) _buddy(_radio[i].track, XpIcons.note, _radio[i].reason, () => _playRecs(_radio, i)),
+                        if (rediscover.isNotEmpty)
+                          _group('rediscover', 'Redescobrir · não toca há meses', rediscover.length, [
+                            for (var i = 0; i < rediscover.length; i++)
+                              _buddy(rediscover[i].track, XpIcons.person, rediscover[i].reason, () => _playRecs(_rediscover, _rediscover.indexOf(rediscover[i])), hl),
                           ]),
-                        _group('mix', 'No Mix do momento', _mix.length, [
-                          for (var i = 0; i < _mix.length; i++) _buddy(_mix[i].track, XpIcons.note, _mix[i].reason, () => _playRecs(_mix, i)),
-                        ]),
-                        if (top.isNotEmpty)
-                          _group('top', 'Mais tocadas', top.length.clamp(0, 50), [
-                            for (var i = 0; i < top.length && i < 50; i++)
-                              _buddy(top[i], XpIcons.star, '${top[i].artist} · ${_playCounts[top[i].id]} plays', () => _play(top.take(50).toList(), i)),
+                        if (_seed != null && radio.isNotEmpty)
+                          _group('radio', 'Rádio: ${_seed!.title}', radio.length, [
+                            for (var i = 0; i < radio.length; i++)
+                              _buddy(radio[i].track, XpIcons.note, radio[i].reason, () => _playRecs(_radio, _radio.indexOf(radio[i])), hl),
                           ]),
+                        if (!searching || mix.isNotEmpty)
+                          _group('mix', 'No Mix do momento', mix.length, [
+                            for (var i = 0; i < mix.length; i++) _buddy(mix[i].track, XpIcons.note, mix[i].reason, () => _playRecs(_mix, _mix.indexOf(mix[i])), hl),
+                          ]),
+                        if (topShown.isNotEmpty)
+                          _group('top', 'Mais tocadas', topShown.length.clamp(0, 50), [
+                            for (var i = 0; i < topShown.length && i < 50; i++)
+                              _buddy(topShown[i], XpIcons.star, '${topShown[i].artist} · ${_playCounts[topShown[i].id]} plays',
+                                  () => _play(top.take(50).toList(), top.indexOf(topShown[i])), hl),
+                          ]),
+                        if (searching && favsShown.isEmpty && rediscover.isEmpty && radio.isEmpty && mix.isEmpty && topShown.isEmpty) noMatches(),
                         const SizedBox(height: 16),
                       ],
                     ),
@@ -205,7 +221,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
   }
 
   Widget _group(String id, String title, int count, List<Widget> children) {
-    final open = _open.contains(id);
+    final open = searching || _open.contains(id);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -244,7 +260,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
     );
   }
 
-  Widget _buddy(Track t, XpIcons icon, String detail, VoidCallback onTap) {
+  Widget _buddy(Track t, XpIcons icon, String detail, VoidCallback onTap, [String? highlight]) {
     final playing = context.select<PlayerService, int?>((p) => p.current?.id) == t.id;
     return GestureDetector(
       onLongPressStart: (d) => showTrackMenu(context, t, at: d.globalPosition),
@@ -261,10 +277,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
               child: Text.rich(
                 TextSpan(
                   children: [
-                    TextSpan(
-                      text: t.title,
-                      style: TextStyle(fontWeight: playing ? FontWeight.bold : FontWeight.normal),
-                    ),
+                    highlightSpan(t.title, highlight, TextStyle(fontWeight: playing ? FontWeight.bold : FontWeight.normal)),
                     TextSpan(
                       text: '  — $detail',
                       style: const TextStyle(fontSize: 12, color: Color(0xFF777777)),
