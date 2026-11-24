@@ -624,6 +624,7 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
           ],
         ]),
       ),
+      if (ds.batteryHint != null) _batteryHint(ds),
       Padding(
         padding: const EdgeInsets.fromLTRB(10, 10, 10, 4),
         child: Text('Na fila ($waiting)', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF1C3F94))),
@@ -658,6 +659,26 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
       ),
     ]);
   }
+
+  /// Aviso único: a economia de bateria pode fechar o app no meio da playlist.
+  Widget _batteryHint(DownloadService ds) => Container(
+        margin: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(color: const Color(0xFFFFF8D8), border: Border.all(color: const Color(0xFFD8B440))),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(
+            ds.batteryHint == true
+                ? '⚠ Celulares Xiaomi fecham apps em segundo plano. Para playlists grandes, deixe a bateria do app "Sem restrições".'
+                : '⚠ Este celular pode fechar o app em segundo plano. Para playlists grandes, deixe a bateria do app "Sem restrições".',
+            style: const TextStyle(fontSize: 13, color: Color(0xFF4A3A00)),
+          ),
+          const SizedBox(height: 8),
+          Wrap(spacing: 8, children: [
+            XpButton(label: 'Liberar bateria', primary: true, onTap: ds.openBatterySettings),
+            XpButton(label: 'Agora não', onTap: ds.dismissBatteryHint),
+          ]),
+        ]),
+      );
 
   Widget _queueRow(YtEntry e) {
     final active = e.status == YtStatus.downloading || e.status == YtStatus.converting || e.status == YtStatus.updating;

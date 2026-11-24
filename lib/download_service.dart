@@ -108,7 +108,9 @@ class DownloadService extends ChangeNotifier {
   final MusicBrainzClient mb;
   DownloadService(this.app, {YtDlp? ytdlp, MusicBrainzClient? mb})
       : ytdlp = ytdlp ?? YtDlp(),
-        mb = mb ?? MusicBrainzClient();
+        mb = mb ?? MusicBrainzClient() {
+    this.ytdlp.onCancelAll = () => unawaited(cancelAll());
+  }
 
   // aba "Um vídeo"
   YtEntry? single;
@@ -131,6 +133,38 @@ class DownloadService extends ChangeNotifier {
   final Map<String, List<String>> _existingFor = {};
 
   int get doneCount => queue.where((e) => e.finished).length;
+  int get failedCount => queue.where((e) => e.status == YtStatus.failed).length;
+
+  /// Título da notificação: "Baixando 18 de 45 · 1 com erro".
+  String get notifyTitle {
+    final f = failedCount;
+    return 'Baixando ${(doneCount + 1).clamp(1, queue.length)} de ${queue.length}${f > 0 ? ' · $f com erro' : ''}';
+  }
+
+  // ---- aviso da bateria (aparece uma vez, na primeira playlist, se o app ainda tem restrição de bateria) ----
+  static const _batteryHintKey = 'avisoBateriaVisto';
+
+  /// null = sem aviso; true = celular Xiaomi (texto fala da Xiaomi); false = outro celular.
+  bool? batteryHint;
+
+  Future<void> _maybeShowBatteryHint() async {
+    if (batteryHint != null || (app.prefs.getBool(_batteryHintKey) ?? false)) return;
+    final info = await ytdlp.batteryInfo();
+    if (info.unrestricted) return;
+    batteryHint = info.xiaomi;
+    notifyListeners();
+  }
+
+  Future<void> dismissBatteryHint() async {
+    batteryHint = null;
+    notifyListeners();
+    await app.prefs.setBool(_batteryHintKey, true);
+  }
+
+  Future<void> openBatterySettings() async {
+    await ytdlp.openBatterySettings();
+    await dismissBatteryHint();
+  }
   int get okCount => queue.where((e) => e.status == YtStatus.done).length;
   bool get busy => running;
 
@@ -484,6 +518,8 @@ class DownloadService extends ChangeNotifier {
       ];
     }
     notifyListeners();
+    unawaited(_saveQueue());
+    if (entries.length > 1) unawaited(_maybeShowBatteryHint());
     if (!running) {
       unawaited(_runQueue());
     } else {
@@ -498,6 +534,7 @@ class DownloadService extends ChangeNotifier {
       if (e.status == YtStatus.downloading || e.status == YtStatus.converting) await ytdlp.cancel(e.id);
     }
     notifyListeners();
+    await _saveQueue();
   }
 
   /// Downloads ao mesmo tempo. Um terceiro não ajuda: yt-dlp, FFmpeg e disco disputam o mesmo celular.
@@ -522,6 +559,9 @@ class DownloadService extends ChangeNotifier {
     running = true;
     _cancelAll = false;
     notifyListeners();
+    // já mostra a notificação protegida agora, com o app na frente: o Android só deixa começar o serviço
+    // em primeiro plano daqui (depois, em segundo plano, ele recusaria e o download morreria com o app)
+    unawaited(ytdlp.notify(notifyTitle, 'Preparando…'));
     final tmpBase = p.join((await getTemporaryDirectory()).path, 'youtube');
     try {
       await _maybeUpdate();
@@ -545,7 +585,8 @@ class DownloadService extends ChangeNotifier {
               if (failed > 0) '$failed com erro',
             ].join(' · ')}.';
       notifyListeners();
-      if (lastSummary != null) unawaited(ytdlp.notify('Downloads do YouTube', lastSummary!, done: true));
+      unawaited(lastSummary != null ? ytdlp.notify('Downloads do YouTube', lastSummary!, done: true) : ytdlp.notifyClear());
+      await _saveQueue();
       if (ok > 0) await _addToLibrary();
     }
   }
@@ -570,7 +611,7 @@ class DownloadService extends ChangeNotifier {
         notifyListeners();
         if (DateTime.now().difference(_lastNotify).inMilliseconds > 1000) {
           _lastNotify = DateTime.now();
-          unawaited(ytdlp.notify('Baixando ${doneCount + 1} de ${queue.length}', e.names.title, progress: prog.round()));
+          unawaited(ytdlp.notify(notifyTitle, '${e.names.artist} – ${e.names.title}', progress: prog.round()));
         }
       }));
       e.savedPath = e.podcast ? await _saveEpisode(File(audio), e.names, root) : await _saveToLibrary(File(audio), e.names, root);
@@ -607,6 +648,96 @@ class DownloadService extends ChangeNotifier {
       }
     }
     notifyListeners();
+    await _saveQueue();
+  }
+
+  // ---- fila que sobrevive ao app fechar ----
+  // Se o Android (ou a economia de bateria) fechar o app no meio de uma playlist, o que faltava fica guardado
+  // e continua sozinho na próxima vez que o app abrir. O que já foi baixado não entra de novo.
+
+  static const _pendingKey = 'ytFilaPendente';
+
+  Future<void> _saveQueue() async {
+    final left = [
+      for (final e in queue)
+        if (!e.finished && e.status != YtStatus.ready) pendingToJson(e, _playlistOf[e]),
+    ];
+    try {
+      if (left.isEmpty) {
+        await app.prefs.remove(_pendingKey);
+      } else {
+        await app.prefs.setString(_pendingKey, jsonEncode({'items': left, 'existing': _existingFor}));
+      }
+    } catch (err) {
+      errorLog.info('YouTube', 'Não deu para guardar a fila de downloads', err);
+    }
+  }
+
+  static Map<String, dynamic> pendingToJson(YtEntry e, String? playlist) => {
+        'id': e.id,
+        'url': e.url,
+        'original': e.originalTitle,
+        'artist': e.names.artist,
+        'title': e.names.title,
+        'album': e.names.album,
+        'podcast': e.podcast,
+        'channel': e.channel,
+        'thumb': ?e.thumbnail,
+        'dur': ?e.durationSec,
+        'playlist': ?playlist,
+      };
+
+  static YtEntry pendingFromJson(Map<String, dynamic> j) {
+    final names = YtNames(artist: '${j['artist'] ?? ''}', title: '${j['title'] ?? ''}', album: '${j['album'] ?? ''}');
+    return YtEntry(
+      id: '${j['id'] ?? ''}',
+      url: '${j['url'] ?? ''}',
+      originalTitle: '${j['original'] ?? ''}',
+      names: names,
+      thumbnail: j['thumb'] as String?,
+      durationSec: (j['dur'] as num?)?.toInt(),
+      channel: '${j['channel'] ?? ''}',
+    )
+      ..edited = true // nomes já estavam decididos: a busca de álbum não mexe mais
+      ..podcast = j['podcast'] == true;
+  }
+
+  /// Downloads que faltavam quando o app foi fechado (lista vazia = nada).
+  List<(YtEntry, String?)> pendingFromPrefs() {
+    final raw = app.prefs.getString(_pendingKey);
+    if (raw == null) return const [];
+    try {
+      final m = jsonDecode(raw) as Map<String, dynamic>;
+      for (final en in ((m['existing'] as Map?) ?? const {}).entries) {
+        _existingFor.putIfAbsent('${en.key}', () => [for (final x in en.value as List) '$x']);
+      }
+      return [
+        for (final j in (m['items'] as List? ?? const []).cast<Map<String, dynamic>>())
+          if ('${j['url'] ?? ''}'.startsWith('http')) (pendingFromJson(j), j['playlist'] as String?),
+      ];
+    } catch (err) {
+      errorLog.warn('YouTube', 'A fila de downloads guardada estava estragada e foi descartada', error: err);
+      unawaited(app.prefs.remove(_pendingKey));
+      return const [];
+    }
+  }
+
+  /// Ao abrir o app: continua a fila que ficou pela metade. Devolve quantos voltaram para a fila.
+  int resumePending() {
+    if (running) return 0;
+    final items = pendingFromPrefs();
+    if (items.isEmpty) return 0;
+    final byPlaylist = <String?, List<YtEntry>>{};
+    for (final (e, pl) in items) {
+      byPlaylist.putIfAbsent(pl, () => []).add(e);
+    }
+    for (final en in byPlaylist.entries) {
+      final keep = _existingFor[en.key];
+      enqueue(en.value, playlistName: en.key);
+      if (en.key != null && keep != null) _existingFor[en.key!] = keep; // o enqueue recalcula pela tela; vale o guardado
+    }
+    errorLog.info('YouTube', 'Continuando ${items.length} downloads que ficaram pela metade quando o app fechou', null);
+    return items.length;
   }
 
   /// Grava as tags com o nome corrigido e move para Fonte/Artista/Álbum/Título.m4a.

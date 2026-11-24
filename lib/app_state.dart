@@ -535,6 +535,8 @@ class AppState extends ChangeNotifier {
     if (prefs.getBool('backupReady') == null && (await db.playlists()).isNotEmpty) await prefs.setBool('backupReady', true);
     await s.reload(rereadGifs: true);
     s._startSummaryRetries();
+    // playlist do YouTube que ficou pela metade (o app foi fechado no meio): continua de onde parou
+    if (s.sourceRoot != null) s.downloads.resumePending();
     // capas que faltam (inclusive as que falharam antes), em segundo plano
     unawaited(Future<void>.delayed(const Duration(seconds: 5), () => s.fetchMissingCovers()).catchError(_coversFailed));
     // músicas que ficaram sem artista/álbum: algumas por vez, depois das capas
