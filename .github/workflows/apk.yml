@@ -35,8 +35,9 @@ jobs:
           LASTFM_KEY: ${{ secrets.LASTFM_KEY }}
           GIPHY_KEY: ${{ secrets.GIPHY_KEY }}
           GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+          MISTRAL_KEY: ${{ secrets.MISTRAL_KEY }}
         run: |
-          for k in LASTFM_KEY GIPHY_KEY GEMINI_KEY; do
+          for k in LASTFM_KEY GIPHY_KEY GEMINI_KEY MISTRAL_KEY; do
             v="${!k}"
             if [ -n "$v" ]; then echo "$k: configurada (${#v} caracteres)"; else echo "::warning::$k não configurada: o APK sai sem ela"; fi
           done
@@ -46,11 +47,16 @@ jobs:
             code=$(curl -s -o /dev/null -w '%{http_code}' -H "x-goog-api-key: $GEMINI_KEY" https://generativelanguage.googleapis.com/v1beta/models || echo erro)
             if [ "$code" = 200 ]; then echo "GEMINI_KEY: o Google aceitou a chave (HTTP 200)"; else echo "::warning::GEMINI_KEY: o Google recusou a chave (HTTP $code)"; fi
           fi
-      - run: flutter build apk --release --target-platform android-arm64 --build-name=2.0.${{ github.run_number }} --build-number=${{ github.run_number }} --dart-define=APP_VERSION=2.0.${{ github.run_number }} --dart-define=LASTFM_KEY="$LASTFM_KEY" --dart-define=GIPHY_KEY="$GIPHY_KEY" --dart-define=GEMINI_KEY="$GEMINI_KEY"
+          if [ -n "$MISTRAL_KEY" ]; then
+            code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $MISTRAL_KEY" https://api.mistral.ai/v1/models || echo erro)
+            if [ "$code" = 200 ]; then echo "MISTRAL_KEY: a Mistral aceitou a chave (HTTP 200)"; else echo "::warning::MISTRAL_KEY: a Mistral recusou a chave (HTTP $code)"; fi
+          fi
+      - run: flutter build apk --release --target-platform android-arm64 --build-name=2.0.${{ github.run_number }} --build-number=${{ github.run_number }} --dart-define=APP_VERSION=2.0.${{ github.run_number }} --dart-define=LASTFM_KEY="$LASTFM_KEY" --dart-define=GIPHY_KEY="$GIPHY_KEY" --dart-define=GEMINI_KEY="$GEMINI_KEY" --dart-define=MISTRAL_KEY="$MISTRAL_KEY"
         env:
           LASTFM_KEY: ${{ secrets.LASTFM_KEY }}
           GIPHY_KEY: ${{ secrets.GIPHY_KEY }}
           GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+          MISTRAL_KEY: ${{ secrets.MISTRAL_KEY }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       - name: Conferir que o APK saiu com a chave fixa (instala por cima sem perder dados)
         run: |

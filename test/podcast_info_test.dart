@@ -100,7 +100,7 @@ void main() {
       asked.add(r.url.path);
       expect(r.headers['x-goog-api-key'], 'k', reason: 'chave vai no cabeçalho');
       expect(r.url.query, isNot(contains('key')), reason: 'chave nunca no link');
-      if (r.url.path.contains('flash-latest')) return http.Response('não existe', 404);
+      if (r.url.path.contains('flash-lite')) return http.Response('não existe', 404);
       return http.Response(jsonEncode({
         'candidates': [
           {
@@ -199,14 +199,20 @@ void main() {
     final s = PodcastInfoService(client: client, apiKey: () => 'k');
     final yt = {..._yt(), 'duration': 5220};
 
-    final viaVideo = await s.build(yt, title: 't', program: 'p');
+    // sozinho (sem você pedir) não gasta a cota ouvindo o vídeo: resume pela descrição e diz como pedir
+    final auto = await s.build(yt, title: 't', program: 'p');
+    expect(auto.status, SummaryStatus.noCaptions);
+    expect(auto.error, contains('Fazer resumo'));
+    expect(bodies.any((b) => ((b['contents'] as List).first['parts'] as List).any((x) => (x as Map).containsKey('fileData'))), isFalse);
+
+    final viaVideo = await s.build(yt, title: 't', program: 'p', allowVideo: true);
     expect(viaVideo.status, SummaryStatus.ok);
     expect(viaVideo.hasSummary, isTrue);
     final part = ((bodies.last['contents'] as List).first['parts'] as List).first as Map;
     expect(part['fileData'], {'fileUri': 'https://www.youtube.com/watch?v=abc123'});
 
     videoOk = false;
-    final viaDescription = await s.build(yt, title: 't', program: 'p');
+    final viaDescription = await s.build(yt, title: 't', program: 'p', allowVideo: true);
     expect(viaDescription.status, SummaryStatus.noCaptions);
     expect(viaDescription.hasSummary, isTrue);
     expect(viaDescription.error, allOf(contains('legenda veio vazia'), contains('Video too long')));
@@ -217,9 +223,48 @@ void main() {
       if (r.url.host == 'cap') return http.Response.bytes(utf8.encode(_json3), 200);
       return http.Response('', 429);
     });
-    final info = await PodcastInfoService(client: client, apiKey: () => 'k').build(_yt(), title: 't', program: 'p');
+    final s = PodcastInfoService(client: client, apiKey: () => 'k');
+    expect(s.quotaHit, isFalse);
+    final info = await s.build(_yt(), title: 't', program: 'p');
     expect(info.status, SummaryStatus.failed);
     expect(info.error, contains('Limite do plano grátis'));
+    expect(s.quotaHit, isTrue); // não tenta mais sozinho até a cota voltar
     expect(info.chapters.length, 2); // capítulos do canal continuam
+  });
+
+  test('Gemini no limite: a Mistral faz o resumo, e depois vai direto nela até a cota voltar', () async {
+    final hosts = <String>[];
+    final client = MockClient((r) async {
+      if (r.url.host == 'cap') return http.Response.bytes(utf8.encode(_json3), 200);
+      hosts.add(r.url.host);
+      if (r.url.host.contains('googleapis')) return http.Response('', 429);
+      expect(r.headers['Authorization'], 'Bearer m');
+      return http.Response.bytes(
+          utf8.encode(jsonEncode({
+            'choices': [
+              {
+                'message': {'content': jsonEncode(_ai)},
+              },
+            ],
+          })),
+          200);
+    });
+    final s = PodcastInfoService(client: client, apiKey: () => 'k', mistralKey: () => 'm');
+    final info = await s.build(_yt(), title: 't', program: 'p');
+    expect(info.status, SummaryStatus.ok);
+    expect(info.ai, 'mistral');
+    expect(info.aiName, 'Mistral');
+    expect(s.quotaHit, isTrue);
+    expect(s.canSummarizeNow, isTrue); // a Mistral segura enquanto o Gemini descansa
+    expect(EpisodeInfo.fromJson(jsonDecode(jsonEncode(info.toJson())) as Map<String, dynamic>).ai, 'mistral');
+
+    hosts.clear();
+    await s.build(_yt(), title: 't', program: 'p');
+    expect(hosts.every((h) => h == 'api.mistral.ai'), isTrue);
+
+    // sem Mistral, o limite do Gemini trava as tentativas automáticas
+    final only = PodcastInfoService(client: client, apiKey: () => 'k');
+    await only.build(_yt(), title: 't', program: 'p');
+    expect(only.canSummarizeNow, isFalse);
   });
 }

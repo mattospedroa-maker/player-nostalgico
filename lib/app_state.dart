@@ -95,10 +95,14 @@ class AppState extends ChangeNotifier {
   /// Chave do Gemini (resumo dos podcasts): a digitada nas Opções, senão a que veio no APK (secret GEMINI_KEY).
   String get geminiKey => _keyOr(prefs.getString('geminiKey'), const String.fromEnvironment('GEMINI_KEY'));
 
+  /// Chave da Mistral (reserva do resumo quando o Gemini bate no limite): secret MISTRAL_KEY.
+  String get mistralKey => _keyOr(prefs.getString('mistralKey'), const String.fromEnvironment('MISTRAL_KEY'));
+
   /// Informações e resumo dos episódios (arquivo .json ao lado de cada um).
   late final PodcastInfoService podcastInfo = PodcastInfoService(
     client: gifFetcher.client,
     apiKey: () => geminiKey,
+    mistralKey: () => mistralKey,
     fetchInfo: (url) => downloads.ytdlp.info(url, playlist: false),
   );
 
@@ -140,7 +144,7 @@ class AppState extends ChangeNotifier {
 
   /// Tocou um episódio sem resumo (baixado antes do resumo existir): faz agora, em segundo plano.
   void _ensureSummary(Track t) {
-    if (geminiKey.isEmpty || podcastInfo.isWorking(t.path)) return;
+    if (podcastInfo.isWorking(t.path) || !podcastInfo.canSummarizeNow) return;
     final info = podcastInfo.infoFor(t.path);
     if (info != null && info.hasSummary) return;
     // já tentou: só tenta de novo sozinho se o erro foi temporário (Gemini sobrecarregado, 429...)
@@ -172,7 +176,7 @@ class AppState extends ChangeNotifier {
 
   /// Escolhe o próximo episódio que falhou por erro temporário e tenta de novo (devolve se começou).
   bool retryFailedSummaries() {
-    if (geminiKey.isEmpty) return false;
+    if (!podcastInfo.canSummarizeNow) return false;
     for (final t in podcasts) {
       if (podcastInfo.isWorking(t.path)) return false; // já tem um resumo em andamento
     }

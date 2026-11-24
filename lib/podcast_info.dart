@@ -62,7 +62,7 @@ enum SummaryStatus {
 bool isTemporarySummaryError(String? error) {
   if (error == null || error.isEmpty) return false;
   final e = error.toLowerCase();
-  if (e.contains('chave do gemini inválida') || e.contains('sem chave')) return false;
+  if (e.contains('chave do gemini inválida') || e.contains('chave da mistral inválida') || e.contains('sem chave')) return false;
   return RegExp(r'\b(429|500|502|503|504)\b').hasMatch(e) ||
       e.contains('demorou demais') ||
       e.contains('limite do plano') ||
@@ -101,6 +101,9 @@ class EpisodeInfo {
   /// Motivo técnico quando falhou (vai para o registro de erros; a tela mostra só [status]).
   final String? error;
 
+  /// Qual IA fez o resumo ('gemini' ou 'mistral'; vazio = nenhuma).
+  final String ai;
+
   const EpisodeInfo({
     this.videoId = '',
     this.url = '',
@@ -113,7 +116,11 @@ class EpisodeInfo {
     this.tags = const [],
     this.status = SummaryStatus.none,
     this.error,
+    this.ai = '',
   });
+
+  /// "Gemini" / "Mistral", para o rodapé da janela do resumo.
+  String get aiName => ai == 'mistral' ? 'Mistral' : 'Gemini';
 
   bool get hasSummary => summary.trim().isNotEmpty;
 
@@ -142,6 +149,7 @@ class EpisodeInfo {
     List<String>? tags,
     SummaryStatus? status,
     String? error,
+    String? ai,
   }) =>
       EpisodeInfo(
         videoId: videoId,
@@ -155,6 +163,7 @@ class EpisodeInfo {
         tags: tags ?? this.tags,
         status: status ?? this.status,
         error: error ?? this.error,
+        ai: ai ?? this.ai,
       );
 
   Map<String, Object?> toJson() => {
@@ -170,6 +179,7 @@ class EpisodeInfo {
         'etiquetas': tags,
         'status': status.name,
         if (error != null) 'erro': error,
+        if (ai.isNotEmpty) 'ia': ai,
       };
 
   static EpisodeInfo fromJson(Map<String, dynamic> m) => EpisodeInfo(
@@ -184,6 +194,7 @@ class EpisodeInfo {
         tags: [for (final t in (m['etiquetas'] as List?) ?? const []) '$t'],
         status: SummaryStatus.values.asNameMap()[m['status']] ?? SummaryStatus.none,
         error: m['erro'] as String?,
+        ai: '${m['ia'] ?? ''}',
       );
 
   /// Começa pelo que o yt-dlp devolve (-J): descrição e capítulos do canal.
@@ -359,7 +370,10 @@ ${transcript.isEmpty ? 'Sem transcrição: use o vídeo anexado (ouça a convers
 
 class GeminiException implements Exception {
   final String message;
-  const GeminiException(this.message);
+
+  /// Bateu no limite do plano grátis (cota por minuto ou do dia).
+  final bool quota;
+  const GeminiException(this.message, {this.quota = false});
   @override
   String toString() => message;
 }
@@ -371,7 +385,8 @@ class GeminiClient {
   GeminiClient(this.client, this.apiKey);
 
   /// Modelos tentados em ordem (o primeiro é o apelido que o Google mantém apontando para o Flash atual).
-  static const models = ['gemini-flash-latest', 'gemini-2.5-flash'];
+  /// Flash-Lite primeiro: no plano grátis ele aguenta bem mais pedidos por dia que o Flash (que fica de reserva).
+  static const models = ['gemini-flash-lite-latest', 'gemini-flash-latest'];
 
   /// A chave vai no cabeçalho x-goog-api-key, nunca no link (o link pode aparecer em registros de erro).
   static Uri urlFor(String model) => Uri.https('generativelanguage.googleapis.com', '/v1beta/models/$model:generateContent');
@@ -414,7 +429,11 @@ class GeminiClient {
         continue; // tenta o próximo modelo
       }
       if (r.statusCode == 400 && r.body.contains('API_KEY_INVALID')) throw const GeminiException('Chave do Gemini inválida');
-      if (r.statusCode == 429) throw const GeminiException('Limite do plano grátis do Gemini atingido (tente mais tarde)');
+      if (r.statusCode == 429) {
+        // cada modelo tem a sua cota: o próximo da lista ainda pode ter
+        last = const GeminiException('Limite do plano grátis do Gemini atingido (tente mais tarde)', quota: true);
+        continue;
+      }
       if (r.statusCode != 200) throw GeminiException('Gemini respondeu ${r.statusCode}${_reason(r.body)}');
       final Map<String, dynamic> m;
       try {
@@ -433,10 +452,59 @@ class GeminiClient {
   }
 }
 
+/// Mistral (plano grátis "Experiment"): reserva para quando o Gemini bate no limite. Só texto (não ouve vídeo).
+class MistralClient {
+  final http.Client client;
+  final String apiKey;
+  MistralClient(this.client, this.apiKey);
+
+  /// 128 mil tokens de contexto; a transcrição é cortada em [maxTranscript] letras para caber.
+  static const model = 'mistral-small-latest';
+  static const maxTranscript = 280000;
+  static final url = Uri.https('api.mistral.ai', '/v1/chat/completions');
+
+  Future<Map<String, dynamic>> generateJson(String prompt, {Duration timeout = const Duration(minutes: 3)}) async {
+    if (apiKey.trim().isEmpty) throw const GeminiException('Sem chave da Mistral');
+    final http.Response r;
+    try {
+      r = await client
+          .post(url,
+              headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer $apiKey'},
+              body: jsonEncode({
+                'model': model,
+                'temperature': 0.3,
+                'response_format': {'type': 'json_object'},
+                'messages': [
+                  {'role': 'user', 'content': prompt},
+                ],
+              }))
+          .timeout(timeout);
+    } on TimeoutException {
+      throw const GeminiException('A Mistral demorou demais para responder');
+    } on SocketException {
+      throw const GeminiException('Sem conexão com a Mistral');
+    }
+    if (r.statusCode == 401) throw const GeminiException('Chave da Mistral inválida');
+    if (r.statusCode == 429) throw const GeminiException('Limite do plano grátis da Mistral atingido (tente mais tarde)', quota: true);
+    if (r.statusCode != 200) throw GeminiException('Mistral respondeu ${r.statusCode}${_reason(r.body)}');
+    try {
+      final m = jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
+      final text = '${(((m['choices'] as List).first as Map)['message'] as Map)['content'] ?? ''}'.trim();
+      if (text.isEmpty) throw const GeminiException('A Mistral não devolveu texto');
+      return parseAiJson(text);
+    } on GeminiException {
+      rethrow;
+    } catch (_) {
+      throw const GeminiException('Resposta da Mistral ilegível');
+    }
+  }
+}
+
 /// Motivo que o Google escreveu no erro (": texto"), curto.
 String _reason(String body) {
   try {
-    final msg = '${((jsonDecode(body) as Map)['error'] as Map)['message'] ?? ''}'.trim();
+    final err = (jsonDecode(body) as Map)['error'] ?? (jsonDecode(body) as Map)['message'];
+    final msg = '${err is Map ? err['message'] ?? '' : err ?? ''}'.trim();
     if (msg.isEmpty) return '';
     return ': ${msg.length > 160 ? '${msg.substring(0, 160)}…' : msg}';
   } catch (_) {
@@ -464,10 +532,45 @@ class PodcastInfoService extends ChangeNotifier {
   final http.Client client;
   String Function() apiKey;
 
+  /// Chave da Mistral (reserva quando o Gemini bate no limite). Vazia = sem reserva.
+  String Function() mistralKey;
+
   /// Informações completas do vídeo (yt-dlp -J), para episódios que ainda não têm o arquivo .json.
   Future<Map<String, dynamic>> Function(String url)? fetchInfo;
 
-  PodcastInfoService({required this.client, required this.apiKey, this.fetchInfo});
+  PodcastInfoService({required this.client, required this.apiKey, String Function()? mistralKey, this.fetchInfo}) : mistralKey = mistralKey ?? (() => '');
+
+  bool get hasMistral => mistralKey().trim().isNotEmpty;
+
+  /// Ainda dá para fazer resumo sozinho? (Gemini com cota, ou a Mistral de reserva)
+  bool get canSummarizeNow => hasMistral || (apiKey().trim().isNotEmpty && !quotaHit);
+
+  void _noteQuota() {
+    final u = DateTime.now().toUtc();
+    final reset = DateTime.utc(u.year, u.month, u.day, 8); // meia-noite no Pacífico
+    quotaUntil = (u.isBefore(reset) ? reset : reset.add(const Duration(days: 1))).toLocal();
+  }
+
+  /// Pede o JSON do resumo: Gemini primeiro; se ele falhar (ou já bateu no limite hoje) e houver chave da
+  /// Mistral, ela faz. Vídeo só o Gemini ouve. Devolve a resposta e qual IA respondeu.
+  Future<(Map<String, dynamic>, String)> _ask(String Function(int maxTranscript) prompt, {String? videoUrl, Duration? timeout}) async {
+    final key = apiKey().trim();
+    final useGemini = key.isNotEmpty && (!quotaHit || !hasMistral || videoUrl != null);
+    if (useGemini) {
+      try {
+        final ai = await GeminiClient(client, key)
+            .generateJson(prompt(1 << 30), videoUrl: videoUrl, timeout: timeout ?? const Duration(minutes: 3));
+        return (ai, 'gemini');
+      } on GeminiException catch (e) {
+        if (e.quota) _noteQuota();
+        if (!hasMistral || videoUrl != null) rethrow;
+        errorLog.info('Podcasts', 'Gemini falhou (${e.message}); tentando a Mistral', e);
+      }
+    } else if (videoUrl != null) {
+      throw const GeminiException('Limite do plano grátis do Gemini atingido (tente mais tarde)', quota: true);
+    }
+    return (await MistralClient(client, mistralKey()).generateJson(prompt(MistralClient.maxTranscript)), 'mistral');
+  }
 
   final Map<String, EpisodeInfo?> _cache = {};
   final Set<String> _working = {};
@@ -509,12 +612,17 @@ class PodcastInfoService extends ChangeNotifier {
     _cache.remove(to);
   }
 
+  /// Até quando não vale tentar sozinho (limite do dia batido; a cota volta à meia-noite do Pacífico, 5h em Brasília).
+  DateTime? quotaUntil;
+  bool get quotaHit => quotaUntil != null && DateTime.now().isBefore(quotaUntil!);
+
   /// Monta tudo a partir das informações do yt-dlp: descrição, capítulos, legenda e resumo da IA.
   /// [onStatus] avisa cada etapa (a tela de download mostra). Nunca lança: falhas viram [SummaryStatus].
-  Future<EpisodeInfo> build(Map<String, dynamic> ytInfo, {required String title, required String program, void Function(SummaryStatus)? onStatus}) async {
+  /// [allowVideo]: sem legenda, deixa o Gemini ouvir o vídeo (gasta muito da cota; só quando você pede).
+  Future<EpisodeInfo> build(Map<String, dynamic> ytInfo,
+      {required String title, required String program, void Function(SummaryStatus)? onStatus, bool allowVideo = false}) async {
     var info = EpisodeInfo.fromYoutube(ytInfo);
-    final key = apiKey();
-    if (key.trim().isEmpty) return info.copyWith(status: SummaryStatus.noKey);
+    if (apiKey().trim().isEmpty && !hasMistral) return info.copyWith(status: SummaryStatus.noKey);
     onStatus?.call(SummaryStatus.working);
     // 1) legenda (o jeito mais leve)
     var transcript = '';
@@ -535,20 +643,28 @@ class PodcastInfoService extends ChangeNotifier {
     } catch (e) {
       captionProblem = ErrorLog.isNetwork(e) ? 'sem conexão para baixar a legenda' : 'erro ao ler a legenda';
     }
-    String prompt() => summaryPrompt(title: title, program: program, description: info.description, chapters: info.chapters, transcript: transcript);
-    final gemini = GeminiClient(client, key);
+    String prompt(int maxTranscript) => summaryPrompt(
+        title: title,
+        program: program,
+        description: info.description,
+        chapters: info.chapters,
+        transcript: transcript.length > maxTranscript ? transcript.substring(0, maxTranscript) : transcript);
+    EpisodeInfo done((Map<String, dynamic>, String) r) => info.withAi(r.$1).copyWith(ai: r.$2);
     try {
-      if (transcript.isNotEmpty) return info.withAi(await gemini.generateJson(prompt()));
+      if (transcript.isNotEmpty) return done(await _ask(prompt));
     } catch (e) {
-      return _failed(info, title, 'A legenda foi lida, mas o Gemini falhou: ${_friendly(e)}', e);
+      return _failed(info, title, 'A legenda foi lida, mas a IA falhou: ${_friendly(e)}', e);
     }
     // 2) sem legenda: o Gemini ouve o vídeo direto do YouTube (até 2h30, para caber no plano grátis)
     final secs = (ytInfo['duration'] as num?)?.toInt() ?? 0;
     String? videoProblem;
-    if (info.videoId.isNotEmpty && secs > 0 && secs <= 9000) {
+    if (!allowVideo) {
+      videoProblem = 'toque em "Fazer resumo" para o Gemini ouvir o vídeo';
+    } else if (apiKey().trim().isEmpty) {
+      videoProblem = 'só o Gemini ouve vídeo, e ele está sem chave';
+    } else if (info.videoId.isNotEmpty && secs > 0 && secs <= 9000) {
       try {
-        final ai = await gemini.generateJson(prompt(), videoUrl: 'https://www.youtube.com/watch?v=${info.videoId}', timeout: const Duration(minutes: 5));
-        return info.withAi(ai);
+        return done(await _ask(prompt, videoUrl: 'https://www.youtube.com/watch?v=${info.videoId}', timeout: const Duration(minutes: 5)));
       } catch (e) {
         videoProblem = _friendly(e);
         errorLog.info('Podcasts', 'Gemini não conseguiu ouvir o vídeo de "$title"', e);
@@ -557,15 +673,14 @@ class PodcastInfoService extends ChangeNotifier {
       videoProblem = 'o vídeo é longo demais para o Gemini ouvir no plano grátis';
     }
     // 3) só título, descrição e capítulos
-    final why = [captionProblem, if (videoProblem != null) 'ouvir o vídeo falhou: $videoProblem'].whereType<String>().join('; ');
+    final why = [captionProblem, if (videoProblem != null) allowVideo ? 'ouvir o vídeo falhou: $videoProblem' : videoProblem].whereType<String>().join('; ');
     if (info.description.trim().length < 80) {
       return info.copyWith(status: SummaryStatus.noCaptions, error: 'Sem legenda e sem descrição suficiente ($why).');
     }
     try {
-      final ai = await gemini.generateJson(prompt());
-      return info.withAi(ai).copyWith(status: SummaryStatus.noCaptions, error: 'Resumo feito só com a descrição ($why).');
+      return done(await _ask(prompt)).copyWith(status: SummaryStatus.noCaptions, error: 'Resumo feito só com a descrição ($why).');
     } catch (e) {
-      return _failed(info, title, 'Sem legenda ($why), e o Gemini falhou: ${_friendly(e)}', e);
+      return _failed(info, title, 'Sem legenda ($why), e a IA falhou: ${_friendly(e)}', e);
     }
   }
 
@@ -582,13 +697,14 @@ class PodcastInfoService extends ChangeNotifier {
   }
 
   /// Faz (ou refaz) o resumo de um episódio já salvo, buscando as informações do vídeo pelo [url].
-  Future<EpisodeInfo?> summarize(String audioPath, String url, {required String title, required String program}) async {
+  /// [manual]: pedido pelo botão "Fazer resumo" (só aí o Gemini pode ouvir o vídeo inteiro, que gasta muito da cota).
+  Future<EpisodeInfo?> summarize(String audioPath, String url, {required String title, required String program, bool manual = false}) async {
     final fetch = fetchInfo;
     if (fetch == null || url.isEmpty || !_working.add(audioPath)) return infoFor(audioPath);
     notifyListeners();
     try {
       final yt = await fetch(url);
-      final info = await build(yt, title: title, program: program);
+      final info = await build(yt, title: title, program: program, allowVideo: manual);
       await save(audioPath, info);
       return info;
     } catch (e) {
