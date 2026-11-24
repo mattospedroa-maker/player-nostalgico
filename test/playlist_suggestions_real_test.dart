@@ -3,6 +3,7 @@ import 'package:player_nostalgico/lastfm.dart';
 import 'package:player_nostalgico/models.dart';
 import 'package:player_nostalgico/mood.dart';
 import 'package:player_nostalgico/recommender.dart';
+import 'package:player_nostalgico/styles.dart';
 
 var _id = 0;
 final _tags = <String, List<MusicTag>>{};
@@ -13,8 +14,17 @@ Track tr(String title, String artist, String genre, [List<String> tags = const [
 }
 
 void main() {
-  setUp(() => MoodClues.tagsOf = (t) => _tags[t.path]);
-  tearDown(() => MoodClues.tagsOf = (_) => null);
+  setUp(() {
+    MoodClues.tagsOf = (t) => _tags[t.path];
+    Styles.trackTags = (t) => _tags[t.path];
+    MoodClues.invalidate();
+    Styles.invalidate();
+  });
+  tearDown(() {
+    MoodClues.tagsOf = (_) => null;
+    Styles.trackTags = (_) => null;
+    Styles.invalidate();
+  });
   final pl = [
     tr('When the Sun Hits', 'Slowdive', 'Shoegaze', ['shoegaze', 'dream pop', '90s', 'alternative', 'dreamy', 'ethereal', 'indie', 'beautiful']),
     tr('Starting Over', 'lsdnthesearchforgod', 'Shoegaze', ['shoegaze', 'dream pop', 'lo-fi', 'indie', 'dreamy']),
@@ -48,12 +58,15 @@ void main() {
     expect(names, isNot(anyOf(contains('Linkin Park'), contains('Lady Gaga'), contains('Daft Punk'), contains('Nirvana'))));
     // The xx tem gênero "Indie", mas entra pelo "dream pop" das tags (é o que aparece na etiqueta)
     expect(r.firstWhere((s) => s.track.artist == 'The xx').genre, 'Dream Pop');
+    expect(r.firstWhere((s) => s.track.artist == 'Have a Nice Life').genre, 'Shoegaze');
     // e passa à frente de uma música só "calma" e "indie"
     expect(names.indexOf('The xx'), lessThan(names.indexOf('Tame Impala')));
   });
 
   test('sem tags guardadas: só o gênero, e nada quebra', () {
     MoodClues.invalidate();
+    Styles.trackTags = (_) => null;
+    Styles.invalidate();
     final r = Recommender.forPlaylist(pl, lib, tagsOf: (_) => null);
     expect([for (final s in r) s.track.artist], contains('Have a Nice Life')); // Post-Punk igual ao do КИНО
   });

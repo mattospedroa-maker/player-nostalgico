@@ -162,7 +162,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> with InList
 
   Future<void> _addSuggestion(Track t) async {
     final app = context.read<AppState>();
-    await app.addToPlaylist(widget.playlist.id, t);
+    await app.addSuggestionToPlaylist(widget.playlist.id, t);
     await _load(); // a música entra no fim da playlist e outra sugestão ocupa o lugar dela
   }
 

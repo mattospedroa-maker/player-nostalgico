@@ -20,6 +20,7 @@ import 'models.dart';
 import 'mood.dart';
 import 'organizer.dart' show safeFolderName;
 import 'service_health.dart';
+import 'styles.dart';
 import 'visual_search.dart';
 import 'visual_tags.dart';
 
@@ -353,7 +354,10 @@ class GifFetcher {
       }
       _tagCache?.put(artist, title, r);
       // tags novas podem mudar o clima automático desta música
-      if (r.tags.isNotEmpty) MoodClues.invalidate();
+      if (r.tags.isNotEmpty) {
+        MoodClues.invalidate();
+        Styles.invalidate(); // os estilos e as réguas também vêm das tags
+      }
     }
     tagStatus[t.id] = r.status;
     return r;

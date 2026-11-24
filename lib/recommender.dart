@@ -2,6 +2,8 @@ import 'artist_names.dart';
 import 'lastfm.dart' show MusicTag;
 import 'models.dart';
 import 'mood.dart';
+import 'style_learning.dart';
+import 'styles.dart';
 
 class Recommendation {
   final Track track;
@@ -12,7 +14,7 @@ class Recommendation {
 
 /// Sugestão para o fim de uma playlist: além da pontuação, diz o que combinou (as etiquetas da tela).
 class PlaylistSuggestion extends Recommendation {
-  /// Gênero da música quando ele bate com a playlist (igual ou da mesma família), senão null.
+  /// Estilo da música que mais combina com a playlist (igual ou vizinho), senão null.
   final String? genre;
 
   /// Clima da música quando ele bate com a playlist, senão null.
@@ -48,25 +50,37 @@ class Recommender {
 
   static bool _known(String v, String unknown) => v.trim().isNotEmpty && v != unknown;
 
-  /// Afinidade entre duas músicas (0 = nada em comum). Pesos: artista 3, gênero 2 (ou 1 se só a família
-  /// bate, ex.: "Nu Metal" e "Industrial Metal"), clima 2 (escolhido pelo usuário) ou 1 (pelo gênero),
-  /// álbum 1,5, época (até 3 anos) 0,5.
+  /// Afinidade entre duas músicas (0 = nada em comum). Pesos: artista 3, estilos até 2,5 (iguais, vizinhos ou que
+  /// você junta nas playlists; sem estilos, o gênero: 2, ou 1 se só a família bate), clima 2 (escolhido) ou 1,
+  /// réguas perto até 1, álbum 1,5, época (até 3 anos) 0,5, juntas nas suas playlists até 2,4.
   static double affinity(Track a, Track b) {
     var s = 0.0;
     final sameArtist = _known(a.artist, unknownArtist) && ArtistNames.current.shares(a.artist, b.artist);
     if (sameArtist) s += 3;
     if (sameArtist && _known(a.album, unknownAlbum) && a.album == b.album) s += 1.5;
-    final ga = a.genre.toLowerCase(), gb = b.genre.toLowerCase();
-    if (ga.isNotEmpty && ga == gb) {
-      s += 2;
-    } else if (ga.isNotEmpty && gb.isNotEmpty) {
-      final w = _mainGenreWord(ga);
-      if (w.isNotEmpty && w == _mainGenreWord(gb)) s += 1;
+    // estilos (com vizinhos e o que você junta nas playlists); sem estilos, o gênero como antes
+    final sa = Styles.of(a), sb = Styles.of(b);
+    if (sa.isNotEmpty && sb.isNotEmpty) {
+      s += 2.5 * Styles.listSimilarity(sa, sb);
+    } else {
+      final ga = a.genre.toLowerCase(), gb = b.genre.toLowerCase();
+      if (ga.isNotEmpty && ga == gb) {
+        s += 2;
+      } else if (ga.isNotEmpty && gb.isNotEmpty) {
+        final w = _mainGenreWord(ga);
+        if (w.isNotEmpty && w == _mainGenreWord(gb)) s += 1;
+      }
     }
     final ma = a.effectiveMood, mb = b.effectiveMood;
     if (ma != null && ma == mb) s += (a.chosenMood != null && b.chosenMood != null) ? 2 : 1;
+    // réguas perto (energia e humor)
+    if (Styles.hasVibe(a) && Styles.hasVibe(b)) {
+      final d = Styles.vibeOf(a).distanceTo(Styles.vibeOf(b));
+      if (d < 40) s += 1 - d / 40;
+    }
     final ya = a.year ?? 0, yb = b.year ?? 0;
     if (ya > 0 && yb > 0 && (ya - yb).abs() <= 3) s += .5;
+    if (a.id != null && b.id != null) s += .8 * StyleLearning.current.together(a.id!, b.id!).clamp(0, 3);
     return s;
   }
 
@@ -294,8 +308,6 @@ class Recommender {
     return out;
   }
 
-  static String _tagLabel(String tag) => tag.split(' ').map((w) => w.isEmpty ? w : w[0].toUpperCase() + w.substring(1)).join(' ');
-
   /// Playlist com o nome de um clima ("Triste", "Calmo"...): o clima vira a regra principal.
   static Mood? moodOfPlaylistName(String name) {
     final n = _plain(name);
@@ -305,31 +317,35 @@ class Recommender {
     return null;
   }
 
-  /// Músicas da biblioteca que combinam com a playlist (por gênero e clima), da mais para a menos parecida.
+  /// Músicas da biblioteca que combinam com a playlist, da mais para a menos parecida.
   ///
-  /// Faz o "retrato" da playlist (quanto ela tem de cada gênero, família de gênero e clima) e dá pontos
-  /// a cada música que ainda não está nela. Gênero igual vale mais que a mesma família; tags do Last.fm em
-  /// comum (shoegaze, dream pop, post punk...) somam pelo tanto de músicas da playlist que as têm; clima igual soma
-  /// (escolhido à mão vale o dobro); clima que briga tira. Artista que ainda não está na playlist ganha um
-  /// pouco a mais; no máximo 2 por artista. Música pulada muitas vezes cai.
-  /// Conta só em memória, sem internet: uma passada pela biblioteca.
+  /// Faz o "retrato" da playlist e dá pontos a cada música que ainda não está nela:
+  /// - estilos (até 4): iguais, vizinhos no mapa de estilos ou que você junta nas playlists;
+  /// - tags do Last.fm em comum que não são estilo (dreamy, melancholic...), pelo tanto de músicas que as têm;
+  /// - réguas (até 2,5): perto do centro da playlist em energia e humor;
+  /// - clima igual soma (escolhido à mão vale o dobro); clima que briga tira; playlist com nome de clima manda;
+  /// - juntas nas suas outras playlists (até 3,6) e artistas que você costuma juntar (até 1,2).
+  /// Artista que ainda não está na playlist ganha um pouco; no máximo 2 por artista; pulada muitas vezes cai.
+  /// Conta só em memória, sem internet.
   static List<PlaylistSuggestion> forPlaylist(List<Track> playlist, List<Track> library,
       {String playlistName = '', List<Play> plays = const [], int limit = 60, List<MusicTag>? Function(Track)? tagsOf}) {
-    final tagsFor = tagsOf ?? MoodClues.tagsOf;
     if (playlist.isEmpty) return const [];
+    final tagsFor = tagsOf ?? MoodClues.tagsOf;
+    final learn = StyleLearning.current;
     final inside = {for (final t in playlist) t.path};
     final insideIds = {for (final t in playlist) if (t.id != null) t.id!};
-    final genreW = <String, double>{}, familyW = <String, double>{}, moodW = <Mood, double>{};
-    // tags do Last.fm (shoegaze, dream pop, post punk, ethereal...): acham parentes que o gênero sozinho não acha
+    final styleW = <String, double>{}, moodW = <Mood, double>{};
+    // tags do Last.fm que não viraram estilo (dreamy, melancholic, 4ad...): acham parentes que o estilo não acha
     final tagW = <String, double>{};
     final artists = <String>{};
     var moodTotal = 0.0;
+    double ve = 0, vh = 0;
+    final vibes = <Vibe>[];
+    const posW = [1.0, .8, .6, .5, .4];
     for (final t in playlist) {
-      final g = t.genre.trim().toLowerCase();
-      if (g.isNotEmpty) {
-        genreW[g] = (genreW[g] ?? 0) + 1;
-        final f = _mainGenreWord(g);
-        if (f.isNotEmpty) familyW[f] = (familyW[f] ?? 0) + 1;
+      final st = Styles.of(t);
+      for (var i = 0; i < st.length; i++) {
+        styleW[st[i]] = (styleW[st[i]] ?? 0) + posW[i];
       }
       final m = t.effectiveMood;
       if (m != null) {
@@ -337,18 +353,26 @@ class Recommender {
         moodW[m] = (moodW[m] ?? 0) + w;
         moodTotal += w;
       }
+      if (Styles.hasVibe(t)) {
+        final v = Styles.vibeOf(t);
+        vibes.add(v);
+        ve += v.energy;
+        vh += v.humor;
+      }
       if (_known(t.artist, unknownArtist)) artists.add(ArtistNames.current.key(t.artist));
       for (final tag in _soundTags(t, tagsFor)) {
+        if (Styles.styleOf(tag) != null) continue; // já contou como estilo
         tagW[tag] = (tagW[tag] ?? 0) + (_broadTags.contains(tag) ? .35 : 1);
       }
     }
     final n = playlist.length.toDouble();
+    styleW.updateAll((_, v) => v / n);
     tagW.updateAll((_, v) => v / n);
-    genreW.updateAll((_, v) => v / n);
-    familyW.updateAll((_, v) => v / n);
-    // clima: a fração entre as músicas que têm clima, descontada se a maioria da playlist é neutra
     final moodCover = playlist.where((t) => t.effectiveMood != null).length / n;
     if (moodTotal > 0) moodW.updateAll((_, v) => v / moodTotal * (.4 + .6 * moodCover));
+    final center = vibes.isEmpty ? null : Vibe((ve / vibes.length).round(), (vh / vibes.length).round());
+    // playlist espalhada nas réguas aceita músicas mais longe do centro
+    final spread = center == null ? 0.0 : vibes.fold<double>(0, (a, v) => a + v.distanceTo(center)) / vibes.length;
     final rule = moodOfPlaylistName(playlistName);
 
     final skips = <int, int>{};
@@ -360,39 +384,51 @@ class Recommender {
     for (final t in library) {
       if (inside.contains(t.path) || (t.id != null && insideIds.contains(t.id))) continue;
       var s = 0.0;
-      String? genre;
+      String? label;
       Mood? mood;
-      final g = t.genre.trim().toLowerCase();
-      if (g.isNotEmpty) {
-        final exact = 3 * (genreW[g] ?? 0);
-        final f = _mainGenreWord(g);
-        final family = f.isEmpty ? 0.0 : 1.5 * (familyW[f] ?? 0);
-        final best = exact > family ? exact : family;
-        if (best > 0) {
-          s += best;
-          genre = t.genre.trim();
+      var related = false;
+      // estilos
+      final st = Styles.of(t);
+      if (st.isNotEmpty && styleW.isNotEmpty) {
+        var sum = 0.0, wsum = 0.0, bestC = 0.0;
+        for (var i = 0; i < st.length; i++) {
+          var best = 0.0;
+          for (final e in styleW.entries) {
+            final c = e.value * Styles.similarity(st[i], e.key);
+            if (c > best) best = c;
+          }
+          sum += best * posW[i];
+          wsum += posW[i];
+          if (best > bestC) (bestC, label) = (best, st[i]);
         }
+        // o estilo que mais bate manda; a média dos outros completa (música com muitos estilos não é punida)
+        final styleScore = .6 * bestC + .4 * (sum / wsum);
+        if (styleScore > .08) related = true;
+        s += 5 * styleScore;
       }
-      // tags em comum, pesadas por quantas músicas da playlist têm cada uma
+      // tags que não são estilo
       var tagScore = 0.0;
-      String? bestTag;
-      var bestTagW = 0.0;
       for (final tag in _soundTags(t, tagsFor)) {
-        final w = tagW[tag];
-        if (w == null) continue;
-        tagScore += w;
-        if (w > bestTagW && !_broadTags.contains(tag)) (bestTag, bestTagW) = (tag, w);
+        tagScore += tagW[tag] ?? 0;
       }
       if (tagScore > 0) {
-        s += 2 * (tagScore > 2.5 ? 2.5 : tagScore);
-        genre ??= bestTag == null ? null : _tagLabel(bestTag);
+        s += tagScore > 2.5 ? 2.5 : tagScore;
+        related = true;
       }
+      // réguas
+      if (center != null && Styles.hasVibe(t)) {
+        final d = Styles.vibeOf(t).distanceTo(center);
+        final reach = 30 + spread;
+        if (d < reach) s += 2.5 * (1 - d / reach);
+      }
+      // clima
       final m = t.effectiveMood;
       if (m != null) {
         final match = moodW[m] ?? 0;
         if (match > 0) {
           s += 2.5 * match * (t.chosenMood != null ? 1.5 : 1);
           mood = m;
+          related = true;
         }
         var clash = 0.0;
         for (final e in moodW.entries) {
@@ -400,20 +436,39 @@ class Recommender {
         }
         s -= 2.5 * clash;
         if (rule != null) {
-          if (m == rule) {
-            s += 4;
-            mood = m;
-          } else {
-            s -= 2;
-          }
+          if (m != rule) continue; // playlist "Triste" não sugere música de outro clima
+          s += 4;
+          mood = m;
+          related = true;
         }
       }
-      if (genre == null && mood == null) continue; // nada em comum: não é sugestão
+      // o que você junta nas outras playlists
+      if (t.id != null) {
+        var co = 0;
+        for (final id in insideIds) {
+          co += learn.together(t.id!, id);
+        }
+        if (co > 0) {
+          s += 1.2 * co.clamp(0, 3);
+          related = true;
+        }
+      }
       final key = _known(t.artist, unknownArtist) ? ArtistNames.current.key(t.artist) : null;
-      if (key != null && !artists.contains(key)) s += .3; // artista que ainda não está na playlist: vale descobrir
+      if (key != null) {
+        var aco = 0;
+        for (final a in artists) {
+          if (a != key) aco += learn.artistsTogether(key, a);
+        }
+        if (aco > 0) {
+          s += .6 * aco.clamp(0, 2);
+          related = true;
+        }
+        if (!artists.contains(key)) s += .3; // artista que ainda não está na playlist: vale descobrir
+      }
+      if (!related) continue; // só réguas perto não basta: precisa de estilo, tag, clima ou playlist em comum
       if (t.favorite) s += .3;
       s -= .7 * (skips[t.id] ?? 0).clamp(0, 3);
-      if (s >= 1) out.add(PlaylistSuggestion(t, s, genre, mood));
+      if (s >= 1.5) out.add(PlaylistSuggestion(t, s, label, mood));
     }
     out.sort((x, y) => y.score.compareTo(x.score));
     return diversify(out, perArtist: 2, perAlbum: 2, limit: limit).cast<PlaylistSuggestion>();
