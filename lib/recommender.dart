@@ -1,4 +1,5 @@
 import 'artist_names.dart';
+import 'lastfm.dart' show MusicTag;
 import 'models.dart';
 import 'mood.dart';
 
@@ -261,6 +262,40 @@ class Recommender {
     return b.toString();
   }
 
+  /// Tags que não dizem nada do som (gosto pessoal, ocasião), ignoradas na comparação.
+  static final _noiseTag = RegExp(r'^(seen live|favou?rites?|favou?rite songs?|my favou?rite|love|loved|awesome|beautiful|amazing|best|'
+      r'good|great|cool|epic|masterpiece|albums i own|under \d+ listeners|spotify|youtube|music|songs?|all|check out|wishlist)$');
+
+  /// Tags largas demais (quase toda música tem): contam menos que as de estilo (shoegaze, post punk...).
+  static const _broadTags = {
+    'rock', 'pop', 'indie', 'alternative', 'electronic', 'metal', 'hip hop', 'rap', 'dance', 'instrumental', 'soundtrack',
+    'female vocalists', 'male vocalists', 'singer songwriter', '60s', '70s', '80s', '90s', '00s', '2000s', '2010s', '2020s',
+    'american', 'british', 'usa', 'uk',
+  };
+
+  static String _normTag(String t) => t.toLowerCase().replaceAll(RegExp(r'[-_]+'), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+
+  /// Até 10 tags mais fortes do Last.fm guardadas para a música (sem as de gosto pessoal e sem o nome do artista).
+  /// Sem tags guardadas, usa o gênero como única "tag".
+  static Set<String> _soundTags(Track t, List<MusicTag>? Function(Track) tagsOf) {
+    final tags = tagsOf(t);
+    final artist = _normTag(t.artist);
+    final out = <String>{};
+    if (tags != null && tags.isNotEmpty) {
+      final sorted = [...tags]..sort((a, b) => b.count.compareTo(a.count));
+      for (final tag in sorted) {
+        final n = _normTag(tag.name);
+        if (n.length < 2 || n == artist || _noiseTag.hasMatch(n)) continue;
+        out.add(n);
+        if (out.length >= 10) break;
+      }
+    }
+    if (out.isEmpty && t.genre.trim().isNotEmpty) out.add(_normTag(t.genre));
+    return out;
+  }
+
+  static String _tagLabel(String tag) => tag.split(' ').map((w) => w.isEmpty ? w : w[0].toUpperCase() + w.substring(1)).join(' ');
+
   /// Playlist com o nome de um clima ("Triste", "Calmo"...): o clima vira a regra principal.
   static Mood? moodOfPlaylistName(String name) {
     final n = _plain(name);
@@ -273,16 +308,20 @@ class Recommender {
   /// Músicas da biblioteca que combinam com a playlist (por gênero e clima), da mais para a menos parecida.
   ///
   /// Faz o "retrato" da playlist (quanto ela tem de cada gênero, família de gênero e clima) e dá pontos
-  /// a cada música que ainda não está nela. Gênero igual vale mais que a mesma família; clima igual soma
+  /// a cada música que ainda não está nela. Gênero igual vale mais que a mesma família; tags do Last.fm em
+  /// comum (shoegaze, dream pop, post punk...) somam pelo tanto de músicas da playlist que as têm; clima igual soma
   /// (escolhido à mão vale o dobro); clima que briga tira. Artista que ainda não está na playlist ganha um
   /// pouco a mais; no máximo 2 por artista. Música pulada muitas vezes cai.
   /// Conta só em memória, sem internet: uma passada pela biblioteca.
   static List<PlaylistSuggestion> forPlaylist(List<Track> playlist, List<Track> library,
-      {String playlistName = '', List<Play> plays = const [], int limit = 60}) {
+      {String playlistName = '', List<Play> plays = const [], int limit = 60, List<MusicTag>? Function(Track)? tagsOf}) {
+    final tagsFor = tagsOf ?? MoodClues.tagsOf;
     if (playlist.isEmpty) return const [];
     final inside = {for (final t in playlist) t.path};
     final insideIds = {for (final t in playlist) if (t.id != null) t.id!};
     final genreW = <String, double>{}, familyW = <String, double>{}, moodW = <Mood, double>{};
+    // tags do Last.fm (shoegaze, dream pop, post punk, ethereal...): acham parentes que o gênero sozinho não acha
+    final tagW = <String, double>{};
     final artists = <String>{};
     var moodTotal = 0.0;
     for (final t in playlist) {
@@ -299,8 +338,12 @@ class Recommender {
         moodTotal += w;
       }
       if (_known(t.artist, unknownArtist)) artists.add(ArtistNames.current.key(t.artist));
+      for (final tag in _soundTags(t, tagsFor)) {
+        tagW[tag] = (tagW[tag] ?? 0) + (_broadTags.contains(tag) ? .35 : 1);
+      }
     }
     final n = playlist.length.toDouble();
+    tagW.updateAll((_, v) => v / n);
     genreW.updateAll((_, v) => v / n);
     familyW.updateAll((_, v) => v / n);
     // clima: a fração entre as músicas que têm clima, descontada se a maioria da playlist é neutra
@@ -329,6 +372,20 @@ class Recommender {
           s += best;
           genre = t.genre.trim();
         }
+      }
+      // tags em comum, pesadas por quantas músicas da playlist têm cada uma
+      var tagScore = 0.0;
+      String? bestTag;
+      var bestTagW = 0.0;
+      for (final tag in _soundTags(t, tagsFor)) {
+        final w = tagW[tag];
+        if (w == null) continue;
+        tagScore += w;
+        if (w > bestTagW && !_broadTags.contains(tag)) (bestTag, bestTagW) = (tag, w);
+      }
+      if (tagScore > 0) {
+        s += 2 * (tagScore > 2.5 ? 2.5 : tagScore);
+        genre ??= bestTag == null ? null : _tagLabel(bestTag);
       }
       final m = t.effectiveMood;
       if (m != null) {
