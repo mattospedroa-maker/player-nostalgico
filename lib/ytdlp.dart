@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 
 import 'error_log.dart';
+import 'filename_parser.dart';
 
 /// Resultado de uma execução do yt-dlp.
 class YtRun {
@@ -162,26 +163,73 @@ class YtDlp {
     return jsonDecode(r.out.substring(start)) as Map<String, dynamic>;
   }
 
-  /// Argumentos para baixar só o áudio e converter em .mp3 (com capa quadrada e tags).
-  static List<String> mp3Args(String url, String outDir, {String quality = '192K'}) => [
-        '-f', 'bestaudio/best',
-        '-x', '--audio-format', 'mp3', '--audio-quality', quality,
+  /// Fragmentos baixados ao mesmo tempo (mais que 4 não ajuda e pesa no celular).
+  static const fragments = 4;
+
+  /// Caminho rápido: pega o áudio AAC que o YouTube já entrega em .m4a e só copia (sem recodificar).
+  /// `--audio-quality 0` com saída M4A não converte nada quando o áudio já é AAC.
+  /// Sem capa embutida (a capa vem do Cover Art Archive): o arquivo fica pronto assim que o download termina.
+  static List<String> aacArgs(String url, String outDir) => [
+        '-f', 'ba[acodec^=aac][ext=m4a]/ba[ext=m4a]',
+        '-x', '--audio-format', 'm4a', '--audio-quality', '0',
+        ..._commonArgs(url, outDir),
+      ];
+
+  /// Plano B, só quando o vídeo não tem áudio AAC (o YouTube só oferece Opus): converte uma única vez para AAC.
+  /// O `--audio-quality` com o mesmo valor em kbps é necessário: com `0` o yt-dlp passa `-q:a`, e aí o FFmpeg
+  /// ignora o `-b:a` (testado: saía ~250 kbps em vez de 192). Os argumentos valem só para a conversão
+  /// (`ExtractAudio`); com `ffmpeg:` eles iriam também para o passo que grava as tags e recodificariam de novo.
+  /// Nunca `libfdk_aac`: o FFmpeg embarcado não tem esse encoder.
+  static List<String> opusFallbackArgs(String url, String outDir, {String bitrate = '192k'}) => [
+        '-f', 'ba',
+        '-x', '--audio-format', 'm4a', '--audio-quality', bitrate.toUpperCase(),
+        '--postprocessor-args', 'ExtractAudio:-c:a aac -b:a $bitrate -vn',
+        ..._commonArgs(url, outDir),
+      ];
+
+  static List<String> _commonArgs(String url, String outDir) => [
+        '--concurrent-fragments', '$fragments', // o mesmo que -N 4
         '--embed-metadata',
-        '--embed-thumbnail', '--convert-thumbnails', 'jpg',
-        // capa quadrada (miniatura do YouTube é 16:9)
-        '--ppa', r'ThumbnailsConvertor+FFmpeg_o:-c:v mjpeg -vf "crop=min(iw\,ih):min(iw\,ih)"',
+        // data do vídeo só com o ano: "20180724" em ©day quebra a leitura das tags no celular
+        '--parse-metadata', r'upload_date:(?P<meta_date>\d{4})',
         '--no-playlist', '--no-mtime', '--no-warnings', '--newline',
         '-o', '$outDir${Platform.pathSeparator}%(id)s.%(ext)s',
         url,
       ];
 
-  /// Baixa e converte. Devolve o caminho do .mp3 gerado dentro de [outDir].
-  Future<String> downloadMp3(String url, String outDir, {required String id, String quality = '192K', void Function(double, String)? onProgress}) async {
+  /// O vídeo não tem áudio .m4a/AAC (só Opus): hora do plano B.
+  static bool noAacFormat(String raw) => raw.toLowerCase().contains('requested format is not available');
+
+  /// Linha do log que mostra conversão de verdade (só no plano B do Opus).
+  /// No caminho copiado aparece "[ExtractAudio] Not converting audio ...", que não é conversão.
+  static bool isConvertingLine(String line) => line.contains('[ExtractAudio]') && !line.contains('Not converting');
+
+  /// Baixa só o áudio. Devolve o caminho do .m4a gerado dentro de [outDir].
+  /// Tenta primeiro copiar o AAC; se o vídeo não tiver, converte o Opus para AAC em [fallbackBitrate].
+  Future<String> downloadAudio(String url, String outDir,
+      {required String id, String fallbackBitrate = '192k', void Function(double, String)? onProgress}) async {
     await Directory(outDir).create(recursive: true);
-    final r = await run(mp3Args(url, outDir, quality: quality), id: id, download: true, onProgress: onProgress);
-    final mp3s = Directory(outDir).listSync().whereType<File>().where((f) => f.path.toLowerCase().endsWith('.mp3')).toList();
-    if (mp3s.isEmpty) throw YtDlpException.from(r.err.isNotEmpty ? r.err : 'O yt-dlp terminou sem gerar o .mp3 (código ${r.exitCode}).');
-    return mp3s.first.path;
+    YtRun r;
+    try {
+      r = await run(aacArgs(url, outDir), id: id, download: true, onProgress: onProgress);
+    } on YtDlpException catch (e) {
+      // no Android o yt-dlp com erro vira exceção; no PC volta como código de saída
+      if (!noAacFormat(e.message)) rethrow;
+      r = YtRun(1, '', e.message);
+    }
+    if (r.exitCode != 0 && noAacFormat(r.err) && _audioIn(outDir) == null) {
+      r = await run(opusFallbackArgs(url, outDir, bitrate: fallbackBitrate), id: id, download: true, onProgress: onProgress);
+    }
+    final file = _audioIn(outDir);
+    if (file == null) throw YtDlpException.from(r.err.isNotEmpty ? r.err : 'O yt-dlp terminou sem gerar o áudio (código ${r.exitCode}).');
+    return file;
+  }
+
+  /// O áudio pronto na pasta temporária (.m4a de preferência; nunca pedaços .part).
+  static String? _audioIn(String dir) {
+    final files = Directory(dir).listSync().whereType<File>().map((f) => f.path).where(isAudioFile).toList();
+    if (files.isEmpty) return null;
+    return files.firstWhere((f) => f.toLowerCase().endsWith('.m4a'), orElse: () => files.first);
   }
 
   /// Mensagens do yt-dlp em português, para os erros mais comuns.

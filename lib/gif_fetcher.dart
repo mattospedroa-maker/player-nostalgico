@@ -808,8 +808,10 @@ class GifFetcher {
         outageStatus.remove(t.id);
         borrowed.remove(t.id);
       }
-      // nenhuma fonte de anime respondeu: não marca como buscada, para tentar de novo quando a música tocar
-      if (!(outage && moodUsed.isEmpty)) {
+      // nenhuma fonte de anime respondeu, ou a música terminou sem GIF nenhum (tudo falhou no download, por
+      // exemplo): não marca como buscada, para tentar de novo da próxima vez que tocar (antes esperava 3 dias)
+      final empty = saved == 0 && pinned.isEmpty;
+      if (!(outage && moodUsed.isEmpty) && !empty) {
         log[key] = {'v': planVersion, 't': DateTime.now().toIso8601String(), 'anime': animeDone || !bulk, 'lfm': tagAnime.isNotEmpty};
         _writeLog(log);
       }

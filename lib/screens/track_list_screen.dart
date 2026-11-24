@@ -6,14 +6,15 @@ import 'package:provider/provider.dart';
 
 import '../app_state.dart';
 import '../artist_names.dart';
+import '../list_search.dart';
 import '../models.dart';
 import '../theme.dart';
 import '../thumbnails.dart';
 import '../widgets.dart';
 import '../xp_icons.dart';
 
-/// Lista de músicas com "Tocar tudo" e "Aleatório".
-class TrackListScreen extends StatelessWidget {
+/// Lista de músicas com "Tocar tudo" e "Aleatório" (e a lupa para pesquisar dentro dela).
+class TrackListScreen extends StatefulWidget {
   final String title;
   final List<Track> tracks;
   final String? path;
@@ -22,10 +23,41 @@ class TrackListScreen extends StatelessWidget {
   const TrackListScreen({super.key, required this.title, required this.tracks, this.path, this.thumb, this.subtitle});
 
   @override
+  State<TrackListScreen> createState() => _TrackListScreenState();
+}
+
+class _TrackListScreenState extends State<TrackListScreen> with InListSearch {
+  final _scroll = ScrollController();
+  InListIndex? _index;
+  Object? _indexKey;
+
+  String get title => widget.title;
+  GroupThumb? get thumb => widget.thumb;
+  String? get subtitle => widget.subtitle;
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  void onSearchChanged() {
+    if (_scroll.hasClients) _scroll.jumpTo(0);
+  }
+
+  @override
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
     // usa a versão mais recente (favorita, caminho) de cada faixa
-    final list = [for (final t in tracks) app.byId(t.id) ?? t];
+    final list = [for (final t in widget.tracks) app.byId(t.id) ?? t];
+    // índice só da lista desta tela, montado na 1ª busca (abrir o álbum não fica mais lento)
+    final key = (identityHashCode(widget.tracks), identityHashCode(app.tracks));
+    if (key != _indexKey) {
+      _indexKey = key;
+      _index = null;
+    }
+    final shown = searching ? (_index ??= InListIndex(list)).filter(list, searchQuery) : list;
     return Scaffold(
       body: XpBackground(
         child: SafeArea(
@@ -34,9 +66,10 @@ class TrackListScreen extends StatelessWidget {
               XpTitleBar(
                 title: title,
                 icon: thumb == null ? XpIcons.note : XpIcons.disc,
-                actions: [XpTitleButton(icon: Icons.close, tooltip: 'Fechar', onTap: () => Navigator.pop(context))],
+                actions: [searchButton(), XpTitleButton(icon: Icons.close, tooltip: 'Fechar', onTap: () => Navigator.pop(context))],
               ),
-              XpAddressBar(path ?? 'Música\\$title'),
+              XpAddressBar(searchPath(widget.path ?? 'Música\\$title')),
+              searchBox(thumb == null ? 'Pesquisar nesta lista…' : 'Pesquisar em "$title"…'),
               Padding(
                 padding: const EdgeInsets.all(8),
                 child: Row(
@@ -99,13 +132,18 @@ class TrackListScreen extends StatelessWidget {
                       children: [
                         const XpColumnHeader('Nome', right: 'Duração'),
                         Expanded(
-                          child: ListView.builder(
-                            itemCount: list.length,
-                            itemBuilder: (_, i) => TrackTile(
-                              track: list[i],
-                              onTap: () => playTracks(context, list, start: i),
-                            ),
-                          ),
+                          child: searching && shown.isEmpty
+                              ? noMatches()
+                              : ListView.builder(
+                                  controller: _scroll,
+                                  itemCount: shown.length,
+                                  // tocar num resultado toca a lista inteira a partir dele
+                                  itemBuilder: (_, i) => TrackTile(
+                                    track: shown[i],
+                                    highlight: searching ? searchQuery : null,
+                                    onTap: () => playTracks(context, list, start: searching ? list.indexOf(shown[i]) : i),
+                                  ),
+                                ),
                         ),
                       ],
                     ),
@@ -113,7 +151,7 @@ class TrackListScreen extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 6),
-              XpStatusBar(['${list.length} faixas', fmtTotal(list)]),
+              XpStatusBar([searching ? '${shown.length} de ${list.length} faixas' : '${list.length} faixas', fmtTotal(searching ? shown : list)]),
             ],
           ),
         ),
@@ -141,7 +179,7 @@ class GroupListScreen extends StatefulWidget {
   State<GroupListScreen> createState() => _GroupListScreenState();
 }
 
-class _GroupListScreenState extends State<GroupListScreen> {
+class _GroupListScreenState extends State<GroupListScreen> with InListSearch {
   final _scroll = ScrollController();
   Map<int, List<String>>? _pinned;
   final _thumbs = <String, GroupThumb>{};
@@ -179,6 +217,12 @@ class _GroupListScreenState extends State<GroupListScreen> {
   void dispose() {
     _scroll.dispose();
     super.dispose();
+  }
+
+  @override
+  void onSearchChanged() {
+    _letter = null;
+    if (_scroll.hasClients) _scroll.jumpTo(0);
   }
 
   String _keyOf(Track t, String root) => switch (kind) {
@@ -247,7 +291,11 @@ class _GroupListScreenState extends State<GroupListScreen> {
         groups.putIfAbsent(k, () => []).add(t);
       }
     }
-    final keys = groups.keys.toList()..sort(compareForIndex);
+    final all = groups.keys.toList()..sort(compareForIndex);
+    // a lupa procura pelo nome (no álbum também pelo artista)
+    final keys = searching
+        ? [for (final k in all) if (textMatches(searchQuery, [k == '.' ? '(raiz)' : k, if (kind == GroupKind.album) groups[k]!.first.artist])) k]
+        : all;
     final grid = _grid(app);
     final letters = keys.map(indexLetter).toSet();
     final gifCount = _hasThumbs ? keys.where((k) => _thumbs[k]?.isGif ?? false).length : 0;
@@ -264,9 +312,10 @@ class _GroupListScreenState extends State<GroupListScreen> {
                   GroupKind.genre => XpIcons.star,
                   GroupKind.folder => XpIcons.folder,
                 },
-                actions: [XpTitleButton(icon: Icons.close, tooltip: 'Fechar', onTap: () => Navigator.pop(context))],
+                actions: [searchButton(), XpTitleButton(icon: Icons.close, tooltip: 'Fechar', onTap: () => Navigator.pop(context))],
               ),
-              XpAddressBar('Música\\$_title'),
+              XpAddressBar(searchPath('Música\\$_title')),
+              searchBox('Pesquisar em ${_title.toLowerCase()}…'),
               if (_hasThumbs)
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
@@ -288,13 +337,15 @@ class _GroupListScreenState extends State<GroupListScreen> {
                   color: Colors.white,
                   child: Row(
                     children: [
-                      Expanded(child: grid ? _gridView(app, keys, groups) : _listView(app, keys, groups)),
+                      Expanded(
+                        child: searching && keys.isEmpty ? noMatches() : (grid ? _gridView(app, keys, groups) : _listView(app, keys, groups)),
+                      ),
                       _azRail(letters, keys, grid),
                     ],
                   ),
                 ),
               ),
-              XpStatusBar(['${keys.length} ${_title.toLowerCase()}', if (gifCount > 0) '$gifCount com GIF no lugar da capa']),
+              XpStatusBar([searching ? '${keys.length} de ${all.length} ${_title.toLowerCase()}' : '${keys.length} ${_title.toLowerCase()}', if (gifCount > 0) '$gifCount com GIF no lugar da capa']),
             ],
           ),
         ),
@@ -334,12 +385,11 @@ class _GroupListScreenState extends State<GroupListScreen> {
             Container(
               color: sel ? Xp.select : null,
               padding: const EdgeInsets.symmetric(horizontal: 3),
-              child: Text(
-                k,
+              child: Text.rich(
+                highlightSpan(k, searching ? searchQuery : null, TextStyle(fontSize: 12.5, height: 1.15, color: sel ? Colors.white : Colors.black)),
                 maxLines: 2,
                 textAlign: TextAlign.center,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 12.5, height: 1.15, color: sel ? Colors.white : Colors.black),
               ),
             ),
             Text(
@@ -379,11 +429,10 @@ class _GroupListScreenState extends State<GroupListScreen> {
                       XpIcon(kind == GroupKind.genre ? XpIcons.star : XpIcons.folder, size: 26),
                     const SizedBox(width: 9),
                     Expanded(
-                      child: Text(
-                        k == '.' ? '(raiz)' : k,
+                      child: Text.rich(
+                        highlightSpan(k == '.' ? '(raiz)' : k, searching ? searchQuery : null, TextStyle(fontSize: 14.5, color: sel ? Colors.white : Colors.black)),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 14.5, color: sel ? Colors.white : Colors.black),
                       ),
                     ),
                     const SizedBox(width: 6),
@@ -455,7 +504,26 @@ class ThumbFrame extends StatelessWidget {
   final String name;
   final bool selected;
   final double padding;
-  const ThumbFrame({super.key, required this.thumb, required this.size, required this.name, this.selected = false, this.padding = 4});
+
+  /// Selo no canto (padrão: "GIF" quando a miniatura é um GIF; '' = nenhum).
+  final String? badge;
+
+  /// Bolinha vermelha no canto de cima (ex.: episódios não ouvidos). 0 = sem bolinha.
+  final int count;
+
+  /// Sem imagem: este ícone sobre cinza claro, em vez do quadro colorido com o nome.
+  final XpIcons? placeholderIcon;
+  const ThumbFrame({
+    super.key,
+    required this.thumb,
+    required this.size,
+    required this.name,
+    this.selected = false,
+    this.padding = 4,
+    this.badge,
+    this.count = 0,
+    this.placeholderIcon,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -463,7 +531,7 @@ class ThumbFrame extends StatelessWidget {
     final inner = f != null
         ? Image.file(f, fit: BoxFit.cover, cacheWidth: (size * 2.5).round(), gaplessPlayback: true, errorBuilder: (_, _, _) => _placeholder())
         : _placeholder();
-    return Container(
+    final frame = Container(
       width: size,
       height: size,
       padding: EdgeInsets.all(padding),
@@ -476,7 +544,7 @@ class ThumbFrame extends StatelessWidget {
         fit: StackFit.expand,
         children: [
           inner,
-          if (thumb.isGif && size >= 60)
+          if ((badge ?? (thumb.isGif ? 'GIF' : '')).isNotEmpty && size >= 60)
             Positioned(
               right: 2,
               bottom: 2,
@@ -486,18 +554,43 @@ class ThumbFrame extends StatelessWidget {
                   color: Xp.navy,
                   border: Border.all(color: const Color(0xFF9CB8FF)),
                 ),
-                child: const Text(
-                  'GIF',
-                  style: TextStyle(color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.bold),
+                child: Text(
+                  badge ?? 'GIF',
+                  style: const TextStyle(color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.bold),
                 ),
               ),
             ),
         ],
       ),
     );
+    if (count <= 0 || size < 60) return frame;
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        frame,
+        Positioned(
+          right: -6,
+          top: -6,
+          child: Container(
+            constraints: const BoxConstraints(minWidth: 21),
+            height: 21,
+            padding: const EdgeInsets.symmetric(horizontal: 5),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(color: Xp.red, borderRadius: BorderRadius.circular(11), border: Border.all(color: Colors.white)),
+            child: Text(count > 99 ? '99+' : '$count', style: const TextStyle(color: Colors.white, fontSize: 11.5, fontWeight: FontWeight.bold)),
+          ),
+        ),
+      ],
+    );
   }
 
-  Widget _placeholder() => Container(
+  Widget _placeholder() => placeholderIcon != null
+      ? Container(
+          color: const Color(0xFFDADDE3),
+          alignment: Alignment.center,
+          child: XpIcon(placeholderIcon!, size: size * .45),
+        )
+      : Container(
     decoration: BoxDecoration(
       gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [thumb.color, Color.lerp(thumb.color, Colors.black, .5)!]),
     ),

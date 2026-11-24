@@ -57,6 +57,29 @@ enum SummaryStatus {
   const SummaryStatus(this.label);
 }
 
+/// O resumo falhou por algo que passa sozinho (Gemini sobrecarregado, limite do plano grátis por minuto,
+/// YouTube recusando a legenda por excesso de pedidos, sem internet)? Então vale tentar de novo mais tarde.
+bool isTemporarySummaryError(String? error) {
+  if (error == null || error.isEmpty) return false;
+  final e = error.toLowerCase();
+  if (e.contains('chave do gemini inválida') || e.contains('chave da mistral inválida') || e.contains('sem chave')) return false;
+  return RegExp(r'\b(429|500|502|503|504)\b').hasMatch(e) ||
+      e.contains('demorou demais') ||
+      e.contains('limite do plano') ||
+      e.contains('sem conexão') ||
+      e.contains('high demand') ||
+      e.contains('unavailable') ||
+      e.contains('bloqueou');
+}
+
+/// Espera antes da próxima tentativa automática depois de [fails] falhas temporárias seguidas.
+Duration summaryRetryWait(int fails) => switch (fails) {
+      <= 0 => Duration.zero,
+      1 => const Duration(minutes: 30),
+      2 => const Duration(hours: 2),
+      _ => const Duration(days: 1),
+    };
+
 /// Assuntos fixos (a "vibe" do podcast): o mix "Da mesma vibe" procura outro episódio do mesmo assunto.
 const podcastSubjects = [
   'religião/bíblico', 'ciência', 'tecnologia', 'humor', 'crime real', 'esporte', 'política', 'saúde', 'games',
@@ -365,8 +388,8 @@ class GeminiClient {
   /// Flash-Lite primeiro: no plano grátis ele aguenta bem mais pedidos por dia que o Flash (que fica de reserva).
   static const models = ['gemini-flash-lite-latest', 'gemini-flash-latest'];
 
-  static Uri urlFor(String model, String key) =>
-      Uri.https('generativelanguage.googleapis.com', '/v1beta/models/$model:generateContent', {'key': key});
+  /// A chave vai no cabeçalho x-goog-api-key, nunca no link (o link pode aparecer em registros de erro).
+  static Uri urlFor(String model) => Uri.https('generativelanguage.googleapis.com', '/v1beta/models/$model:generateContent');
 
   /// Devolve o JSON que a IA escreveu.
   /// [videoUrl]: link do YouTube para o Gemini "assistir" (só o som e uma imagem a cada 20 s, em baixa
@@ -395,7 +418,7 @@ class GeminiClient {
     for (final model in models) {
       final http.Response r;
       try {
-        r = await client.post(urlFor(model, apiKey), headers: {'Content-Type': 'application/json'}, body: body).timeout(timeout);
+        r = await client.post(urlFor(model), headers: {'Content-Type': 'application/json', 'x-goog-api-key': apiKey.trim()}, body: body).timeout(timeout);
       } on TimeoutException {
         throw const GeminiException('O Gemini demorou demais para responder');
       } on SocketException {
@@ -589,12 +612,12 @@ class PodcastInfoService extends ChangeNotifier {
     _cache.remove(to);
   }
 
-  /// Monta tudo a partir das informações do yt-dlp: descrição, capítulos, legenda e resumo da IA.
-  /// [onStatus] avisa cada etapa (a tela de download mostra). Nunca lança: falhas viram [SummaryStatus].
   /// Até quando não vale tentar sozinho (limite do dia batido; a cota volta à meia-noite do Pacífico, 5h em Brasília).
   DateTime? quotaUntil;
   bool get quotaHit => quotaUntil != null && DateTime.now().isBefore(quotaUntil!);
 
+  /// Monta tudo a partir das informações do yt-dlp: descrição, capítulos, legenda e resumo da IA.
+  /// [onStatus] avisa cada etapa (a tela de download mostra). Nunca lança: falhas viram [SummaryStatus].
   /// [allowVideo]: sem legenda, deixa o Gemini ouvir o vídeo (gasta muito da cota; só quando você pede).
   Future<EpisodeInfo> build(Map<String, dynamic> ytInfo,
       {required String title, required String program, void Function(SummaryStatus)? onStatus, bool allowVideo = false}) async {

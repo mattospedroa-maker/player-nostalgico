@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
+import '../list_search.dart';
 import '../main.dart';
 import '../models.dart';
 import '../player_service.dart';
@@ -9,15 +10,22 @@ import '../theme.dart';
 import '../widgets.dart';
 import '../xp_icons.dart';
 
-class PlaylistsScreen extends StatelessWidget {
+class PlaylistsScreen extends StatefulWidget {
   const PlaylistsScreen({super.key});
 
   @override
+  State<PlaylistsScreen> createState() => _PlaylistsScreenState();
+}
+
+class _PlaylistsScreenState extends State<PlaylistsScreen> with InListSearch {
+  @override
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
+    final shown = searching ? [for (final pl in app.playlists) if (textMatches(searchQuery, [pl.name])) pl] : app.playlists;
     return Column(children: [
-      const XpTitleBar(title: 'Playlists', icon: XpIcons.list),
-      const XpAddressBar('Playlists'),
+      XpTitleBar(title: 'Playlists', icon: XpIcons.list, actions: [searchButton()]),
+      XpAddressBar(searchPath('Playlists')),
+      searchBox('Pesquisar playlist pelo nome…'),
       Padding(
         padding: const EdgeInsets.all(8),
         child: XpButton(
@@ -32,21 +40,24 @@ class PlaylistsScreen extends StatelessWidget {
       Expanded(
         child: app.playlists.isEmpty
             ? const EmptyHint(Icons.queue_music, 'Nenhuma playlist ainda.\nSegure uma música para adicionar a uma playlist.')
-            : GridView.builder(
-                padding: const EdgeInsets.fromLTRB(10, 4, 10, 10),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: .95),
-                itemCount: app.playlists.length,
-                itemBuilder: (_, i) => _PlaylistCard(app.playlists[i]),
-              ),
+            : shown.isEmpty
+                ? noMatches()
+                : GridView.builder(
+                    padding: const EdgeInsets.fromLTRB(10, 4, 10, 10),
+                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: .95),
+                    itemCount: shown.length,
+                    itemBuilder: (_, i) => _PlaylistCard(shown[i], highlight: searching ? searchQuery : null),
+                  ),
       ),
-      XpStatusBar(['${app.playlists.length} playlists']),
+      XpStatusBar([searching ? '${shown.length} de ${app.playlists.length} playlists' : '${app.playlists.length} playlists']),
     ]);
   }
 }
 
 class _PlaylistCard extends StatelessWidget {
   final Playlist pl;
-  const _PlaylistCard(this.pl);
+  final String? highlight;
+  const _PlaylistCard(this.pl, {this.highlight});
 
   @override
   Widget build(BuildContext context) {
@@ -78,7 +89,11 @@ class _PlaylistCard extends StatelessWidget {
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(8, 6, 8, 0),
-                child: Text(pl.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                child: Text.rich(
+                  highlightSpan(pl.name, highlight, const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
@@ -100,9 +115,10 @@ class PlaylistDetailScreen extends StatefulWidget {
   State<PlaylistDetailScreen> createState() => _PlaylistDetailScreenState();
 }
 
-class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
+class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> with InListSearch {
   List<Track> _tracks = const [];
   late String _name = widget.playlist.name;
+  InListIndex? _index;
 
   @override
   void initState() {
@@ -112,7 +128,12 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
 
   Future<void> _load() async {
     final ts = await context.read<AppState>().db.playlistTracks(widget.playlist.id);
-    if (mounted) setState(() => _tracks = ts);
+    if (mounted) {
+      setState(() {
+        _tracks = ts;
+        _index = null;
+      });
+    }
   }
 
   Future<void> _save() async {
@@ -130,6 +151,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
       HomeShell.goTo(context, 0);
     }
 
+    final shown = searching ? (_index ??= InListIndex(_tracks)).filter(_tracks, searchQuery) : _tracks;
     return Scaffold(
       body: XpBackground(
         child: SafeArea(
@@ -169,9 +191,11 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                   nav.pop();
                 },
               ),
+              searchButton(),
               XpTitleButton(icon: Icons.close, tooltip: 'Fechar', onTap: () => Navigator.pop(context)),
             ]),
-            XpAddressBar('Playlists\\$_name'),
+            XpAddressBar(searchPath('Playlists\\$_name')),
+            searchBox('Pesquisar em "$_name"…'),
             Padding(
               padding: const EdgeInsets.all(8),
               child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -183,6 +207,19 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
             Expanded(
               child: ColoredBox(color: Colors.white, child: _tracks.isEmpty
                   ? const EmptyHint(Icons.playlist_add, 'Playlist vazia.\nSegure uma música em qualquer lista para adicionar.')
+                  : searching
+                  // enquanto busca: só a lista filtrada (arrastar e apagar voltam ao fechar a busca)
+                  ? (shown.isEmpty
+                      ? noMatches()
+                      : ListView.builder(
+                          itemCount: shown.length,
+                          itemBuilder: (_, i) => TrackTile(
+                            track: shown[i],
+                            highlight: searchQuery,
+                            subtitle: '${shown[i].artist} · ${fmtDuration(Duration(milliseconds: shown[i].durationMs))}',
+                            onTap: () => play(_tracks.indexOf(shown[i])),
+                          ),
+                        ))
                   : ReorderableListView.builder(
                       itemCount: _tracks.length,
                       onReorderItem: (a, b) {
@@ -210,7 +247,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> {
                       ),
                     )),
             ),
-            XpStatusBar(['${_tracks.length} faixas', fmtTotal(_tracks)]),
+            XpStatusBar([searching ? '${shown.length} de ${_tracks.length} faixas' : '${_tracks.length} faixas', fmtTotal(searching ? shown : _tracks)]),
           ]),
         ),
       ),

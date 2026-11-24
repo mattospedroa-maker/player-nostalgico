@@ -15,6 +15,7 @@ import 'artist_names.dart';
 import 'artist_photos.dart';
 import 'audio_handler.dart';
 import 'backup.dart';
+import 'cover_embed.dart';
 import 'cover_service.dart';
 import 'crossfade.dart';
 import 'db.dart';
@@ -31,17 +32,21 @@ import 'library_scanner.dart';
 import 'metadata.dart';
 import 'models.dart';
 import 'mood.dart';
+import 'info_retry.dart';
 import 'organizer.dart';
 import 'play_stats.dart';
 import 'player_service.dart';
 import 'podcast_info.dart';
 import 'podcasts.dart';
+import 'podcast_themes.dart';
+import 'program_art.dart';
 import 'recommender.dart';
 import 'visual_search.dart';
 
 /// Estado central do app: pasta-fonte, biblioteca, playlists e serviços.
 /// Suba quando a leitura de nomes/tags mudar, para reler a biblioteca toda.
-const scanVersion = 2;
+// 3: .m4a do YouTube com a data "20180724" não eram lidos (agora são consertados na releitura)
+const scanVersion = 3;
 
 class AppState extends ChangeNotifier {
   final AppDb db;
@@ -101,18 +106,92 @@ class AppState extends ChangeNotifier {
     fetchInfo: (url) => downloads.ytdlp.info(url, playlist: false),
   );
 
+  /// Imagem de cada programa de podcast (ícone do canal do YouTube, guardado na pasta do programa).
+  late final ProgramArtService programArt = ProgramArtService(client: gifFetcher.client, prefs: prefs);
+
+  /// Episódios de cada programa separados por tema (Gemini + um GIF por tema).
+  late final PodcastThemesService podcastThemes =
+      PodcastThemesService(client: gifFetcher.client, prefs: prefs, geminiKey: () => geminiKey, giphy: () => giphy);
+
+  /// Id do vídeo do YouTube de onde veio o episódio (do .json do resumo ou da lista de baixados).
+  String? youtubeIdOf(Track t) {
+    final id = podcastInfo.infoFor(t.path)?.videoId;
+    return id != null && id.isNotEmpty ? id : downloads.youtubeIdFor(t.path);
+  }
+
+  /// Episódio mudou de lugar: o .json do resumo, a miniatura do vídeo e o id do YouTube vão junto.
+  void _podcastMoved(String from, String to) {
+    podcastInfo.moved(from, to);
+    programArt.episodeMoved(from, to);
+    unawaited(downloads.moved(from, to));
+  }
+
+  /// Pasta do programa (Podcasts/`<Programa>`/) pelo arquivo de um episódio.
+  static String programDirOf(Track episode) => p.dirname(episode.path);
+
+  /// Baixa o ícone do canal dos programas que ainda não têm (uma vez; falhou = tenta de novo dias depois).
+  void ensureProgramArt(List<Track> episodes) {
+    for (final t in episodes) {
+      final dir = programDirOf(t);
+      if (programArt.fileFor(dir) != null) return;
+      final id = youtubeIdOf(t);
+      if (id != null) {
+        unawaited(programArt.ensure(dir, videoId: id));
+        return;
+      }
+    }
+  }
+
   /// Tocou um episódio sem resumo (baixado antes do resumo existir): faz agora, em segundo plano.
   void _ensureSummary(Track t) {
     if (podcastInfo.isWorking(t.path) || !podcastInfo.canSummarizeNow) return;
     final info = podcastInfo.infoFor(t.path);
-    if (info != null && (info.hasSummary || info.status == SummaryStatus.noCaptions)) return;
-    // tentou e falhou há pouco: não insiste a cada play (limite do plano grátis)
+    if (info != null && info.hasSummary) return;
+    // já tentou: só tenta de novo sozinho se o erro foi temporário (Gemini sobrecarregado, 429...)
+    final fails = prefs.getInt('summaryFails:${t.path}') ?? 0;
+    if (info != null && info.status != SummaryStatus.none && !isTemporarySummaryError(info.error) && fails > 0) return;
+    // falhou há pouco: espera cada vez mais (30 min, 2 h, 1 dia) para não gastar a cota grátis
     final tried = prefs.getInt('summaryTried:${t.path}') ?? 0;
-    if (DateTime.now().millisecondsSinceEpoch - tried < const Duration(hours: 6).inMilliseconds) return;
+    if (DateTime.now().millisecondsSinceEpoch - tried < summaryRetryWait(fails).inMilliseconds) return;
     final id = info?.videoId.isNotEmpty == true ? info!.videoId : downloads.youtubeIdFor(t.path);
     if (id == null || id.isEmpty) return; // arquivo que não veio do YouTube pelo app: sem como achar a legenda
     prefs.setInt('summaryTried:${t.path}', DateTime.now().millisecondsSinceEpoch);
-    unawaited(podcastInfo.summarize(t.path, 'https://www.youtube.com/watch?v=$id', title: t.title, program: t.artist));
+    unawaited(podcastInfo.summarize(t.path, 'https://www.youtube.com/watch?v=$id', title: t.title, program: t.artist).then((r) {
+      if (r != null && r.hasSummary) {
+        prefs.remove('summaryFails:${t.path}');
+      } else {
+        prefs.setInt('summaryFails:${t.path}', fails + 1);
+      }
+    }));
+  }
+
+  Timer? _summaryRetryTimer;
+
+  /// A cada 15 min (com o app aberto): um episódio cujo resumo falhou por erro temporário tenta de novo.
+  /// Um por vez, e só quando a espera daquele episódio já passou.
+  void _startSummaryRetries() {
+    _summaryRetryTimer?.cancel();
+    _summaryRetryTimer = Timer.periodic(const Duration(minutes: 15), (_) => retryFailedSummaries());
+  }
+
+  /// Escolhe o próximo episódio que falhou por erro temporário e tenta de novo (devolve se começou).
+  bool retryFailedSummaries() {
+    if (!podcastInfo.canSummarizeNow) return false;
+    for (final t in podcasts) {
+      if (podcastInfo.isWorking(t.path)) return false; // já tem um resumo em andamento
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    for (final t in podcasts) {
+      final info = podcastInfo.infoFor(t.path);
+      if (info == null || info.hasSummary || !isTemporarySummaryError(info.error)) continue;
+      final fails = prefs.getInt('summaryFails:${t.path}') ?? 1;
+      final tried = prefs.getInt('summaryTried:${t.path}') ?? 0;
+      if (now - tried < summaryRetryWait(fails).inMilliseconds) continue;
+      if (fails == 0) prefs.setInt('summaryFails:${t.path}', 1);
+      _ensureSummary(t);
+      return true;
+    }
+    return false;
   }
 
   /// Chave da API do GIPHY (só no celular). Vazia = sem GIPHY, só anime.
@@ -151,7 +230,9 @@ class AppState extends ChangeNotifier {
   Future<List<VisualResult>> playerVisualsFor(Track t) {
     if (isPodcast(t)) return Future.value(const []); // GIFs de podcast vêm numa fase própria (estúdio de rádio)
     if (gifSource == GifSource.anime || giphyKey.isEmpty || t.id == null) return Future.value(const []);
-    final key = '${t.id}|${t.mood}|${gifSource.name}|v2'; // v2: sorteio por música (menos repetição no álbum)
+    // v2: sorteio por música (menos repetição no álbum). O nome entra na chave: corrigiu o artista ou o título,
+    // a roda busca de novo com o nome certo (antes ficava 3 dias com os GIFs do nome errado)
+    final key = '${t.id}|${t.mood}|${gifSource.name}|${_namesKey(t)}|v2';
     final rejected = _rejectedFor(t);
     final cached = _playerVisuals[key] ?? _readVisualsDisk(key);
     if (cached != null) {
@@ -187,6 +268,12 @@ class AppState extends ChangeNotifier {
         unawaited(Future<void>(() => _visualsInFlight.remove(key)));
       }
     }();
+  }
+
+  /// Artista e título como entram na chave da roda do GIPHY (sem "|", que separa as partes da chave).
+  static String _namesKey(Track t) {
+    final (title, artist) = GifFetcher.namesFor(t);
+    return '$artist / $title'.toLowerCase().replaceAll('|', ' ').trim();
   }
 
   Set<String> _rejectedFor(Track t) {
@@ -279,6 +366,11 @@ class AppState extends ChangeNotifier {
   }
 
   void _writeVisualsDisk(String key, List<VisualResult> items) {
+    // tira o que já venceu (ex.: a lista do nome antigo de uma música corrigida), para o arquivo não crescer
+    _visualsMap.removeWhere((_, e) {
+      final at = e is Map ? DateTime.tryParse('${e['t']}') : null;
+      return at == null || DateTime.now().difference(at) > _visualsMaxAge;
+    });
     _visualsMap[key] = {
       't': DateTime.now().toIso8601String(),
       'items': [
@@ -359,7 +451,7 @@ class AppState extends ChangeNotifier {
         await player.forgetTrack(e.key.id); // o arquivo vai mudar de lugar: sai da fila de músicas
         await Directory(p.dirname(target)).create(recursive: true);
         await Organizer.moveFile(File(from), target);
-        podcastInfo.moved(from, target);
+        _podcastMoved(from, target);
         done.add(MoveRecord(from: from, to: target, artist: e.value, album: e.value, title: e.key.title));
       } catch (err) {
         errorLog.warn('Podcasts', 'Não deu para mover "${p.basename(from)}" para Podcasts', error: err, balloon: true);
@@ -382,7 +474,7 @@ class AppState extends ChangeNotifier {
         await Directory(p.dirname(m.from)).create(recursive: true);
         await Organizer.moveFile(File(m.to), m.from);
         podcastProgress.moved(m.to, m.from);
-        podcastInfo.moved(m.to, m.from);
+        _podcastMoved(m.to, m.from);
       } catch (err) {
         errorLog.warn('Podcasts', 'Não deu para devolver "${p.basename(m.to)}"', error: err, balloon: true);
       }
@@ -442,8 +534,13 @@ class AppState extends ChangeNotifier {
     // quem já usava o app antes do backup existir: banco com dados = pode começar a copiar para a pasta
     if (prefs.getBool('backupReady') == null && (await db.playlists()).isNotEmpty) await prefs.setBool('backupReady', true);
     await s.reload(rereadGifs: true);
+    s._startSummaryRetries();
     // capas que faltam (inclusive as que falharam antes), em segundo plano
     unawaited(Future<void>.delayed(const Duration(seconds: 5), () => s.fetchMissingCovers()).catchError(_coversFailed));
+    // músicas que ficaram sem artista/álbum: algumas por vez, depois das capas
+    unawaited(Future<void>.delayed(const Duration(seconds: 40), () => s.retryMissingInfo()).catchError((Object e) {
+      errorLog.info('Informações', 'Nova tentativa de artista/álbum falhou', e);
+    }));
     // Android 13+: a notificação com os controles precisa desta permissão
     if (Platform.isAndroid) {
       unawaited(Permission.notification.request().catchError((Object e) {
@@ -580,6 +677,57 @@ class AppState extends ChangeNotifier {
     final n = await covers.fetchMissing(tracks, tried, onEach: notifyListeners);
     await prefs.setStringList('coverTried2', tried.toList());
     if (n > 0) notifyListeners();
+    unawaited(embedPendingCovers());
+    return n;
+  }
+
+  static const _coverEmbedKey = 'capaEmbutirPendente';
+  bool _embeddingCovers = false;
+
+  /// Música baixada do YouTube que ainda vai receber a capa do álbum dentro do arquivo.
+  /// Fica guardado: se o app fechar antes, termina na próxima abertura.
+  Future<void> queueCoverEmbed(String path) async {
+    final list = prefs.getStringList(_coverEmbedKey) ?? <String>[];
+    if (!list.contains(path)) await prefs.setStringList(_coverEmbedKey, [...list, path]);
+  }
+
+  /// Embute a capa já baixada do Cover Art Archive nas músicas pendentes, uma por vez, fora da tela.
+  /// Sem capa por enquanto (sem internet): tenta de novo depois. Álbum sem capa no Cover Art Archive: desiste.
+  Future<int> embedPendingCovers() async {
+    if (_embeddingCovers) return 0;
+    final pending = prefs.getStringList(_coverEmbedKey) ?? const <String>[];
+    if (pending.isEmpty) return 0;
+    _embeddingCovers = true;
+    var n = 0;
+    final keep = <String>[];
+    try {
+      final tried = (prefs.getStringList('coverTried2') ?? const []).toSet();
+      final playing = player.current?.path;
+      for (final path in pending) {
+        if (!File(path).existsSync()) continue; // apagada ou movida
+        final t = tracks.where((t) => p.equals(t.path, path)).firstOrNull;
+        // ainda não entrou na Biblioteca, ou está tocando agora: fica para a próxima
+        if (t == null || (playing != null && p.equals(playing, path))) {
+          keep.add(path);
+          continue;
+        }
+        final cover = covers.fileFor(t);
+        if (cover == null) {
+          if (!tried.contains(CoverService.fileKey(t))) keep.add(path);
+          continue;
+        }
+        try {
+          if (await embedCoverInBackground(path, await cover.readAsBytes())) n++;
+        } catch (e) {
+          errorLog.info('Capas', 'Não deu para embutir a capa em ${p.basename(path)}', e);
+        }
+      }
+    } finally {
+      // o que entrou na lista enquanto isso continua lá
+      final now = prefs.getStringList(_coverEmbedKey) ?? const <String>[];
+      await prefs.setStringList(_coverEmbedKey, [...keep, ...now.where((x) => !pending.contains(x))]);
+      _embeddingCovers = false;
+    }
     return n;
   }
 
@@ -661,10 +809,12 @@ class AppState extends ChangeNotifier {
   Future<String?> editTrack(Track t,
       {required String title, required String artist, required String album, required String genre, int? year, bool writeTags = true, bool move = true}) async {
     String? warning;
+    final before = byId(t.id) ?? t;
     // a tela pode ter aberto antes de a música mudar de pasta: usa sempre o caminho atual
-    var path = byId(t.id)?.path ?? t.path;
+    var path = before.path;
     if (writeTags) {
       try {
+        FileMetadataReader.fixMp4Date(path); // .m4a do YouTube com a data "20180724" quebrava a gravação
         updateMetadata(File(path), (m) {
           m.setTitle(title);
           m.setArtist(artist);
@@ -692,7 +842,7 @@ class AppState extends ChangeNotifier {
           await Organizer.moveFile(File(path), target);
           await db.moveTrack(path, target);
           podcastProgress.moved(path, target);
-          podcastInfo.moved(path, target);
+          _podcastMoved(path, target);
           removeEmptyParents(root, [path]);
           path = target;
         }
@@ -706,9 +856,37 @@ class AppState extends ChangeNotifier {
     }
     await reload();
     final updated = byId(t.id);
-    if (updated != null) player.replaceTrack(updated);
+    if (updated != null) {
+      player.replaceTrack(updated);
+      _visualsAfterRename(before, updated);
+    }
     unawaited(fetchMissingCovers().catchError(_coversFailed)); // álbum novo: busca a capa
     return warning;
+  }
+
+  /// Corrigiu o artista ou o título: os GIFs automáticos foram buscados com o nome errado (tags do Last.fm,
+  /// letra, clima e pesquisas eram de outra música). Refaz os GIFs salvos (os escolhidos à mão ficam),
+  /// a roda do GIPHY e as fotos do artista com o nome certo.
+  void _visualsAfterRename(Track before, Track after) {
+    if (isPodcast(after)) return;
+    final (oldTitle, oldArtist) = GifFetcher.namesFor(before);
+    final (newTitle, newArtist) = GifFetcher.namesFor(after);
+    if (oldTitle.toLowerCase() == newTitle.toLowerCase() && oldArtist.toLowerCase() == newArtist.toLowerCase()) return;
+    MoodClues.invalidate(); // o clima automático vem das tags do nome certo
+    _playerVisuals.removeWhere((k, _) => k.startsWith('${after.id}|'));
+    _visualsFailedAt.removeWhere((k, _) => k.startsWith('${after.id}|'));
+    visualsEpoch++;
+    notifyListeners();
+    if (newArtist.toLowerCase() != oldArtist.toLowerCase()) {
+      artistPhotos.fetch(ArtistNames.current.main(after.artist)).then((n) {
+        if (n == 0) return;
+        visualsEpoch++;
+        notifyListeners();
+      }).catchError((Object e) {
+        errorLog.info('Fotos', 'Busca de fotos do artista falhou', e);
+      });
+    }
+    if (autoGifs) unawaited(gifFetcher.refetchFor(after).catchError(_gifFetchFailed));
   }
 
   /// Apaga a música do celular (e as pastas de álbum/artista que ficarem vazias).
@@ -806,9 +984,85 @@ class AppState extends ChangeNotifier {
     }).catchError((Object e) {
       errorLog.info('Fotos', 'Busca de fotos do artista falhou', e);
     });
-    if (!autoGifs || t.id == _lastAutoFetchId) return;
-    _lastAutoFetchId = t.id;
+    if (InfoRetry.missing(fresh) && _infoDue(fresh)) {
+      // sem artista/álbum: tenta as informações primeiro; se vierem, o editar já refaz os GIFs com o nome certo
+      unawaited(retryInfo(fresh).then((renamed) {
+        if (!renamed) _autoGifsFor(t.id, byId(t.id) ?? fresh);
+      }).catchError((Object e) {
+        errorLog.info('Informações', 'Nova tentativa de buscar artista/álbum falhou', e);
+        _autoGifsFor(t.id, fresh);
+      }));
+      return;
+    }
+    _autoGifsFor(t.id, fresh);
+  }
+
+  void _autoGifsFor(int? id, Track fresh) {
+    if (!autoGifs || id == _lastAutoFetchId) return;
+    _lastAutoFetchId = id;
     gifFetcher.fetchFor(fresh).catchError(_gifFetchFailed);
+  }
+
+  // ---------- informações que faltaram (artista/álbum) ----------
+  (int, DateTime?) _infoTries(Track t) {
+    final raw = prefs.getString('infoTry:${t.path}');
+    final parts = raw?.split('|');
+    if (parts == null || parts.length != 2) return (0, null);
+    final ms = int.tryParse(parts[1]);
+    return (int.tryParse(parts[0]) ?? 0, ms == null ? null : DateTime.fromMillisecondsSinceEpoch(ms));
+  }
+
+  bool _infoDue(Track t) {
+    final (tries, last) = _infoTries(t);
+    return InfoRetry.due(tries, last, DateTime.now());
+  }
+
+  bool _retryingInfo = false;
+
+  /// Tenta de novo achar artista/álbum de uma música que ficou sem (MusicBrainz, com a pasta e o nome do
+  /// arquivo como pista). Se achar, grava como o Editar faz: tags, pasta Artista/Álbum e GIFs refeitos.
+  /// Devolve true se o artista ou o título mudou (aí os GIFs já foram refeitos). Sem internet não conta como tentativa (tenta na próxima vez que tocar).
+  Future<bool> retryInfo(Track t) async {
+    if (_retryingInfo || isPodcast(t)) return false;
+    _retryingInfo = true;
+    try {
+      final hints = InfoRetry.hints(t, root: sourceRoot);
+      final (tries, _) = _infoTries(t);
+      SongInfo? found;
+      var reached = true;
+      if (hints.isNotEmpty) {
+        try {
+          found = await MusicBrainzClient().lookupSmart(t.title, artist: hints.first, moreHints: hints.skip(1).toList());
+        } catch (e) {
+          reached = false; // sem internet / MusicBrainz ocupado
+          errorLog.info('Informações', 'MusicBrainz não respondeu (${t.title}); tento de novo depois', e);
+        }
+      }
+      final change = InfoRetry.decide(t, found, hints);
+      if (reached || change != null) {
+        await prefs.setString('infoTry:${t.path}', '${tries + 1}|${DateTime.now().millisecondsSinceEpoch}');
+      }
+      if (change == null) return false;
+      if (change.artist == t.artist && change.album == t.album && change.title == t.title) return false;
+      final warning = await editTrack(t, title: change.title, artist: change.artist, album: change.album, genre: t.genre, year: t.year);
+      if (warning != null) errorLog.info('Informações', warning);
+      return change.artist.toLowerCase() != t.artist.toLowerCase() || change.title.toLowerCase() != t.title.toLowerCase();
+    } finally {
+      _retryingInfo = false;
+    }
+  }
+
+  /// Ao abrir o app: tenta de novo as informações de poucas músicas que ficaram sem (no máximo [max],
+  /// uma por vez, no ritmo do MusicBrainz). As outras esperam a vez delas ou tocar.
+  Future<void> retryMissingInfo({int max = 5}) async {
+    var done = 0;
+    for (final t in List.of(tracks)) {
+      if (done >= max) break;
+      if (isPodcast(t) || !InfoRetry.missing(t) || !_infoDue(t)) continue;
+      if (InfoRetry.hints(t, root: sourceRoot).isEmpty) continue; // sem pista nenhuma: só tentaria adivinhar
+      done++;
+      await retryInfo(t);
+    }
   }
 
   /// O carrossel avisa qual GIF está passando; ele vira a arte da notificação e da tela de bloqueio.

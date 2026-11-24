@@ -214,7 +214,10 @@ class XpTitleButton extends StatelessWidget {
   final IconData icon;
   final VoidCallback onTap;
   final String tooltip;
-  const XpTitleButton({super.key, required this.icon, required this.onTap, required this.tooltip});
+
+  /// Botão "afundado" (ex.: a lupa enquanto a busca está aberta).
+  final bool pressed;
+  const XpTitleButton({super.key, required this.icon, required this.onTap, required this.tooltip, this.pressed = false});
 
   @override
   Widget build(BuildContext context) {
@@ -233,7 +236,11 @@ class XpTitleButton extends StatelessWidget {
             gradient: LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
-              colors: close ? const [Color(0xFFF3A48A), Color(0xFFE1532E), Color(0xFFC43B1B)] : const [Color(0xFF76A6FF), Color(0xFF2F68E8), Color(0xFF1C4FD0)],
+              colors: close
+                  ? const [Color(0xFFF3A48A), Color(0xFFE1532E), Color(0xFFC43B1B)]
+                  : pressed
+                      ? const [Color(0xFF0B2F8F), Color(0xFF1540B0), Color(0xFF2A5CD8)]
+                      : const [Color(0xFF76A6FF), Color(0xFF2F68E8), Color(0xFF1C4FD0)],
             ),
           ),
           child: Icon(icon, color: Colors.white, size: 17),

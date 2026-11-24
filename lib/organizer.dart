@@ -48,7 +48,8 @@ class MusicBrainzClient {
 
   static const userAgent = 'PlayerNostalgico/0.1 (app pessoal offline)';
 
-  Future<SongInfo?> lookup(String title, {String? artist}) async {
+  /// [hints]: pistas de artista para desempatar quando a busca é só pelo título.
+  Future<SongInfo?> lookup(String title, {String? artist, List<String> hints = const []}) async {
     final wait = _last.add(minInterval).difference(DateTime.now());
     if (wait > Duration.zero) await Future.delayed(wait);
     _last = DateTime.now();
@@ -64,25 +65,50 @@ class MusicBrainzClient {
     }
     if (res.statusCode == 503) throw const HttpException('MusicBrainz ocupado (limite de pedidos). Tente de novo mais tarde.');
     if (res.statusCode != 200) throw HttpException('MusicBrainz respondeu ${res.statusCode}');
-    return parseRecordingSearch(jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>, title: title, artistHint: artist);
+    return parseRecordingSearch(jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>, title: title, artistHint: artist, hints: hints);
   }
 
   /// Como [lookup], mas aguenta artista com nome de canal do YouTube ("MadrugadaOfficial", "FulanoVEVO",
   /// "Fulano - Topic"): tenta o nome como está, depois limpo, e por fim só o título — aceitando a resposta
   /// só título se o artista bater com algum jeito de escrever a pista (ou se o MusicBrainz tiver muita certeza).
-  Future<SongInfo?> lookupSmart(String title, {String? artist, int titleOnlyMinScore = 90}) async {
-    final hint = artist?.trim() ?? '';
-    if (hint.isEmpty) return lookup(title);
-    final variants = artistNameVariants(hint);
-    for (final v in variants) {
-      final found = await lookup(title, artist: v);
-      if (found != null) return found;
+  ///
+  /// [moreHints] são outras pistas de artista (ex.: a pasta Artista/Álbum onde o arquivo está). Cada uma é
+  /// tentada na busca; na busca só pelo título, ganha quem bate com alguma pista. Se nenhuma bate, a
+  /// certeza mostrada cai para no máximo 60% (o MusicBrainz dá 100 só porque o título é igual, e aí vinha
+  /// um cover lofi com "100% de certeza").
+  Future<SongInfo?> lookupSmart(String title, {String? artist, List<String> moreHints = const [], int titleOnlyMinScore = 90}) async {
+    final hints = <String>[];
+    for (final h in [artist ?? '', ...moreHints]) {
+      final t = h.trim();
+      if (t.isEmpty || t == unknownArtist || hints.any((x) => _norm(x) == _norm(t))) continue;
+      hints.add(t);
     }
-    final retry = await lookup(title);
+    if (hints.isEmpty) return lookup(title);
+    final variants = <String>[];
+    for (final h in hints) {
+      for (final v in artistNameVariants(h)) {
+        if (!variants.any((x) => _norm(x) == _norm(v))) variants.add(v);
+      }
+    }
+    for (final v in variants) {
+      final found = await lookup(title, artist: v, hints: variants);
+      // a busca do MusicBrainz é aproximada: mesmo pedindo o artista, pode voltar outro
+      if (found != null && artistMatchesAny(found.artist, variants)) return found;
+    }
+    final retry = await lookup(title, hints: variants);
     if (retry == null) return null;
-    final got = _norm(retry.artist);
-    final matches = got.isNotEmpty && variants.map(_norm).any((v) => v.isNotEmpty && (got.contains(v) || (got.length >= 3 && v.contains(got))));
-    return matches || retry.score >= titleOnlyMinScore ? retry : null;
+    if (artistMatchesAny(retry.artist, variants)) return retry;
+    if (retry.score < titleOnlyMinScore) return null;
+    return SongInfo(title: retry.title, artist: retry.artist, album: retry.album, score: retry.score.clamp(0, 60), source: retry.source);
+  }
+
+  /// Parece cover/versão alternativa (lofi, karaokê, tributo...) pelo artista ou álbum?
+  static bool looksLikeCover(SongInfo i) => _coverWords.hasMatch('${i.artist} ${i.album}');
+
+  /// O artista achado bate com algum jeito de escrever as pistas ("Tame Impala" x "tame impala - topic")?
+  static bool artistMatchesAny(String found, List<String> hints) {
+    final got = _norm(found);
+    return got.isNotEmpty && hints.map(_norm).any((v) => v.isNotEmpty && (got.contains(v) || (got.length >= 3 && v.contains(got))));
   }
 
   /// Gênero/subgênero do artista pelas tags do MusicBrainz (ex.: "Industrial Metal"). Null se não achar.
@@ -146,7 +172,10 @@ class MusicBrainzClient {
   static String _escape(String s) => s.replaceAll(RegExp(r'[\\"]'), ' ').trim();
 
   /// Escolhe a melhor gravação e o melhor lançamento (prefere álbum oficial de estúdio).
-  static SongInfo? parseRecordingSearch(Map<String, dynamic> json, {required String title, String? artistHint}) {
+  static SongInfo? parseRecordingSearch(Map<String, dynamic> json, {required String title, String? artistHint, List<String> hints = const []}) {
+    final allHints = [if (artistHint != null && artistHint.isNotEmpty) artistHint, ...hints];
+    // "lofi", "karaokê", "tribute"... só valem se você mesmo escreveu isso no título ou no artista
+    final wantsCover = _coverWords.hasMatch([title, ...allHints].join(' '));
     final recs = (json['recordings'] as List?)?.cast<Map<String, dynamic>>() ?? const [];
     SongInfo? best;
     var bestRank = -1.0;
@@ -160,7 +189,8 @@ class MusicBrainzClient {
       final rel = _pickRelease(releases);
       if (rel == null) continue;
       var rank = score.toDouble() + rel.$2;
-      if (artistHint != null && _norm(artist).contains(_norm(artistHint))) rank += 15;
+      if (allHints.isNotEmpty && artistMatchesAny(artist, allHints)) rank += 30;
+      if (!wantsCover && _coverWords.hasMatch([artist, rel.$1, r['disambiguation'] ?? ''].join(' '))) rank -= 40;
       if (_norm(r['title'] as String? ?? '') == _norm(title)) rank += 10;
       if (rank > bestRank) {
         bestRank = rank;
@@ -175,6 +205,11 @@ class MusicBrainzClient {
     }
     return best;
   }
+
+  /// Versões que não são a original: lofi, karaokê, tributo, "no estilo de", caixinha de música...
+  static final _coverWords = RegExp(
+      r'\b(lo-?fi|chill|karaok[eê]|tribute|in the style of|made famous|originally performed|cover|covers|8-?bit|lullab(y|ies)|rockabye|music box|piano version|string quartet|instrumental version|workout|kids)\b',
+      caseSensitive: false);
 
   static (String, double)? _pickRelease(List<Map<String, dynamic>> releases) {
     (String, double)? best;
@@ -206,6 +241,20 @@ String _usableArtist(String a) {
   final t = a.trim();
   if (t.isEmpty) return '';
   return parseFileName('$t - x').artist ?? '';
+}
+
+/// Artista pela pasta: Fonte/Artista/Álbum/música.m4a -> "Artista". Null se o arquivo está solto
+/// ou a pasta é genérica ("Desconhecido", "Download", "Music"...).
+///
+/// Com [root] (a pasta da fonte), só vale se o arquivo está mesmo em root/Artista/Álbum/: um arquivo
+/// solto na fonte não pode usar o nome da pasta de cima como artista.
+String? folderArtistHint(String path, {String? root}) {
+  if (root != null && (!p.isWithin(root, path) || p.split(p.relative(path, from: root)).length < 3)) return null;
+  final album = p.dirname(path);
+  final artist = p.basename(p.dirname(album));
+  if (artist.isEmpty || artist == unknownArtist || artist == '.' || artist == p.separator) return null;
+  if (RegExp(r'^(desconhecid[oa]|unknown|downloads?|music|m[uú]sicas?|youtube|audio|0|emulated|storage|sdcard)$', caseSensitive: false).hasMatch(artist)) return null;
+  return cleanArtistName(artist);
 }
 
 String _norm(String s) => s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9À-ɏ぀-ヿ一-鿿]+'), '');
@@ -282,8 +331,11 @@ class Organizer {
     // 2. Pesquisa o título limpo (e o artista, se souber) no MusicBrainz.
     if (useOnline && title.isNotEmpty) {
       // a pista de artista pode estar errada (nome do canal do YouTube, cantora virtual em vez do produtor...)
-      final found = await mb.lookupSmart(title, artist: artistHint);
-      if (found != null) return found;
+      final folder = folderArtistHint(path, root: sourceRoot);
+      final found = await mb.lookupSmart(title, artist: artistHint, moreHints: [?folder]);
+      // até 60% = o MusicBrainz só achou outro artista: sozinho não mexe, fica com o que a música já diz
+      final hadHint = (artistHint ?? '').isNotEmpty || folder != null;
+      if (found != null && !(hadHint && found.score <= 60)) return found;
     }
     if (tagArtist.isNotEmpty && tagAlbum.isNotEmpty) {
       return SongInfo(title: title, artist: tagArtist, album: tagAlbum, score: 90, source: 'tags');
@@ -337,31 +389,78 @@ class Organizer {
   }
 
   /// Move os arquivos selecionados e grava um registro para poder desfazer.
+  ///
+  /// O registro ([undoLogPath]) ganha uma linha logo depois de cada arquivo movido, então ele nunca fica
+  /// para trás dos arquivos. Se um arquivo falhar, os que já foram movidos voltam para o lugar e sai um
+  /// [OrganizeException]; o que não deu para devolver fica no registro, e o Desfazer continua valendo.
   Future<List<MoveRecord>> execute(List<PlanItem> plan, {required String undoLogPath}) async {
     final done = <MoveRecord>[];
-    for (final item in plan.where((i) => i.selected && i.status == PlanStatus.move && i.targetPath != null)) {
-      final src = File(item.sourcePath);
-      if (!src.existsSync()) continue;
-      await Directory(p.dirname(item.targetPath!)).create(recursive: true);
-      await _move(src, item.targetPath!);
-      done.add(MoveRecord(from: item.sourcePath, to: item.targetPath!, artist: item.info!.artist, album: item.info!.album, title: item.info!.title));
+    final log = File(undoLogPath);
+    await log.parent.create(recursive: true);
+    await log.writeAsString('', flush: true); // registro novo antes do primeiro arquivo
+    try {
+      for (final item in plan.where((i) => i.selected && i.status == PlanStatus.move && i.targetPath != null)) {
+        final src = File(item.sourcePath);
+        if (!src.existsSync()) continue;
+        // apareceu um arquivo com o mesmo nome depois da prévia: usa outro nome em vez de substituir
+        final target = _uniqueTarget(item.targetPath!, const {});
+        await Directory(p.dirname(target)).create(recursive: true);
+        await _safeMove(src, target);
+        final m = MoveRecord(from: item.sourcePath, to: target, artist: item.info!.artist, album: item.info!.album, title: item.info!.title);
+        done.add(m);
+        await log.writeAsString('${jsonEncode(m.toJson())}\n', mode: FileMode.append, flush: true);
+      }
+    } catch (e) {
+      errorLog.warn('Organizador', 'Erro ao mover; devolvendo ${done.length} arquivo(s) para o lugar', error: e);
+      final stillMoved = <MoveRecord>[];
+      for (final m in done.reversed) {
+        try {
+          final cur = File(m.to);
+          if (cur.existsSync() && !File(m.from).existsSync()) {
+            await Directory(p.dirname(m.from)).create(recursive: true);
+            await _safeMove(cur, m.from);
+          }
+        } catch (e2) {
+          errorLog.warn('Organizador', 'Não deu para devolver ${p.basename(m.to)}', error: e2);
+          stillMoved.insert(0, m);
+        }
+      }
+      if (stillMoved.isEmpty) {
+        if (log.existsSync()) await log.delete();
+      } else {
+        await log.writeAsString(stillMoved.map((m) => '${jsonEncode(m.toJson())}\n').join(), flush: true);
+      }
+      _removeEmptyDirs(Directory(sourceRoot));
+      throw OrganizeException(e, stillMoved);
     }
-    await File(undoLogPath).writeAsString(jsonEncode(done.map((m) => m.toJson()).toList()));
     _removeEmptyDirs(Directory(sourceRoot));
     return done;
+  }
+
+  /// Lê o registro: uma linha JSON por arquivo (formato novo) ou uma lista JSON (formato antigo).
+  static List<MoveRecord> readLog(String text) {
+    final t = text.trim();
+    if (t.isEmpty) return const [];
+    if (t.startsWith('[')) {
+      return (jsonDecode(t) as List).map((e) => MoveRecord.fromJson(e as Map<String, dynamic>)).toList();
+    }
+    return [
+      for (final line in t.split('\n'))
+        if (line.trim().isNotEmpty) MoveRecord.fromJson(jsonDecode(line) as Map<String, dynamic>),
+    ];
   }
 
   /// Desfaz a última organização (volta cada arquivo para onde estava).
   static Future<List<MoveRecord>> undo(String undoLogPath, String sourceRoot) async {
     final f = File(undoLogPath);
     if (!f.existsSync()) return const [];
-    final list = (jsonDecode(await f.readAsString()) as List).map((e) => MoveRecord.fromJson(e as Map<String, dynamic>)).toList();
+    final list = readLog(await f.readAsString());
     final undone = <MoveRecord>[];
     for (final m in list.reversed) {
       final cur = File(m.to);
       if (!cur.existsSync() || File(m.from).existsSync()) continue;
       await Directory(p.dirname(m.from)).create(recursive: true);
-      await _move(cur, m.from);
+      await _safeMove(cur, m.from);
       undone.add(m);
     }
     await f.delete();
@@ -381,6 +480,26 @@ class Organizer {
     }
   }
 
+  /// Igual a [_move], mas nunca substitui um arquivo que já existe e, na cópia entre partições,
+  /// só apaga o original depois de conferir que a cópia ficou do mesmo tamanho.
+  static Future<void> _safeMove(File src, String target) async {
+    if (File(target).existsSync()) throw FileSystemException('Já existe um arquivo com esse nome', target);
+    try {
+      await src.rename(target);
+      return;
+    } on FileSystemException {
+      // rename falha entre partições (ex.: cartão SD): copia, confere e só então apaga
+    }
+    final copy = await src.copy(target);
+    if (await copy.length() != await src.length()) {
+      try {
+        await copy.delete();
+      } catch (_) {}
+      throw FileSystemException('A cópia ficou incompleta', target);
+    }
+    await src.delete();
+  }
+
   static void _removeEmptyDirs(Directory root) {
     if (!root.existsSync()) return;
     for (final d in root.listSync(recursive: true).whereType<Directory>().toList()
@@ -392,6 +511,17 @@ class Organizer {
       }
     }
   }
+}
+
+/// Erro no meio da organização. [stillMoved]: arquivos que não deu para devolver (ficam no registro).
+class OrganizeException implements Exception {
+  final Object cause;
+  final List<MoveRecord> stillMoved;
+  const OrganizeException(this.cause, this.stillMoved);
+  @override
+  String toString() => stillMoved.isEmpty
+      ? '$cause (nada foi mudado de lugar)'
+      : '$cause (${stillMoved.length} arquivo(s) ficaram na pasta nova; use Desfazer)';
 }
 
 class MoveRecord {

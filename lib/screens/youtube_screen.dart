@@ -10,7 +10,7 @@ import '../podcast_info.dart';
 import '../theme.dart';
 import '../xp_icons.dart';
 
-/// "Baixar do YouTube (MP3)" no jeito da janela "Copiando…" do Windows XP: um campo só
+/// "Baixar do YouTube (M4A)" no jeito da janela "Copiando…" do Windows XP: um campo só
 /// (reconhece vídeo ou playlist pelo link), as notinhas indo do globo para a pasta e a fila no modo Detalhes.
 class YoutubeScreen extends StatefulWidget {
   /// Link que veio do menu "Compartilhar": já entra no campo certo (vídeo ou playlist) e busca.
@@ -155,12 +155,12 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
   List<String> _status(DownloadService ds) {
     final q = ds.queue;
     if (q.isNotEmpty) {
-      return [ds.running ? 'Baixando ${(ds.doneCount + 1).clamp(1, q.length)} de ${q.length}' : '${ds.okCount} de ${q.length} baixadas', 'MP3 192 kbps'];
+      return [ds.running ? 'Baixando ${(ds.doneCount + 1).clamp(1, q.length)} de ${q.length}' : '${ds.okCount} de ${q.length} baixadas', 'M4A (AAC)'];
     }
     return switch (_mode) {
-      _Mode.playlist when ds.playlist.isNotEmpty => ['Playlist · ${ds.playlist.length} vídeos', 'MP3 192 kbps'],
-      _Mode.single when ds.single != null => ['Vídeo · ${_dur(ds.single!.durationSec)}', 'MP3 192 kbps'],
-      _ => ['Cole o link de um vídeo ou playlist', 'MP3 192 kbps'],
+      _Mode.playlist when ds.playlist.isNotEmpty => ['Playlist · ${ds.playlist.length} vídeos', 'M4A (AAC)'],
+      _Mode.single when ds.single != null => ['Vídeo · ${_dur(ds.single!.durationSec)}', 'M4A (AAC)'],
+      _ => ['Cole o link de um vídeo ou playlist', 'M4A (AAC)'],
     };
   }
 
@@ -226,7 +226,7 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
       final e = ds.single!;
       buttons = [
         XpButton(
-          label: e.existingPath != null ? 'Baixar mesmo assim' : (e.podcast ? 'Baixar episódio' : 'Baixar MP3'),
+          label: e.existingPath != null ? 'Baixar mesmo assim' : (e.podcast ? 'Baixar episódio' : 'Baixar M4A'),
           icon: Icons.download,
           primary: e.existingPath == null,
           onTap: () async {
@@ -270,7 +270,7 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
           Expanded(
             child: Text(
               'Cole o link de um vídeo no campo Vídeo, ou o de uma playlist no campo Playlist, e toque em Buscar.\n\n'
-              'A música vira .mp3 (192 kbps, a qualidade máxima que o YouTube entrega), com as tags e a capa gravadas, '
+              'A música vira .m4a (o áudio do YouTube copiado como vem, sem perder qualidade), com as tags gravadas, '
               'e aparece na Biblioteca sozinha. O que você já tem é pulado.',
               style: TextStyle(fontSize: 13.5, height: 1.4),
             ),
@@ -381,14 +381,14 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
         _nameField('Programa', _artist, (v) => ds.edit(e, artist: v.trim(), album: v.trim())),
         _nameField('Episódio', _title, (v) => ds.edit(e, title: v.trim())),
         const SizedBox(height: 8),
-        Text('Vai para: Podcasts\\${e.names.artist}\\${e.names.title}.mp3', style: const TextStyle(fontSize: 12, color: Xp.blueMuted)),
+        Text('Vai para: Podcasts\\${e.names.artist}\\${e.names.title}.m4a', style: const TextStyle(fontSize: 12, color: Xp.blueMuted)),
         const Text('Podcast nunca entra em Músicas, Tocar tudo nem na fila das músicas.', style: TextStyle(fontSize: 11.5, color: Xp.blueMuted)),
       ] else ...[
         _nameField('Artista', _artist, (v) => ds.edit(e, artist: v.trim())),
         _nameField('Título', _title, (v) => ds.edit(e, title: v.trim())),
         _nameField('Álbum', _album, (v) => ds.edit(e, album: v.trim())),
         const SizedBox(height: 8),
-        Text('Vai para: ${e.names.artist}\\${e.names.album}\\${e.names.title}.mp3', style: const TextStyle(fontSize: 12, color: Xp.blueMuted)),
+        Text('Vai para: ${e.names.artist}\\${e.names.album}\\${e.names.title}.m4a', style: const TextStyle(fontSize: 12, color: Xp.blueMuted)),
       ],
       if (e.existingPath != null) _alreadyHave(e.existingPath!),
     ]);
@@ -596,7 +596,7 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
           CopyAnimation(running: cur != null),
           const SizedBox(height: 6),
           if (cur != null) ...[
-            Text('${cur.names.title}.mp3', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+            Text('${cur.names.title}.m4a', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
             Text("De 'youtube.com' para '$folder\\${cur.names.artist}'", maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13)),
             if (cur.status == YtStatus.updating) ...[
               // plano B: o YouTube mudou, o app atualiza o yt-dlp e tenta de novo sozinho
@@ -613,7 +613,7 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
               XpProgress(value: cur.status == YtStatus.converting ? null : cur.progress),
               const SizedBox(height: 4),
               Text(
-                cur.status == YtStatus.converting ? 'Convertendo para MP3…' : 'Baixando… ${(cur.progress * 100).round()}%',
+                cur.status == YtStatus.converting ? 'Convertendo para AAC…' : 'Baixando… ${(cur.progress * 100).round()}%',
                 style: const TextStyle(fontSize: 13, color: Color(0xFF333333)),
               ),
             ],

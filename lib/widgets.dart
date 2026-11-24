@@ -10,6 +10,7 @@ import 'player_service.dart';
 import 'screens/edit_track_screen.dart';
 import 'screens/now_playing_screen.dart' show showGifManager;
 import 'xp_icons.dart';
+import 'list_search.dart';
 import 'models.dart';
 import 'theme.dart';
 
@@ -61,7 +62,10 @@ class TrackTile extends StatelessWidget {
   final String? subtitle;
   final String? note;
   final Widget? trailing;
-  const TrackTile({super.key, required this.track, required this.onTap, this.subtitle, this.note, this.trailing});
+
+  /// Busca da lista: marca em amarelo o trecho que bateu no título e na linha de baixo.
+  final String? highlight;
+  const TrackTile({super.key, required this.track, required this.onTap, this.subtitle, this.note, this.trailing, this.highlight});
 
   @override
   Widget build(BuildContext context) {
@@ -88,17 +92,15 @@ class TrackTile extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      track.title,
+                    Text.rich(
+                      highlightSpan(track.title, highlight, TextStyle(color: fg, fontSize: 14.5)),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: fg, fontSize: 14.5),
                     ),
-                    Text(
-                      subtitle ?? track.artist,
+                    Text.rich(
+                      highlightSpan(subtitle ?? track.artist, highlight, TextStyle(color: sub, fontSize: 12)),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: sub, fontSize: 12),
                     ),
                     if (note != null) Text(note!, style: TextStyle(color: playing ? Colors.white : Xp.linkBlue, fontSize: 11.5)),
                   ],

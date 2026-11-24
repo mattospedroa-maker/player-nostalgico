@@ -342,8 +342,10 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
 
   Future<void> togglePlay() async {
     if (player.playing) {
-      crossfader.cancel();
+      // pausa primeiro: se o segundo player estava soando a música, ele para junto e o principal
+      // (já pausado) é quem volta a tocar depois, sem os dois soarem juntos nem por um instante
       await player.pause();
+      crossfader.cancel();
       _savePodcastPosition();
     } else {
       unawaited(player.play());
@@ -416,12 +418,51 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
   }
 
   /// Troca o tipo de mix na hora: as músicas que o mix colocou são refeitas; a atual continua.
+  ///
+  /// Escolher no painel "Depois desta, tocar" vale na hora: se as próximas ainda são da lista que
+  /// você tocou (álbum, playlist, busca), o resto dela sai e entra o mix. As que você pôs com
+  /// "Tocar a seguir" / "Adicionar à fila" ficam. Antes o mix só entrava quando a lista acabava,
+  /// então trocar de vibe para artista não mudava nada no "A seguir".
   Future<void> setMixMode(MixMode m) async {
-    if (m == mixMode) return;
+    final changed = m != mixMode;
+    if (!changed && !hasListAhead) return;
     mixMode = m;
-    onMixModeChanged?.call(m);
+    if (changed) onMixModeChanged?.call(m);
     notifyListeners();
-    await refreshMix();
+    await _serial(_mixInsteadOfList);
+    notifyListeners();
+  }
+
+  /// Ainda tem música da lista tocada nas próximas (nem do mix, nem posta por você).
+  bool get hasListAhead => listAhead(upcoming, (t) => _userQueued.contains(t.id) || _autoAdded.contains(t.id));
+
+  /// Alguma das [upcoming] não é do mix nem da sua fila ([fromMixOrQueue])?
+  @visibleForTesting
+  static bool listAhead<T>(List<T> upcoming, bool Function(T) fromMixOrQueue) => upcoming.any((t) => !fromMixOrQueue(t));
+
+  /// Tira tudo depois do bloco "Tocar a seguir" e põe o mix no lugar. Só roda dentro de [_serial].
+  /// Fila de podcasts, repetir ligado ou mix sem músicas: só refaz o que o mix tinha posto.
+  Future<void> _mixInsteadOfList() async {
+    final seed = mixSeed;
+    if (_podcastMode || currentIsPodcast || seed == null || isPodcast(seed) || player.loopMode != LoopMode.off) {
+      return _rebuildMix();
+    }
+    final keepEnd = queueEndPos(queue, _nextPos, (t) => _userQueued.contains(t.id));
+    final keep = {current?.id, for (final t in queue.sublist(_nextPos, keepEnd)) t.id};
+    final failedIds = {for (final t in library()) if (_failed.containsKey(t.path)) t.id};
+    final picks = pickMix(seed, library(), mode: mixMode, exclude: {...keep, ...failedIds}, count: 10, rnd: _rnd);
+    if (picks.isEmpty) return _rebuildMix();
+    final end = player.sequence.length;
+    try {
+      if (keepEnd < end) await player.removeAudioSourceRange(keepEnd, end);
+      await player.addAudioSources([for (final t in picks) _source(t)]);
+      _autoAdded
+        ..clear()
+        ..addAll(picks.map((t) => t.id));
+      _mixArtist = seed.artist;
+    } catch (e) {
+      errorLog.warn('Mix', 'Não deu para trocar as próximas pelo mix', error: e);
+    }
   }
 
   /// Refaz as próximas músicas que o mix colocou (ex.: mudou o tipo de mix ou o clima da primeira música).

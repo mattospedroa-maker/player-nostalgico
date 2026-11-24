@@ -110,7 +110,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
             'Ferramentas',
             [
               XpMenuItem('Buscar novas músicas', () => _push(const OrganizerScreen())),
-              XpMenuItem('Baixar do YouTube (MP3)', () => _push(const YoutubeScreen())),
+              XpMenuItem('Baixar do YouTube (M4A)', () => _push(const YoutubeScreen())),
               XpMenuItem('Músicas repetidas', () => _push(const DuplicatesScreen())),
               XpMenuItem('Acervo de GIFs', () => showGifLibraryInfo(context)),
             ],
@@ -193,7 +193,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
             (XpIcons.play, 'Tocar tudo', tracks.isEmpty ? null : () => playTracks(context, tracks, shuffle: false)),
             (XpIcons.shuffle, 'Tocar em ordem aleatória', tracks.isEmpty ? null : () => playTracks(context, tracks, shuffle: true)),
             (XpIcons.find, 'Buscar novas músicas', () => _push(const OrganizerScreen())),
-            (XpIcons.youtube, 'Baixar do YouTube (MP3)', () => _push(const YoutubeScreen())),
+            (XpIcons.youtube, 'Baixar do YouTube (M4A)', () => _push(const YoutubeScreen())),
           ],
         ),
         IpodBox(

@@ -254,7 +254,10 @@ class GiphyGif {
   final String previewUrl;
   final String url;
   final String pageUrl;
-  const GiphyGif({required this.id, required this.title, required this.previewUrl, required this.url, required this.pageUrl});
+
+  /// Versão leve para miniatura (WebP animado de 200 px, ~100–300 KB). Vazio = usar [previewUrl].
+  final String tileUrl;
+  const GiphyGif({required this.id, required this.title, required this.previewUrl, required this.url, required this.pageUrl, this.tileUrl = ''});
 }
 
 /// Erros do GIPHY que a tela explica para o usuário.
@@ -327,7 +330,9 @@ class GiphyProvider {
       final preview = pick(['fixed_width_small', 'fixed_width', 'preview_gif', 'downsized']);
       final full = pick(['downsized_medium', 'downsized', 'original', 'fixed_width']);
       if (preview == null || full == null) continue;
-      out.add(GiphyGif(id: '${d['id']}', title: '${d['title'] ?? ''}', previewUrl: preview, url: full, pageUrl: '${d['url'] ?? ''}'));
+      final fw = img['fixed_width'];
+      final webp = fw is Map && fw['webp'] is String ? fw['webp'] as String : '';
+      out.add(GiphyGif(id: '${d['id']}', title: '${d['title'] ?? ''}', previewUrl: preview, url: full, pageUrl: '${d['url'] ?? ''}', tileUrl: webp));
     }
     return out;
   }

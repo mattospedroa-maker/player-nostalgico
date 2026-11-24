@@ -98,6 +98,8 @@ void main() {
     final asked = <String>[];
     final ok = MockClient((r) async {
       asked.add(r.url.path);
+      expect(r.headers['x-goog-api-key'], 'k', reason: 'chave vai no cabeçalho');
+      expect(r.url.query, isNot(contains('key')), reason: 'chave nunca no link');
       if (r.url.path.contains('flash-lite')) return http.Response('não existe', 404);
       return http.Response(jsonEncode({
         'candidates': [
