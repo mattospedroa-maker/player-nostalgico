@@ -150,6 +150,16 @@ class YtDlp {
     }
   }
 
+  /// Fila parou sem nada para contar: tira a notificação e deixa o Android fechar o app quando quiser.
+  Future<void> notifyClear() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod<void>('notifyClear');
+    } catch (e) {
+      errorLog.info('YouTube', 'Não deu para tirar a notificação do download', e);
+    }
+  }
+
   /// Informações do vídeo ou da playlist (JSON do -J).
   Future<Map<String, dynamic>> info(String url, {required bool playlist}) async {
     final r = await run([

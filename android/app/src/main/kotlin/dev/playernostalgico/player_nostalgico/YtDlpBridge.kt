@@ -111,6 +111,12 @@ class YtDlpBridge(private val context: Context, messenger: BinaryMessenger) : Me
                 )
                 result.success(null)
             }
+            // fila parou sem resumo (ex.: tudo cancelado): solta o serviço e tira a notificação
+            "notifyClear" -> {
+                DownloadKeepAliveService.stop(context, keepNotification = false)
+                (context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(notificationId)
+                result.success(null)
+            }
             "deleteDir" -> {
                 File(call.argument<String>("path") ?: "").deleteRecursively()
                 result.success(null)
@@ -120,7 +126,7 @@ class YtDlpBridge(private val context: Context, messenger: BinaryMessenger) : Me
     }
 
     private val channelId = "dev.playernostalgico.downloads"
-    private val notificationId = 4207
+    private val notificationId = DownloadKeepAliveService.NOTIFICATION_ID
 
     private fun notify(title: String, text: String, progress: Int, done: Boolean) {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -142,8 +148,15 @@ class YtDlpBridge(private val context: Context, messenger: BinaryMessenger) : Me
             .setAutoCancel(done)
             .setContentIntent(pending)
         if (!done) b.setProgress(100, progress.coerceIn(0, 100), progress < 0)
+        val n = b.build()
+        if (done) {
+            // fim da fila: o serviço sai e a notificação de resumo fica como uma comum (dá para arrastar)
+            DownloadKeepAliveService.stop(context)
+        } else if (DownloadKeepAliveService.update(context, n)) {
+            return // o serviço acabou de começar e mostra esta mesma notificação
+        }
         try {
-            nm.notify(notificationId, b.build())
+            nm.notify(notificationId, n)
         } catch (_: SecurityException) {
             // sem permissão de notificação: segue sem avisar
         }
