@@ -211,7 +211,7 @@ Future<void> showEpisodeSummary(BuildContext context, Track t) {
               TextButton(
                 onPressed: () {
                   final id = info?.videoId.isNotEmpty == true ? info!.videoId : app.downloads.youtubeIdFor(t.path)!;
-                  app.podcastInfo.summarize(t.path, 'https://www.youtube.com/watch?v=$id', title: t.title, program: t.artist);
+                  app.podcastInfo.summarize(t.path, 'https://www.youtube.com/watch?v=$id', title: t.title, program: t.artist, manual: true);
                 },
                 child: Text(info?.hasSummary ?? false ? 'Refazer resumo' : 'Fazer resumo'),
               ),

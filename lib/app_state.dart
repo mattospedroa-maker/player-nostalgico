@@ -99,7 +99,7 @@ class AppState extends ChangeNotifier {
 
   /// Tocou um episódio sem resumo (baixado antes do resumo existir): faz agora, em segundo plano.
   void _ensureSummary(Track t) {
-    if (geminiKey.isEmpty || podcastInfo.isWorking(t.path)) return;
+    if (geminiKey.isEmpty || podcastInfo.isWorking(t.path) || podcastInfo.quotaHit) return;
     final info = podcastInfo.infoFor(t.path);
     if (info != null && (info.hasSummary || info.status == SummaryStatus.noCaptions)) return;
     // tentou e falhou há pouco: não insiste a cada play (limite do plano grátis)

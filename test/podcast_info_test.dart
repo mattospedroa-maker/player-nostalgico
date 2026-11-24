@@ -98,7 +98,7 @@ void main() {
     final asked = <String>[];
     final ok = MockClient((r) async {
       asked.add(r.url.path);
-      if (r.url.path.contains('flash-latest')) return http.Response('não existe', 404);
+      if (r.url.path.contains('flash-lite')) return http.Response('não existe', 404);
       return http.Response(jsonEncode({
         'candidates': [
           {
@@ -197,14 +197,20 @@ void main() {
     final s = PodcastInfoService(client: client, apiKey: () => 'k');
     final yt = {..._yt(), 'duration': 5220};
 
-    final viaVideo = await s.build(yt, title: 't', program: 'p');
+    // sozinho (sem você pedir) não gasta a cota ouvindo o vídeo: resume pela descrição e diz como pedir
+    final auto = await s.build(yt, title: 't', program: 'p');
+    expect(auto.status, SummaryStatus.noCaptions);
+    expect(auto.error, contains('Fazer resumo'));
+    expect(bodies.any((b) => ((b['contents'] as List).first['parts'] as List).any((x) => (x as Map).containsKey('fileData'))), isFalse);
+
+    final viaVideo = await s.build(yt, title: 't', program: 'p', allowVideo: true);
     expect(viaVideo.status, SummaryStatus.ok);
     expect(viaVideo.hasSummary, isTrue);
     final part = ((bodies.last['contents'] as List).first['parts'] as List).first as Map;
     expect(part['fileData'], {'fileUri': 'https://www.youtube.com/watch?v=abc123'});
 
     videoOk = false;
-    final viaDescription = await s.build(yt, title: 't', program: 'p');
+    final viaDescription = await s.build(yt, title: 't', program: 'p', allowVideo: true);
     expect(viaDescription.status, SummaryStatus.noCaptions);
     expect(viaDescription.hasSummary, isTrue);
     expect(viaDescription.error, allOf(contains('legenda veio vazia'), contains('Video too long')));
@@ -215,9 +221,12 @@ void main() {
       if (r.url.host == 'cap') return http.Response.bytes(utf8.encode(_json3), 200);
       return http.Response('', 429);
     });
-    final info = await PodcastInfoService(client: client, apiKey: () => 'k').build(_yt(), title: 't', program: 'p');
+    final s = PodcastInfoService(client: client, apiKey: () => 'k');
+    expect(s.quotaHit, isFalse);
+    final info = await s.build(_yt(), title: 't', program: 'p');
     expect(info.status, SummaryStatus.failed);
     expect(info.error, contains('Limite do plano grátis'));
+    expect(s.quotaHit, isTrue); // não tenta mais sozinho até a cota voltar
     expect(info.chapters.length, 2); // capítulos do canal continuam
   });
 }
