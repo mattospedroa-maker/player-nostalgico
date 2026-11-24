@@ -140,13 +140,46 @@ class YtDlp {
     return r.out.trim();
   }
 
+  /// Botão "Cancelar tudo" da notificação de download.
+  void Function()? onCancelAll;
+  bool _handling = false;
+
   /// Notificação "Baixando 3 de 11" (só Android).
   Future<void> notify(String title, String text, {int progress = -1, bool done = false}) async {
     if (!Platform.isAndroid) return;
+    if (!_handling) {
+      _handling = true;
+      _channel.setMethodCallHandler((call) async {
+        if (call.method == 'cancelAll') onCancelAll?.call();
+      });
+    }
     try {
       await _channel.invokeMethod<void>('notify', {'title': title, 'text': text, 'progress': progress, 'done': done});
     } catch (e) {
       errorLog.info('YouTube', 'Não deu para atualizar a notificação do download', e);
+    }
+  }
+
+  /// Bateria: o app já está "sem restrições"? E o celular é Xiaomi/Redmi/POCO? (fora do Android: sem aviso)
+  Future<({bool unrestricted, bool xiaomi})> batteryInfo() async {
+    if (!Platform.isAndroid) return (unrestricted: true, xiaomi: false);
+    try {
+      final m = await _channel.invokeMapMethod<String, dynamic>('batteryInfo');
+      return (unrestricted: m?['unrestricted'] == true, xiaomi: m?['xiaomi'] == true);
+    } catch (e) {
+      errorLog.info('YouTube', 'Não deu para ver a configuração de bateria', e);
+      return (unrestricted: true, xiaomi: false);
+    }
+  }
+
+  /// Abre a tela de bateria do app (a da Xiaomi, senão a do Android). false = nenhuma abriu.
+  Future<bool> openBatterySettings() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      return await _channel.invokeMethod<bool>('openBatterySettings') ?? false;
+    } catch (e) {
+      errorLog.warn('YouTube', 'Não deu para abrir a tela de bateria', error: e);
+      return false;
     }
   }
 

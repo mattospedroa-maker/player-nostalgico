@@ -108,7 +108,9 @@ class DownloadService extends ChangeNotifier {
   final MusicBrainzClient mb;
   DownloadService(this.app, {YtDlp? ytdlp, MusicBrainzClient? mb})
       : ytdlp = ytdlp ?? YtDlp(),
-        mb = mb ?? MusicBrainzClient();
+        mb = mb ?? MusicBrainzClient() {
+    this.ytdlp.onCancelAll = () => unawaited(cancelAll());
+  }
 
   // aba "Um vídeo"
   YtEntry? single;
@@ -131,6 +133,38 @@ class DownloadService extends ChangeNotifier {
   final Map<String, List<String>> _existingFor = {};
 
   int get doneCount => queue.where((e) => e.finished).length;
+  int get failedCount => queue.where((e) => e.status == YtStatus.failed).length;
+
+  /// Título da notificação: "Baixando 18 de 45 · 1 com erro".
+  String get notifyTitle {
+    final f = failedCount;
+    return 'Baixando ${(doneCount + 1).clamp(1, queue.length)} de ${queue.length}${f > 0 ? ' · $f com erro' : ''}';
+  }
+
+  // ---- aviso da bateria (aparece uma vez, na primeira playlist, se o app ainda tem restrição de bateria) ----
+  static const _batteryHintKey = 'avisoBateriaVisto';
+
+  /// null = sem aviso; true = celular Xiaomi (texto fala da Xiaomi); false = outro celular.
+  bool? batteryHint;
+
+  Future<void> _maybeShowBatteryHint() async {
+    if (batteryHint != null || (app.prefs.getBool(_batteryHintKey) ?? false)) return;
+    final info = await ytdlp.batteryInfo();
+    if (info.unrestricted) return;
+    batteryHint = info.xiaomi;
+    notifyListeners();
+  }
+
+  Future<void> dismissBatteryHint() async {
+    batteryHint = null;
+    notifyListeners();
+    await app.prefs.setBool(_batteryHintKey, true);
+  }
+
+  Future<void> openBatterySettings() async {
+    await ytdlp.openBatterySettings();
+    await dismissBatteryHint();
+  }
   int get okCount => queue.where((e) => e.status == YtStatus.done).length;
   bool get busy => running;
 
@@ -485,6 +519,7 @@ class DownloadService extends ChangeNotifier {
     }
     notifyListeners();
     unawaited(_saveQueue());
+    if (entries.length > 1) unawaited(_maybeShowBatteryHint());
     if (!running) {
       unawaited(_runQueue());
     } else {
@@ -526,7 +561,7 @@ class DownloadService extends ChangeNotifier {
     notifyListeners();
     // já mostra a notificação protegida agora, com o app na frente: o Android só deixa começar o serviço
     // em primeiro plano daqui (depois, em segundo plano, ele recusaria e o download morreria com o app)
-    unawaited(ytdlp.notify('Baixando ${doneCount + 1} de ${queue.length}', 'Preparando…'));
+    unawaited(ytdlp.notify(notifyTitle, 'Preparando…'));
     final tmpBase = p.join((await getTemporaryDirectory()).path, 'youtube');
     try {
       await _maybeUpdate();
@@ -576,7 +611,7 @@ class DownloadService extends ChangeNotifier {
         notifyListeners();
         if (DateTime.now().difference(_lastNotify).inMilliseconds > 1000) {
           _lastNotify = DateTime.now();
-          unawaited(ytdlp.notify('Baixando ${doneCount + 1} de ${queue.length}', e.names.title, progress: prog.round()));
+          unawaited(ytdlp.notify(notifyTitle, '${e.names.artist} – ${e.names.title}', progress: prog.round()));
         }
       }));
       e.savedPath = e.podcast ? await _saveEpisode(File(audio), e.names, root) : await _saveToLibrary(File(audio), e.names, root);

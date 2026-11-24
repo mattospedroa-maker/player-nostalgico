@@ -23,6 +23,19 @@ class DownloadKeepAliveService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_CANCEL) {
+            // botão "Cancelar tudo" da notificação: quem para a fila é o Dart (ele avisa o fim e o serviço sai)
+            val cb = onCancel
+            if (running && cb != null) {
+                cb()
+            } else {
+                // notificação velha (fila já parada) ou app sem o Dart: só tira tudo
+                if (!running) stopSelf()
+                stop(this, keepNotification = false)
+                (getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager).cancel(NOTIFICATION_ID)
+            }
+            return START_NOT_STICKY
+        }
         val n = pending
         if (n == null) {
             stopSelf()
@@ -64,6 +77,10 @@ class DownloadKeepAliveService : Service() {
 
     companion object {
         const val NOTIFICATION_ID = 4207
+        const val ACTION_CANCEL = "dev.playernostalgico.downloads.CANCEL"
+
+        /** Chamado no botão "Cancelar tudo" (o YtDlpBridge passa para o Dart). */
+        @Volatile var onCancel: (() -> Unit)? = null
         // prazo das travas; renovado a cada ~1 s de progresso, então só vence se o download ficar parado
         private const val LOCK_TIMEOUT_MS = 10 * 60 * 1000L
 
