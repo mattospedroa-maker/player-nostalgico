@@ -129,7 +129,7 @@ Future<void> showEpisodeSummary(BuildContext context, Track t) {
       builder: (ctx, _) {
         final info = app.podcastInfo.infoFor(t.path);
         final working = app.podcastInfo.isWorking(t.path);
-        final canRedo = app.geminiKey.isNotEmpty && ((info?.videoId.isNotEmpty ?? false) || app.downloads.youtubeIdFor(t.path) != null);
+        final canRedo = (app.geminiKey.isNotEmpty || app.mistralKey.isNotEmpty) && ((info?.videoId.isNotEmpty ?? false) || app.downloads.youtubeIdFor(t.path) != null);
         Widget h(String s) => Padding(
               padding: const EdgeInsets.only(top: 10, bottom: 3),
               child: Text(s, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5, color: Color(0xFF1C3F94))),
@@ -150,8 +150,8 @@ Future<void> showEpisodeSummary(BuildContext context, Track t) {
                     child: Text(
                       canRedo
                           ? 'Ainda sem resumo. Toque em "Fazer resumo".'
-                          : app.geminiKey.isEmpty
-                              ? 'Sem resumo: falta a chave do Gemini.'
+                          : app.geminiKey.isEmpty && app.mistralKey.isEmpty
+                              ? 'Sem resumo: falta a chave do Gemini (ou da Mistral).'
                               : 'Sem resumo: este arquivo não foi baixado pelo app, então não dá para achar a legenda do vídeo.',
                       style: const TextStyle(fontSize: 13),
                     ),
@@ -198,9 +198,9 @@ Future<void> showEpisodeSummary(BuildContext context, Track t) {
                   ],
                   if (info.topics.isNotEmpty) ...[h('Temas'), Text(info.topics.join(' · '), style: const TextStyle(fontSize: 13))],
                   if (info.hasSummary)
-                    const Padding(
-                      padding: EdgeInsets.only(top: 10),
-                      child: Text('Resumo feito por IA (Gemini).', style: TextStyle(fontSize: 11, color: Color(0xFF777777))),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: Text('Resumo feito por IA (${info.aiName}).', style: const TextStyle(fontSize: 11, color: Color(0xFF777777))),
                     ),
                 ],
               ]),

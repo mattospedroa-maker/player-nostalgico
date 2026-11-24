@@ -90,16 +90,20 @@ class AppState extends ChangeNotifier {
   /// Chave do Gemini (resumo dos podcasts): a digitada nas Opções, senão a que veio no APK (secret GEMINI_KEY).
   String get geminiKey => _keyOr(prefs.getString('geminiKey'), const String.fromEnvironment('GEMINI_KEY'));
 
+  /// Chave da Mistral (reserva do resumo quando o Gemini bate no limite): secret MISTRAL_KEY.
+  String get mistralKey => _keyOr(prefs.getString('mistralKey'), const String.fromEnvironment('MISTRAL_KEY'));
+
   /// Informações e resumo dos episódios (arquivo .json ao lado de cada um).
   late final PodcastInfoService podcastInfo = PodcastInfoService(
     client: gifFetcher.client,
     apiKey: () => geminiKey,
+    mistralKey: () => mistralKey,
     fetchInfo: (url) => downloads.ytdlp.info(url, playlist: false),
   );
 
   /// Tocou um episódio sem resumo (baixado antes do resumo existir): faz agora, em segundo plano.
   void _ensureSummary(Track t) {
-    if (geminiKey.isEmpty || podcastInfo.isWorking(t.path) || podcastInfo.quotaHit) return;
+    if (podcastInfo.isWorking(t.path) || !podcastInfo.canSummarizeNow) return;
     final info = podcastInfo.infoFor(t.path);
     if (info != null && (info.hasSummary || info.status == SummaryStatus.noCaptions)) return;
     // tentou e falhou há pouco: não insiste a cada play (limite do plano grátis)

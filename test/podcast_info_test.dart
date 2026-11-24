@@ -229,4 +229,40 @@ void main() {
     expect(s.quotaHit, isTrue); // não tenta mais sozinho até a cota voltar
     expect(info.chapters.length, 2); // capítulos do canal continuam
   });
+
+  test('Gemini no limite: a Mistral faz o resumo, e depois vai direto nela até a cota voltar', () async {
+    final hosts = <String>[];
+    final client = MockClient((r) async {
+      if (r.url.host == 'cap') return http.Response.bytes(utf8.encode(_json3), 200);
+      hosts.add(r.url.host);
+      if (r.url.host.contains('googleapis')) return http.Response('', 429);
+      expect(r.headers['Authorization'], 'Bearer m');
+      return http.Response.bytes(
+          utf8.encode(jsonEncode({
+            'choices': [
+              {
+                'message': {'content': jsonEncode(_ai)},
+              },
+            ],
+          })),
+          200);
+    });
+    final s = PodcastInfoService(client: client, apiKey: () => 'k', mistralKey: () => 'm');
+    final info = await s.build(_yt(), title: 't', program: 'p');
+    expect(info.status, SummaryStatus.ok);
+    expect(info.ai, 'mistral');
+    expect(info.aiName, 'Mistral');
+    expect(s.quotaHit, isTrue);
+    expect(s.canSummarizeNow, isTrue); // a Mistral segura enquanto o Gemini descansa
+    expect(EpisodeInfo.fromJson(jsonDecode(jsonEncode(info.toJson())) as Map<String, dynamic>).ai, 'mistral');
+
+    hosts.clear();
+    await s.build(_yt(), title: 't', program: 'p');
+    expect(hosts.every((h) => h == 'api.mistral.ai'), isTrue);
+
+    // sem Mistral, o limite do Gemini trava as tentativas automáticas
+    final only = PodcastInfoService(client: client, apiKey: () => 'k');
+    await only.build(_yt(), title: 't', program: 'p');
+    expect(only.canSummarizeNow, isFalse);
+  });
 }
