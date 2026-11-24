@@ -5,6 +5,8 @@ import '../app_state.dart';
 import '../list_search.dart';
 import '../main.dart';
 import '../models.dart';
+import '../mood.dart';
+import '../recommender.dart';
 import '../player_service.dart';
 import '../theme.dart';
 import '../widgets.dart';
@@ -120,6 +122,12 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> with InList
   late String _name = widget.playlist.name;
   InListIndex? _index;
 
+  /// Sugestões do fim da lista (já na ordem), mostradas de 6 em 6.
+  List<PlaylistSuggestion> _sugs = const [];
+  int _sugPage = 0;
+  List<Play>? _plays;
+  static const _sugCount = 6;
+
   @override
   void initState() {
     super.initState();
@@ -127,13 +135,35 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> with InList
   }
 
   Future<void> _load() async {
-    final ts = await context.read<AppState>().db.playlistTracks(widget.playlist.id);
+    final app = context.read<AppState>();
+    final ts = await app.db.playlistTracks(widget.playlist.id);
     if (mounted) {
       setState(() {
         _tracks = ts;
         _index = null;
       });
     }
+    _plays ??= await app.db.plays(); // histórico lido uma vez por tela (só para baixar as puladas)
+    if (mounted) _suggest();
+  }
+
+  /// Recalcula as sugestões (conta rápida em memória, sem internet).
+  void _suggest() {
+    final app = context.read<AppState>();
+    setState(() => _sugs = Recommender.forPlaylist(_tracks, app.tracks, playlistName: _name, plays: _plays ?? const []));
+  }
+
+  List<PlaylistSuggestion> get _sugShown {
+    if (_sugs.isEmpty) return const [];
+    final pages = (_sugs.length + _sugCount - 1) ~/ _sugCount;
+    final start = (_sugPage % pages) * _sugCount;
+    return _sugs.skip(start).take(_sugCount).toList();
+  }
+
+  Future<void> _addSuggestion(Track t) async {
+    final app = context.read<AppState>();
+    await app.addToPlaylist(widget.playlist.id, t);
+    await _load(); // a música entra no fim da playlist e outra sugestão ocupa o lugar dela
   }
 
   Future<void> _save() async {
@@ -166,6 +196,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> with InList
                   await app.db.renamePlaylist(widget.playlist.id, n);
                   await app.reload();
                   setState(() => _name = n);
+                  _suggest(); // nome de clima ("Triste") muda a regra
                 },
               ),
               XpTitleButton(
@@ -222,6 +253,22 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> with InList
                         ))
                   : ReorderableListView.builder(
                       itemCount: _tracks.length,
+                      footer: _sugShown.isEmpty
+                          ? null
+                          : _SuggestionsBlock(
+                              suggestions: _sugShown,
+                              hasMore: _sugs.length > _sugCount,
+                              onAdd: _addSuggestion,
+                              onPlay: (i) {
+                                ps.playQueue([_sugShown[i].track]); // toca ela e depois o mix segue normal
+                                HomeShell.goTo(context, 0);
+                              },
+                              onPlayAll: () {
+                                ps.playQueue([for (final r in _sugShown) r.track]);
+                                HomeShell.goTo(context, 0);
+                              },
+                              onMore: () => setState(() => _sugPage++),
+                            ),
                       onReorderItem: (a, b) {
                         setState(() {
                           final list = [..._tracks];
@@ -237,6 +284,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> with InList
                         onDismissed: (_) {
                           setState(() => _tracks = [..._tracks]..removeAt(i));
                           _save();
+                          _suggest(); // a que saiu pode voltar a ser sugerida
                         },
                         child: TrackTile(
                           track: _tracks[i],
@@ -247,10 +295,110 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen> with InList
                       ),
                     )),
             ),
-            XpStatusBar([searching ? '${shown.length} de ${_tracks.length} faixas' : '${_tracks.length} faixas', fmtTotal(searching ? shown : _tracks)]),
+            XpStatusBar([
+              searching
+                  ? '${shown.length} de ${_tracks.length} faixas'
+                  : '${_tracks.length} faixas${_sugShown.isEmpty ? '' : ' · ${_sugShown.length} sugestões'}',
+              fmtTotal(searching ? shown : _tracks),
+            ]),
           ]),
         ),
       ),
     );
   }
+}
+
+/// Fim da playlist: "Combina com esta playlist", músicas da biblioteca com o mesmo gênero e clima.
+class _SuggestionsBlock extends StatelessWidget {
+  final List<PlaylistSuggestion> suggestions;
+  final bool hasMore;
+  final void Function(Track) onAdd;
+  final void Function(int) onPlay;
+  final VoidCallback onPlayAll, onMore;
+  const _SuggestionsBlock(
+      {required this.suggestions, required this.hasMore, required this.onAdd, required this.onPlay, required this.onPlayAll, required this.onMore});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0xFFDBE6FB), Color(0xFFC4D5F5)]),
+          border: Border(top: BorderSide(color: Color(0xFF6F95DD), width: 2)),
+        ),
+        child: const Row(children: [
+          Text('✨ Combina com esta playlist', style: TextStyle(color: Color(0xFF0B2F80), fontWeight: FontWeight.bold, fontSize: 13)),
+          Spacer(),
+          Text('da sua biblioteca', style: TextStyle(color: Color(0xFF334455), fontSize: 11)),
+        ]),
+      ),
+      for (var i = 0; i < suggestions.length; i++)
+        TrackTile(
+          key: ValueKey('sug-${suggestions[i].track.id}'),
+          track: suggestions[i].track,
+          subtitle: suggestions[i].track.artist,
+          onTap: () => onPlay(i),
+          below: _SuggestionChips(suggestions[i]),
+          trailing: _AddButton(onTap: () => onAdd(suggestions[i].track)),
+        ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
+        child: Row(children: [
+          if (hasMore) ...[
+            Expanded(child: XpButton(label: 'Outras sugestões', icon: Icons.refresh, onTap: onMore)),
+            const SizedBox(width: 6),
+          ],
+          Expanded(child: XpButton(label: 'Tocar sugestões', xpIcon: XpIcons.play, onTap: onPlayAll)),
+        ]),
+      ),
+    ]);
+  }
+}
+
+/// Etiquetas do porquê: gênero (azul) e clima (verde).
+class _SuggestionChips extends StatelessWidget {
+  final PlaylistSuggestion s;
+  const _SuggestionChips(this.s);
+
+  Widget _chip(String text, Color bg, Color fg, Color border) => Container(
+        margin: const EdgeInsets.only(right: 4, top: 2),
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+        decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(8), border: Border.all(color: border)),
+        child: Text(text, style: TextStyle(color: fg, fontSize: 10.5), maxLines: 1, overflow: TextOverflow.ellipsis),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final Mood? m = s.mood;
+    return Wrap(children: [
+      if (s.genre != null) _chip(s.genre!, const Color(0xFFE4ECFB), const Color(0xFF1C3F8A), const Color(0xFFB9CBEE)),
+      if (m != null) _chip('${m.emoji} ${m.label}', const Color(0xFFEEF3E0), const Color(0xFF3D5A12), const Color(0xFFC8D9A6)),
+    ]);
+  }
+}
+
+/// Botão redondo prateado com "+" azul-marinho: põe a sugestão no fim da playlist.
+class _AddButton extends StatelessWidget {
+  final VoidCallback onTap;
+  const _AddButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+        message: 'Adicionar à playlist',
+        child: GestureDetector(
+          onTap: onTap,
+          child: Container(
+            margin: const EdgeInsets.all(6),
+            width: 30,
+            height: 30,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(color: const Color(0xFF6B7486)),
+              gradient: const RadialGradient(center: Alignment(-.3, -.4), colors: [Colors.white, Color(0xFFC9CCD3), Color(0xFF9EA4AE)], stops: [0, .6, 1]),
+            ),
+            child: const Icon(Icons.add, color: Xp.navy, size: 20),
+          ),
+        ),
+      );
 }

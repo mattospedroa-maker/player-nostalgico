@@ -9,6 +9,17 @@ class Recommendation {
   const Recommendation(this.track, this.score, this.reason);
 }
 
+/// Sugestão para o fim de uma playlist: além da pontuação, diz o que combinou (as etiquetas da tela).
+class PlaylistSuggestion extends Recommendation {
+  /// Gênero da música quando ele bate com a playlist (igual ou da mesma família), senão null.
+  final String? genre;
+
+  /// Clima da música quando ele bate com a playlist, senão null.
+  final Mood? mood;
+  const PlaylistSuggestion(Track track, double score, this.genre, this.mood)
+      : super(track, score, '');
+}
+
 /// Recomendação 100% offline, por pontuação ponderada a partir do histórico, das favoritas
 /// e da parecença entre músicas (artista, álbum, gênero, clima, época).
 /// Funciona com o que tiver: música sem gênero/álbum só deixa de somar esses pontos.
@@ -226,6 +237,129 @@ class Recommender {
     if (m != null && m == seed.effectiveMood) return 'mesmo clima (${m.label.toLowerCase()})';
     if (t.genre.isNotEmpty && seed.genre.isNotEmpty) return 'gênero parecido';
     return 'mesma época';
+  }
+
+  // ---------- sugestões para uma playlist ----------
+
+  /// Climas que brigam entre si: numa playlist triste, música de festa ou de soco perde pontos.
+  static const _clash = {
+    Mood.triste: {Mood.festa, Mood.acao},
+    Mood.calmo: {Mood.festa, Mood.acao},
+    Mood.romantico: {Mood.acao},
+    Mood.festa: {Mood.triste, Mood.calmo},
+    Mood.acao: {Mood.triste, Mood.calmo, Mood.romantico},
+    Mood.epico: <Mood>{},
+  };
+
+  static String _plain(String s) {
+    const from = 'áàâãäéèêëíìîïóòôõöúùûüç', to = 'aaaaaeeeeiiiiooooouuuuc';
+    final b = StringBuffer();
+    for (final c in s.toLowerCase().trim().split('')) {
+      final i = from.indexOf(c);
+      b.write(i < 0 ? c : to[i]);
+    }
+    return b.toString();
+  }
+
+  /// Playlist com o nome de um clima ("Triste", "Calmo"...): o clima vira a regra principal.
+  static Mood? moodOfPlaylistName(String name) {
+    final n = _plain(name);
+    for (final m in Mood.values) {
+      if (n == _plain(m.label)) return m;
+    }
+    return null;
+  }
+
+  /// Músicas da biblioteca que combinam com a playlist (por gênero e clima), da mais para a menos parecida.
+  ///
+  /// Faz o "retrato" da playlist (quanto ela tem de cada gênero, família de gênero e clima) e dá pontos
+  /// a cada música que ainda não está nela. Gênero igual vale mais que a mesma família; clima igual soma
+  /// (escolhido à mão vale o dobro); clima que briga tira. Artista que ainda não está na playlist ganha um
+  /// pouco a mais; no máximo 2 por artista. Música pulada muitas vezes cai.
+  /// Conta só em memória, sem internet: uma passada pela biblioteca.
+  static List<PlaylistSuggestion> forPlaylist(List<Track> playlist, List<Track> library,
+      {String playlistName = '', List<Play> plays = const [], int limit = 60}) {
+    if (playlist.isEmpty) return const [];
+    final inside = {for (final t in playlist) t.path};
+    final insideIds = {for (final t in playlist) if (t.id != null) t.id!};
+    final genreW = <String, double>{}, familyW = <String, double>{}, moodW = <Mood, double>{};
+    final artists = <String>{};
+    var moodTotal = 0.0;
+    for (final t in playlist) {
+      final g = t.genre.trim().toLowerCase();
+      if (g.isNotEmpty) {
+        genreW[g] = (genreW[g] ?? 0) + 1;
+        final f = _mainGenreWord(g);
+        if (f.isNotEmpty) familyW[f] = (familyW[f] ?? 0) + 1;
+      }
+      final m = t.effectiveMood;
+      if (m != null) {
+        final w = t.chosenMood != null ? 2.0 : 1.0; // escolhido à mão: vale o dobro
+        moodW[m] = (moodW[m] ?? 0) + w;
+        moodTotal += w;
+      }
+      if (_known(t.artist, unknownArtist)) artists.add(ArtistNames.current.key(t.artist));
+    }
+    final n = playlist.length.toDouble();
+    genreW.updateAll((_, v) => v / n);
+    familyW.updateAll((_, v) => v / n);
+    // clima: a fração entre as músicas que têm clima, descontada se a maioria da playlist é neutra
+    final moodCover = playlist.where((t) => t.effectiveMood != null).length / n;
+    if (moodTotal > 0) moodW.updateAll((_, v) => v / moodTotal * (.4 + .6 * moodCover));
+    final rule = moodOfPlaylistName(playlistName);
+
+    final skips = <int, int>{};
+    for (final p in plays) {
+      if (p.skipped && p.secondsListened < 30) skips[p.trackId] = (skips[p.trackId] ?? 0) + 1;
+    }
+
+    final out = <PlaylistSuggestion>[];
+    for (final t in library) {
+      if (inside.contains(t.path) || (t.id != null && insideIds.contains(t.id))) continue;
+      var s = 0.0;
+      String? genre;
+      Mood? mood;
+      final g = t.genre.trim().toLowerCase();
+      if (g.isNotEmpty) {
+        final exact = 3 * (genreW[g] ?? 0);
+        final f = _mainGenreWord(g);
+        final family = f.isEmpty ? 0.0 : 1.5 * (familyW[f] ?? 0);
+        final best = exact > family ? exact : family;
+        if (best > 0) {
+          s += best;
+          genre = t.genre.trim();
+        }
+      }
+      final m = t.effectiveMood;
+      if (m != null) {
+        final match = moodW[m] ?? 0;
+        if (match > 0) {
+          s += 2.5 * match * (t.chosenMood != null ? 1.5 : 1);
+          mood = m;
+        }
+        var clash = 0.0;
+        for (final e in moodW.entries) {
+          if (_clash[e.key]!.contains(m)) clash += e.value;
+        }
+        s -= 2.5 * clash;
+        if (rule != null) {
+          if (m == rule) {
+            s += 4;
+            mood = m;
+          } else {
+            s -= 2;
+          }
+        }
+      }
+      if (genre == null && mood == null) continue; // nada em comum: não é sugestão
+      final key = _known(t.artist, unknownArtist) ? ArtistNames.current.key(t.artist) : null;
+      if (key != null && !artists.contains(key)) s += .3; // artista que ainda não está na playlist: vale descobrir
+      if (t.favorite) s += .3;
+      s -= .7 * (skips[t.id] ?? 0).clamp(0, 3);
+      if (s >= 1) out.add(PlaylistSuggestion(t, s, genre, mood));
+    }
+    out.sort((x, y) => y.score.compareTo(x.score));
+    return diversify(out, perArtist: 2, perAlbum: 2, limit: limit).cast<PlaylistSuggestion>();
   }
 
   /// "Redescobrir": músicas que você ouvia muito e não toca há mais de 60 dias.

@@ -63,9 +63,12 @@ class TrackTile extends StatelessWidget {
   final String? note;
   final Widget? trailing;
 
+  /// Linha extra embaixo do artista (ex.: etiquetas das sugestões da playlist).
+  final Widget? below;
+
   /// Busca da lista: marca em amarelo o trecho que bateu no título e na linha de baixo.
   final String? highlight;
-  const TrackTile({super.key, required this.track, required this.onTap, this.subtitle, this.note, this.trailing, this.highlight});
+  const TrackTile({super.key, required this.track, required this.onTap, this.subtitle, this.note, this.trailing, this.highlight, this.below});
 
   @override
   Widget build(BuildContext context) {
@@ -103,6 +106,7 @@ class TrackTile extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                     ),
                     if (note != null) Text(note!, style: TextStyle(color: playing ? Colors.white : Xp.linkBlue, fontSize: 11.5)),
+                    ?below,
                   ],
                 ),
               ),
