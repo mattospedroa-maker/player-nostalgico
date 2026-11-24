@@ -13,11 +13,16 @@ class AppDb {
     final db = await f.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 4,
+        version: 5,
         onUpgrade: (db, from, to) async {
           if (from < 2) await db.execute('ALTER TABLE tracks ADD COLUMN edited INTEGER NOT NULL DEFAULT 0');
           if (from < 3) await db.execute("ALTER TABLE tracks ADD COLUMN mood TEXT NOT NULL DEFAULT ''");
           if (from < 4) await db.execute('ALTER TABLE tracks ADD COLUMN bpm INTEGER');
+          if (from < 5) {
+            await db.execute("ALTER TABLE tracks ADD COLUMN styles_edit TEXT NOT NULL DEFAULT ''");
+            await db.execute('ALTER TABLE tracks ADD COLUMN energy INTEGER');
+            await db.execute('ALTER TABLE tracks ADD COLUMN humor INTEGER');
+          }
         },
         onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
         // índices que faltavam (só acrescentam, não mexem em nenhum dado): abrir playlist, trocar
@@ -43,6 +48,9 @@ class AppDb {
               modified_at INTEGER NOT NULL,
               edited INTEGER NOT NULL DEFAULT 0,
               mood TEXT NOT NULL DEFAULT '',
+              styles_edit TEXT NOT NULL DEFAULT '',
+              energy INTEGER,
+              humor INTEGER,
               bpm INTEGER
             )''');
           await db.execute('''
@@ -139,6 +147,23 @@ class AppDb {
   /// (vale até para música editada: "Music" vinha preenchido na tela de edição, ninguém escolheu).
   Future<void> fillGenre(int id, String genre, {String current = ''}) =>
       db.update('tracks', {'genre': genre}, where: 'id = ? AND genre = ?', whereArgs: [id, current]);
+
+  /// Estilos postos/tirados à mão na aba "Estilo".
+  Future<void> setStylesEdit(int id, String edit) => db.update('tracks', {'styles_edit': edit}, where: 'id = ?', whereArgs: [id]);
+
+  /// Réguas arrastadas à mão (null nas duas = volta ao automático).
+  Future<void> setVibe(int id, int? energy, int? humor) =>
+      db.update('tracks', {'energy': energy, 'humor': humor}, where: 'id = ?', whereArgs: [id]);
+
+  /// Todas as playlists com os ids das músicas, na ordem (para aprender o que você junta).
+  Future<Map<int, List<int>>> playlistMembership() async {
+    final rows = await db.query('playlist_tracks', columns: ['playlist_id', 'track_id'], orderBy: 'playlist_id, position');
+    final out = <int, List<int>>{};
+    for (final r in rows) {
+      (out[r['playlist_id'] as int] ??= []).add(r['track_id'] as int);
+    }
+    return out;
+  }
 
   Future<void> setMood(int id, String mood) => db.update('tracks', {'mood': mood}, where: 'id = ?', whereArgs: [id]);
 

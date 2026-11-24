@@ -18,6 +18,13 @@ class Track {
   /// Também fica fora do toMap: a releitura só grava quando o arquivo traz um valor.
   final int? bpm;
 
+  /// Estilos postos/tirados à mão na aba "Estilo" ("+A|-B"). Fora do toMap: a releitura não apaga.
+  final String stylesEdit;
+
+  /// Réguas arrastadas à mão (0..100); null = automáticas. Fora do toMap.
+  final int? energy;
+  final int? humor;
+
   const Track({
     this.id,
     required this.path,
@@ -32,6 +39,9 @@ class Track {
     required this.modifiedAt,
     this.mood = '',
     this.bpm,
+    this.stylesEdit = '',
+    this.energy,
+    this.humor,
   });
 
   Track copyWith({int? id, String? path, bool? favorite, String? artist, String? album}) => Track(
@@ -48,6 +58,9 @@ class Track {
         modifiedAt: modifiedAt,
         mood: mood,
         bpm: bpm,
+        stylesEdit: stylesEdit,
+        energy: energy,
+        humor: humor,
       );
 
   Map<String, Object?> toMap() => {
@@ -78,6 +91,9 @@ class Track {
         modifiedAt: m['modified_at'] as int,
         mood: (m['mood'] as String?) ?? '',
         bpm: m['bpm'] as int?,
+        stylesEdit: (m['styles_edit'] as String?) ?? '',
+        energy: m['energy'] as int?,
+        humor: m['humor'] as int?,
       );
 }
 

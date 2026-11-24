@@ -41,6 +41,8 @@ import 'podcasts.dart';
 import 'podcast_themes.dart';
 import 'program_art.dart';
 import 'recommender.dart';
+import 'style_learning.dart';
+import 'styles.dart';
 import 'visual_search.dart';
 
 /// Estado central do app: pasta-fonte, biblioteca, playlists e serviços.
@@ -59,6 +61,7 @@ class AppState extends ChangeNotifier {
   late final GifFetcher gifFetcher = GifFetcher(gifs, client: http.Client())..lastFmKey = (() => lastFmKey);
   int? _lastAutoFetchId;
   late final ArtistPhotoService artistPhotos = ArtistPhotoService(dataDir);
+  late final ArtistTagStore artistTags = ArtistTagStore(dataDir);
 
   /// Imagens extras da roda de GIFs (sempre, sozinhas como os GIFs): capa do álbum e fotos do artista
   /// principal (parcerias contam no principal). Os GIFs continuam todos.
@@ -585,10 +588,105 @@ class AppState extends ChangeNotifier {
     ArtistNames.current = ArtistNames.fromTracks(tracks);
     MoodClues.tagsOf = gifFetcher.cachedTags;
     MoodClues.learnFrom(tracks);
+    Styles.trackTags = gifFetcher.cachedTags;
+    Styles.artistTags = artistTags.get;
+    Styles.learnedPair = (a, b) => StyleLearning.current.stylePair(a, b);
+    Styles.invalidate();
     playlists = await db.playlists();
+    await _relearn();
     if (rereadGifs) await gifs.refresh();
     notifyListeners();
     _scheduleBackup();
+  }
+
+  /// Refaz o que o app aprende com as playlists (músicas/artistas/estilos que você junta). Conta em memória.
+  Future<void> _relearn() async {
+    try {
+      final membership = await db.playlistMembership();
+      StyleLearning.current = StyleLearning.build(membership, {for (final pl in playlists) pl.id: pl.name}, tracks,
+          addedFromSuggestions: _suggestionAdds());
+    } catch (e) {
+      errorLog.info('Estilos', 'Não deu para aprender com as playlists', e);
+    }
+  }
+
+  static const _sugAddedKey = 'sugestoesAdicionadas';
+
+  Map<int, Set<int>> _suggestionAdds() {
+    final out = <int, Set<int>>{};
+    for (final s in prefs.getStringList(_sugAddedKey) ?? const <String>[]) {
+      final parts = s.split(':');
+      final t = int.tryParse(parts.first), pl = parts.length > 1 ? int.tryParse(parts[1]) : null;
+      if (t != null && pl != null) (out[t] ??= {}).add(pl);
+    }
+    return out;
+  }
+
+  /// Uma sugestão do fim da playlist entrou pelo ＋: guarda para a aba "Estilo" mostrar e o aprendizado contar.
+  Future<void> addSuggestionToPlaylist(int playlistId, Track t) async {
+    final list = [...prefs.getStringList(_sugAddedKey) ?? const <String>[], '${t.id}:$playlistId'];
+    await prefs.setStringList(_sugAddedKey, list.length > 500 ? list.sublist(list.length - 500) : list);
+    await addToPlaylist(playlistId, t);
+  }
+
+  /// Estilos postos/tirados à mão na aba "Estilo".
+  Future<void> setStyleEdits(Track t, StyleEdits edits) async {
+    if (t.id == null) return;
+    await db.setStylesEdit(t.id!, edits.encode());
+    await reload();
+  }
+
+  /// Réguas arrastadas à mão (null nas duas = volta ao automático). Sem clima escolhido no selo,
+  /// o selo passa a seguir as réguas; se ele mudar, os GIFs automáticos são refeitos.
+  Future<void> setVibe(Track t, int? energy, int? humor) async {
+    final id = t.id;
+    if (id == null) return;
+    final before = (byId(id) ?? t).effectiveMood;
+    await db.setVibe(id, energy, humor);
+    await reload();
+    final updated = byId(id);
+    if (updated == null) return;
+    player.replaceTrack(updated);
+    if (updated.effectiveMood != before) {
+      if (player.mixSeedId == id) unawaited(player.refreshMix());
+      unawaited(gifFetcher.refetchFor(updated).catchError(_gifFetchFailed));
+    }
+  }
+
+  bool _fetchingArtistTags = false;
+
+  /// Tags do Last.fm de cada artista que ainda não tem (uma vez por artista, em segundo plano):
+  /// dão estilos às músicas que ainda não têm tags próprias. Sem chave ou sem internet: tenta na próxima leitura.
+  Future<int> fillArtistTags() async {
+    if (_fetchingArtistTags || lastFmKey.isEmpty) return 0;
+    _fetchingArtistTags = true;
+    var n = 0;
+    try {
+      final artists = <String>{
+        for (final t in tracks)
+          if (t.artist != unknownArtist && t.artist.trim().isNotEmpty && !artistTags.has(t.artist)) t.artist
+      };
+      if (artists.isEmpty) return 0;
+      final client = LastFmClient(gifFetcher.client, lastFmKey);
+      for (final a in artists) {
+        final r = await client.artistTopTags(a);
+        if (r.status == TagStatus.network || r.status == TagStatus.noKey || r.status == TagStatus.invalidKey) break;
+        artistTags.put(a, r.status == TagStatus.ok ? r.tags : const []);
+        n++;
+        if (n % 25 == 0) await artistTags.save();
+      }
+    } catch (e) {
+      errorLog.info('Estilos', 'Não deu para buscar as tags dos artistas', e);
+    } finally {
+      if (n > 0) {
+        await artistTags.save();
+        Styles.invalidate();
+        await _relearn();
+        notifyListeners();
+      }
+      _fetchingArtistTags = false;
+    }
+    return n;
   }
 
   Timer? _backupTimer;
@@ -664,6 +762,7 @@ class AppState extends ChangeNotifier {
       return 0;
     });
     unawaited(fetchMissingCovers().catchError(_coversFailed));
+    unawaited(fillArtistTags());
     if (added.isEmpty || !autoGifs) return;
     final ids = added.map((t) => t.id).toSet();
     await fetchGifsForAll(only: tracks.where((t) => ids.contains(t.id)).toList());
@@ -875,6 +974,7 @@ class AppState extends ChangeNotifier {
     final (newTitle, newArtist) = GifFetcher.namesFor(after);
     if (oldTitle.toLowerCase() == newTitle.toLowerCase() && oldArtist.toLowerCase() == newArtist.toLowerCase()) return;
     MoodClues.invalidate(); // o clima automático vem das tags do nome certo
+    Styles.invalidate();
     _playerVisuals.removeWhere((k, _) => k.startsWith('${after.id}|'));
     _visualsFailedAt.removeWhere((k, _) => k.startsWith('${after.id}|'));
     visualsEpoch++;

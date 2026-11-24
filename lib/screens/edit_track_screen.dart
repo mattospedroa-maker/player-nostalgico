@@ -6,8 +6,12 @@ import 'package:provider/provider.dart';
 
 import '../app_state.dart';
 import '../error_log.dart';
+import '../artist_names.dart';
 import '../models.dart';
+import '../mood.dart';
 import '../organizer.dart';
+import '../style_learning.dart';
+import '../styles.dart';
 import '../theme.dart';
 import '../widgets.dart';
 import '../xp_icons.dart';
@@ -187,13 +191,14 @@ class _EditTrackScreenState extends State<EditTrackScreen> {
         child: SafeArea(
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             XpTitleBar(title: 'Propriedades de $name', icon: XpIcons.doc, actions: [XpTitleButton(icon: Icons.close, tooltip: 'Fechar', onTap: () => Navigator.pop(context))]),
-            XpTabs(labels: const ['Geral', 'Arquivo', 'GIFs'], current: _tab, onTap: (i) => setState(() => _tab = i)),
+            XpTabs(labels: const ['Geral', 'Estilo', 'Arquivo', 'GIFs'], current: _tab, onTap: (i) => setState(() => _tab = i)),
             Expanded(
               child: XpTabPage(
                 padding: EdgeInsets.zero,
                 child: ListView(padding: const EdgeInsets.all(10), children: switch (_tab) {
                   0 => _general(name, rel),
-                  1 => _file(name, rel),
+                  1 => _styleTab(),
+                  2 => _file(name, rel),
                   _ => _gifTab(),
                 }),
               ),
@@ -276,6 +281,225 @@ class _EditTrackScreenState extends State<EditTrackScreen> {
           ]),
         ),
       ];
+
+  // ---------- aba "Estilo" ----------
+
+  /// Réguas enquanto o dedo arrasta (salva ao soltar).
+  double? _dragEnergy, _dragHumor;
+
+  Future<void> _editStyles(Track t, {String? add, String? remove}) async {
+    final e = StyleEdits.parse(t.stylesEdit);
+    final added = {...e.added}, removed = {...e.removed};
+    if (add != null) {
+      added.add(add);
+      removed.remove(add);
+    }
+    if (remove != null) {
+      if (!added.remove(remove)) removed.add(remove);
+    }
+    await context.read<AppState>().setStyleEdits(t, StyleEdits(added, removed));
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _pickStyle(Track t) async {
+    final have = Styles.of(t).toSet();
+    final options = [for (final s in styleCatalog) if (!have.contains(s.name)) s.name]..sort();
+    var filter = '';
+    final chosen = await showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setD) {
+          final shown = [for (final o in options) if (o.toLowerCase().contains(filter.toLowerCase())) o];
+          return XpAlertDialog(
+            icon: XpIcons.note,
+            title: const Text('Adicionar estilo'),
+            content: SizedBox(
+              width: 300,
+              height: 360,
+              child: Column(children: [
+                TextField(
+                  decoration: const InputDecoration(hintText: 'Procurar estilo…', isDense: true),
+                  onChanged: (v) => setD(() => filter = v),
+                ),
+                const SizedBox(height: 6),
+                Expanded(
+                  child: ListView(children: [
+                    for (final o in shown)
+                      ListTile(dense: true, title: Text(o, style: const TextStyle(fontSize: 14)), onTap: () => Navigator.pop(ctx, o)),
+                  ]),
+                ),
+              ]),
+            ),
+            actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar'))],
+          );
+        },
+      ),
+    );
+    if (chosen != null && mounted) await _editStyles(t, add: chosen);
+  }
+
+  Widget _chip(String text, {VoidCallback? onRemove, VoidCallback? onTap, bool dashed = false}) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          margin: const EdgeInsets.only(right: 5, bottom: 5),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            color: dashed ? Colors.white : const Color(0xFFE4ECFB),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: dashed ? const Color(0xFF999999) : const Color(0xFFB9CBEE)),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Text(text, style: TextStyle(fontSize: 13, color: dashed ? const Color(0xFF555555) : const Color(0xFF1C3F8A))),
+            if (onRemove != null) ...[
+              const SizedBox(width: 4),
+              GestureDetector(onTap: onRemove, child: const Icon(Icons.close, size: 14, color: Color(0xFF7A8BB0))),
+            ],
+          ]),
+        ),
+      );
+
+  Widget _ruler(String left, String title, String right, double value, List<Color> colors, ValueChanged<double> onChanged,
+          ValueChanged<double> onEnd) =>
+      Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const SizedBox(height: 6),
+        Row(children: [
+          Text(left, style: const TextStyle(fontSize: 12.5)),
+          Expanded(child: Text(title, textAlign: TextAlign.center, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold))),
+          Text(right, style: const TextStyle(fontSize: 12.5)),
+        ]),
+        SizedBox(
+          height: 30,
+          child: Stack(alignment: Alignment.center, children: [
+            Container(
+              height: 10,
+              margin: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(5),
+                border: Border.all(color: const Color(0xFF8A99B5)),
+                gradient: LinearGradient(colors: colors),
+              ),
+            ),
+            SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 0,
+                activeTrackColor: Colors.transparent,
+                inactiveTrackColor: Colors.transparent,
+                thumbColor: const Color(0xFFD9DCE2),
+                overlayColor: const Color(0x221C5FD8),
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 10, elevation: 2),
+              ),
+              child: Slider(value: value, min: 0, max: 100, onChanged: onChanged, onChangeEnd: onEnd),
+            ),
+          ]),
+        ),
+      ]);
+
+  List<Widget> _styleTab() {
+    final app = context.watch<AppState>();
+    final t = app.byId(widget.track.id) ?? widget.track;
+    final styles = Styles.of(t);
+    final vibe = Styles.vibeOf(t);
+    final mood = t.effectiveMood;
+    final learn = StyleLearning.current;
+    final names = ArtistNames.current;
+    final artistKey = names.key(t.artist);
+    final displayArtist = <String, String>{for (final x in app.tracks) names.key(x.artist): names.main(x.artist)};
+    final together = [
+      for (final (k, n) in learn.artistCompanions(artistKey).take(4))
+        if (k != artistKey && displayArtist[k] != null) (displayArtist[k]!, n)
+    ];
+    final added = <Track>[
+      for (final e in learn.addedFromSuggestions.entries)
+        if (e.key != t.id && t.id != null && learn.together(t.id!, e.key) > 0) ?app.byId(e.key)
+    ].take(4).toList();
+    final neighbors = Styles.neighborsOf(styles).take(5).toList();
+    void saveVibe() {
+      final e = (_dragEnergy ?? vibe.energy.toDouble()).round(), h = (_dragHumor ?? vibe.humor.toDouble()).round();
+      _dragEnergy = _dragHumor = null;
+      app.setVibe(t, e, h);
+    }
+
+    return [
+      Container(
+        padding: const EdgeInsets.only(bottom: 9),
+        decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0xFFD4D0C8)))),
+        child: Row(children: [
+          CoverSquare(t, size: 52),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14)),
+              Text('${t.artist} · ${t.album}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12.5, color: Color(0xFF666666))),
+            ]),
+          ),
+        ]),
+      ),
+      XpGroupBox(
+        title: 'Estilos',
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Wrap(children: [
+            for (final s in styles) _chip(s, onRemove: () => _editStyles(t, remove: s)),
+            if (styles.length < Styles.maxPerTrack) _chip('＋ estilo', dashed: true, onTap: () => _pickStyle(t)),
+          ]),
+          Text(
+            styles.isEmpty
+                ? 'Ainda sem estilos: chegam sozinhos com as tags do Last.fm. Você também pode pôr à mão.'
+                : 'Automáticos pelas tags do Last.fm e do gênero. Os que você tira não voltam.',
+            style: const TextStyle(fontSize: 11.5, color: Color(0xFF666666)),
+          ),
+        ]),
+      ),
+      XpGroupBox(
+        title: 'Clima',
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Row(children: [
+            const Text('Selo: ', style: TextStyle(fontSize: 13)),
+            _chip(mood == null
+                ? 'neutro · automático'
+                : '${mood.emoji} ${mood.label} · ${t.chosenMood != null ? 'escolhido' : (vibe.manual ? 'pelas réguas' : 'automático')}'),
+          ]),
+          _ruler('🌙 Calma', 'Energia', 'Agitada 🔥', _dragEnergy ?? vibe.energy.toDouble(),
+              const [Color(0xFF9CC3FF), Color(0xFFFFD17A), Color(0xFFFF7A5A)], (v) => setState(() => _dragEnergy = v), (_) => saveVibe()),
+          _ruler('🌧 Sombrio', 'Humor', 'Alegre ☀️', _dragHumor ?? vibe.humor.toDouble(),
+              const [Color(0xFF5A5A8A), Color(0xFFBFC6D6), Color(0xFFFFE36A)], (v) => setState(() => _dragHumor = v), (_) => saveVibe()),
+          Text(
+            vibe.manual
+                ? 'Ajustado à mão.${t.chosenMood == null ? ' O selo segue as réguas.' : ' O selo escolhido continua valendo.'}'
+                : 'Automático pelos estilos, tags${t.bpm != null ? ' e BPM (${t.bpm})' : ''}. Arraste para corrigir.',
+            style: const TextStyle(fontSize: 11.5, color: Color(0xFF666666)),
+          ),
+          if (vibe.manual)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: XpButton(label: '↺ Automático', onTap: () => app.setVibe(t, null, null)),
+              ),
+            ),
+        ]),
+      ),
+      XpGroupBox(
+        title: 'Combina com',
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          if (neighbors.isNotEmpty) _because('🧭', 'Estilos vizinhos', neighbors.join(', ')),
+          if (together.isNotEmpty)
+            _because('📋', 'Junto nas suas playlists', [for (final (a, n) in together) '$a ($n)'].join(', ')),
+          if (added.isNotEmpty) _because('👍', 'Você adicionou pelas sugestões', [for (final x in added) '${x.artist} – ${x.title}'].join(', ')),
+          if (neighbors.isEmpty && together.isEmpty && added.isEmpty)
+            const Text('Ainda não há o que mostrar. Coloque a música em playlists para o app aprender.',
+                style: TextStyle(fontSize: 12.5, color: Color(0xFF666666))),
+        ]),
+      ),
+    ];
+  }
+
+  Widget _because(String icon, String label, String value) => Padding(
+        padding: const EdgeInsets.only(bottom: 5),
+        child: Text.rich(TextSpan(style: const TextStyle(fontSize: 13, height: 1.35), children: [
+          TextSpan(text: '$icon $label: '),
+          TextSpan(text: value, style: const TextStyle(color: Xp.linkBlue)),
+        ])),
+      );
 
   List<Widget> _file(String name, String rel) {
     final f = File(widget.track.path);
