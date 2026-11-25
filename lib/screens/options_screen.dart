@@ -18,7 +18,10 @@ import '../xp_icons.dart';
 class OptionsScreen extends StatefulWidget {
   /// Só para testes; no app vem o PlayerService.
   final CrossfadeSettings? settings;
-  const OptionsScreen({super.key, this.settings});
+
+  /// Aba que abre primeiro (0 Reprodução, 1 Armazenamento, 2 Internet).
+  final int initialTab;
+  const OptionsScreen({super.key, this.settings, this.initialTab = 0});
 
   @override
   State<OptionsScreen> createState() => _OptionsScreenState();
@@ -29,7 +32,7 @@ class _OptionsScreenState extends State<OptionsScreen> {
   late bool _on;
   late int _out;
   late int _in;
-  int _tab = 0;
+  late int _tab = widget.initialTab;
 
   /// Teto escolhido na aba Armazenamento (null = não mexeu).
   int? _cap;
@@ -139,7 +142,7 @@ class _OptionsScreenState extends State<OptionsScreen> {
                   ),
                 ),
               ),
-              const XpStatusBar(['Nostalgic MPlayer', 'Versão $appVersion']),
+              const XpStatusBar(['Nostalgic MPlayer', 'Versão $appVersion'], showNet: false),
             ],
           ),
         ),

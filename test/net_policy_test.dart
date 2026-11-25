@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:player_nostalgico/net_policy.dart';
 import 'package:player_nostalgico/screens/options_screen.dart';
+import 'package:player_nostalgico/theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -78,5 +79,20 @@ void main() {
     expect(mode, NetMode.offline);
     expect(t.widget<CheckboxListTile>(find.byKey(const Key('net-gifs'))).onChanged, isNull);
     expect(t.widget<CheckboxListTile>(find.byKey(const Key('net-wifi'))).onChanged, isNull);
+  });
+
+  testWidgets('barra de status mostra o modo no canto e muda junto', (t) async {
+    final n = await policy();
+    await t.pumpWidget(const MaterialApp(home: Scaffold(body: Column(children: [Spacer(), XpStatusBar(['12 músicas', 'Musica'])]))));
+    expect(find.text('Internet'), findsOneWidget);
+    await n.set(NetMode.wifiOnly, const {});
+    n.onWifi = false;
+    await t.pump();
+    expect(find.text('Só Wi-Fi (esperando)'), findsOneWidget);
+    await n.set(NetMode.offline, const {});
+    await t.pump();
+    expect(find.text('Trabalhando off-line'), findsOneWidget);
+    await t.pumpWidget(const MaterialApp(home: Scaffold(body: XpStatusBar(['Opções'], showNet: false))));
+    expect(find.byKey(const Key('statusbar-net')), findsNothing);
   });
 }

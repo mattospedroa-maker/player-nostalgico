@@ -33,7 +33,20 @@ enum NetFeature {
 /// Decide se o app pode usar a internet agora, para cada coisa que ele busca sozinho.
 class NetPolicy extends ChangeNotifier {
   final SharedPreferences prefs;
-  NetPolicy(this.prefs);
+  NetPolicy(this.prefs) {
+    _publish();
+  }
+
+  /// O modo de agora para a barra de status das janelas (null = app ainda não abriu, ex.: testes).
+  static final ValueNotifier<NetStatus?> status = ValueNotifier(null);
+
+  void _publish() => status.value = NetStatus(mode, _onWifi);
+
+  @override
+  void notifyListeners() {
+    _publish();
+    super.notifyListeners();
+  }
 
   StreamSubscription<List<ConnectivityResult>>? _sub;
   bool _onWifi = true;
@@ -93,4 +106,23 @@ class NetPolicy extends ChangeNotifier {
     _sub?.cancel();
     super.dispose();
   }
+}
+
+/// O que a barra de status mostra: o modo e, no "Só no Wi-Fi", se está no Wi-Fi agora.
+class NetStatus {
+  final NetMode mode;
+  final bool onWifi;
+  const NetStatus(this.mode, this.onWifi);
+
+  String get label => switch (mode) {
+        NetMode.online => 'Internet',
+        NetMode.wifiOnly => onWifi ? 'Só Wi-Fi' : 'Só Wi-Fi (esperando)',
+        NetMode.offline => 'Trabalhando off-line',
+      };
+
+  @override
+  bool operator ==(Object other) => other is NetStatus && other.mode == mode && other.onWifi == onWifi;
+
+  @override
+  int get hashCode => Object.hash(mode, onWifi);
 }

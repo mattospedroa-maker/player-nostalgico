@@ -136,7 +136,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
                   ? '${app.podcasts.length} ${app.podcasts.length == 1 ? 'episódio' : 'episódios'}'
                   : (_searching ? '${_results.length} de ${app.tracks.length} músicas' : '${app.tracks.length} músicas'),
           if (root != null) p.basename(root),
-          'Meu computador',
         ]),
       ],
     );
