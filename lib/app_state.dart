@@ -40,6 +40,7 @@ import 'podcast_info.dart';
 import 'podcasts.dart';
 import 'podcast_themes.dart';
 import 'program_art.dart';
+import 'storage_service.dart';
 import 'recommender.dart';
 import 'style_learning.dart';
 import 'styles.dart';
@@ -62,6 +63,9 @@ class AppState extends ChangeNotifier {
   int? _lastAutoFetchId;
   late final ArtistPhotoService artistPhotos = ArtistPhotoService(dataDir);
   late final ArtistTagStore artistTags = ArtistTagStore(dataDir);
+
+  /// Espaço dos GIFs, fotos, capas e cache (aba Armazenamento das Opções).
+  late final StorageService storage = StorageService(db: db, gifRoot: () => gifs.gifRoot, dataDir: dataDir);
 
   /// Imagens extras da roda de GIFs (sempre, sozinhas como os GIFs): capa do álbum e fotos do artista
   /// principal (parcerias contam no principal). Os GIFs continuam todos.
@@ -538,6 +542,10 @@ class AppState extends ChangeNotifier {
     if (prefs.getBool('backupReady') == null && (await db.playlists()).isNotEmpty) await prefs.setBool('backupReady', true);
     await s.reload(rereadGifs: true);
     s._startSummaryRetries();
+    // teto de espaço: confere um pouco depois de abrir e sempre que chegam GIFs novos
+    s._lastGifCount = s.gifs.count;
+    s.gifs.addListener(s._onGifCountChanged);
+    unawaited(Future<void>.delayed(const Duration(seconds: 60), () => s.autoClean()));
     // playlist do YouTube que ficou pela metade (o app foi fechado no meio): continua de onde parou
     if (s.sourceRoot != null) s.downloads.resumePending();
     // capas que faltam (inclusive as que falharam antes), em segundo plano
@@ -1269,6 +1277,57 @@ class AppState extends ChangeNotifier {
   Future<Recommender> recommender() async => Recommender(tracks, await db.plays());
 
   /// Resumo do histórico (plays e última vez por música), guardado até a próxima música ser registrada.
+  // ---------- espaço (teto dos GIFs) ----------
+
+  /// Teto em MB para GIFs + fotos dos artistas. 0 = sem limite.
+  int get storageCapMb => prefs.getInt('storageCapMb') ?? defaultStorageCapMb;
+
+  Future<void> setStorageCapMb(int mb) async {
+    await prefs.setInt('storageCapMb', mb);
+    notifyListeners();
+    unawaited(autoClean());
+  }
+
+  int _lastGifCount = 0;
+  Timer? _cleanTimer;
+
+  /// Chegaram GIFs novos: confere o teto 3 min depois (vários downloads seguidos viram uma conferência só).
+  void _onGifCountChanged() {
+    final n = gifs.count;
+    final grew = n > _lastGifCount;
+    _lastGifCount = n;
+    if (!grew) return;
+    _cleanTimer?.cancel();
+    _cleanTimer = Timer(const Duration(minutes: 3), () => unawaited(autoClean()));
+  }
+
+  /// Apaga GIFs sem música e o cache e, se passou do teto, os GIFs automáticos das músicas
+  /// ouvidas há mais tempo (nunca das favoritas, da que está tocando nem os escolhidos à mão).
+  Future<CleanResult> autoClean() async {
+    if (gifs.gifRoot == null) return const CleanResult(0, 0, 0);
+    try {
+      final stats = await playStats();
+      final current = player.current?.id;
+      final r = await storage.clean(
+        capBytes: storageCapMb * 1024 * 1024,
+        tracks: tracks,
+        lastPlayed: stats.lastPlayed,
+        protect: {?current},
+      );
+      if (r.deletedGifs > 0 || r.trimmedTracks > 0) {
+        errorLog.info('Espaço', 'Limpeza: ${formatBytes(r.freedBytes)} liberados, ${r.deletedGifs} GIFs apagados'
+            '${r.trimmedTracks > 0 ? ', ${r.trimmedTracks} músicas voltam a baixar GIFs quando tocarem' : ''}');
+        await gifs.refresh();
+        _lastGifCount = gifs.count;
+        notifyListeners();
+      }
+      return r;
+    } catch (e) {
+      errorLog.warn('Espaço', 'Não deu para conferir o espaço dos GIFs', error: e);
+      return const CleanResult(0, 0, 0);
+    }
+  }
+
   PlayStats? _stats;
   Future<PlayStats>? _statsLoading;
 

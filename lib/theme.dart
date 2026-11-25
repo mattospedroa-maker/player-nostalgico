@@ -1069,7 +1069,8 @@ class XpTabs extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+        // tela estreita: as abas rolam para o lado em vez de estourar
+        child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
           for (var i = 0; i < labels.length; i++)
             GestureDetector(
               onTap: () => onTap(i),
@@ -1088,7 +1089,7 @@ class XpTabs extends StatelessWidget {
                 child: Text(labels[i], style: TextStyle(fontSize: 14, fontWeight: i == current ? FontWeight.bold : FontWeight.normal)),
               ),
             ),
-        ]),
+        ])),
       );
 }
 

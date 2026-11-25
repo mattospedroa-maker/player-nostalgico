@@ -573,7 +573,7 @@ class GifCarousel extends StatefulWidget {
   State<GifCarousel> createState() => _GifCarouselState();
 }
 
-class _GifCarouselState extends State<GifCarousel> {
+class _GifCarouselState extends State<GifCarousel> with WidgetsBindingObserver {
   static const interval = Duration(seconds: 8);
   /// O que passa na roda: GIFs com a capa e as fotos do artista no meio.
   List<String> _gifs = const [];
@@ -598,7 +598,26 @@ class _GifCarouselState extends State<GifCarousel> {
     _gifService = app.gifs;
     _epoch = app.visualsEpoch;
     _gifService.addListener(_onGifsChanged);
+    WidgetsBinding.instance.addObserver(this);
     _load();
+  }
+
+  /// App visível na tela (ou só com a cortina de notificações por cima).
+  static bool _onScreen(AppLifecycleState? s) => s == null || s == AppLifecycleState.resumed || s == AppLifecycleState.inactive;
+
+  /// Tela desligada ou app minimizado: a roda para (sem trocar GIF nem a imagem da notificação a cada 8 s,
+  /// o que gastava bateria à toa). Ao voltar, continua do GIF em que estava, com os 8 s contando do zero.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_onScreen(state)) {
+      if (_timer == null) {
+        _shownAt = DateTime.now();
+        _restartTimer();
+      }
+    } else {
+      _timer?.cancel();
+      _timer = null;
+    }
   }
 
   @override
@@ -708,7 +727,8 @@ class _GifCarouselState extends State<GifCarousel> {
 
   void _restartTimer() {
     _timer?.cancel();
-    if (_gifs.length > 1) {
+    _timer = null;
+    if (_gifs.length > 1 && _onScreen(WidgetsBinding.instance.lifecycleState)) {
       _timer = Timer.periodic(const Duration(milliseconds: 250), (_) {
         if (!mounted) return;
         if (DateTime.now().difference(_shownAt) >= interval) {
@@ -731,6 +751,7 @@ class _GifCarouselState extends State<GifCarousel> {
   @override
   void dispose() {
     _gifService.removeListener(_onGifsChanged);
+    WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
     _tick.dispose();
     super.dispose();
