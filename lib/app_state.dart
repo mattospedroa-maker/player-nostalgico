@@ -39,6 +39,7 @@ import 'player_service.dart';
 import 'podcast_info.dart';
 import 'podcasts.dart';
 import 'podcast_themes.dart';
+import 'net_policy.dart';
 import 'program_art.dart';
 import 'storage_service.dart';
 import 'recommender.dart';
@@ -63,6 +64,9 @@ class AppState extends ChangeNotifier {
   int? _lastAutoFetchId;
   late final ArtistPhotoService artistPhotos = ArtistPhotoService(dataDir);
   late final ArtistTagStore artistTags = ArtistTagStore(dataDir);
+
+  /// O que o app pode buscar sozinho na internet agora (aba Internet das Opções).
+  late final NetPolicy net = NetPolicy(prefs);
 
   /// Espaço dos GIFs, fotos, capas e cache (aba Armazenamento das Opções).
   late final StorageService storage = StorageService(db: db, gifRoot: () => gifs.gifRoot, dataDir: dataDir);
@@ -96,7 +100,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     // a música que está tocando já ganha os GIFs pelas tags
     final t = player.current == null ? null : byId(player.current!.id);
-    if (t != null && autoGifs) unawaited(gifFetcher.fetchFor(t).catchError(_gifFetchFailed));
+    if (t != null && autoGifs && net.allows(NetFeature.gifs)) unawaited(gifFetcher.fetchFor(t).catchError(_gifFetchFailed));
   }
 
   /// Chave do Gemini (resumo dos podcasts): a digitada nas Opções, senão a que veio no APK (secret GEMINI_KEY).
@@ -118,7 +122,7 @@ class AppState extends ChangeNotifier {
 
   /// Episódios de cada programa separados por tema (Gemini + um GIF por tema).
   late final PodcastThemesService podcastThemes =
-      PodcastThemesService(client: gifFetcher.client, prefs: prefs, geminiKey: () => geminiKey, giphy: () => giphy);
+      PodcastThemesService(client: gifFetcher.client, prefs: prefs, geminiKey: () => net.allows(NetFeature.ai) ? geminiKey : '', giphy: () => giphy);
 
   /// Id do vídeo do YouTube de onde veio o episódio (do .json do resumo ou da lista de baixados).
   String? youtubeIdOf(Track t) {
@@ -140,7 +144,7 @@ class AppState extends ChangeNotifier {
   void ensureProgramArt(List<Track> episodes) {
     for (final t in episodes) {
       final dir = programDirOf(t);
-      if (programArt.fileFor(dir) != null) return;
+      if (programArt.fileFor(dir) != null || !net.allows(NetFeature.covers)) return;
       final id = youtubeIdOf(t);
       if (id != null) {
         unawaited(programArt.ensure(dir, videoId: id));
@@ -151,7 +155,7 @@ class AppState extends ChangeNotifier {
 
   /// Tocou um episódio sem resumo (baixado antes do resumo existir): faz agora, em segundo plano.
   void _ensureSummary(Track t) {
-    if (podcastInfo.isWorking(t.path) || !podcastInfo.canSummarizeNow) return;
+    if (podcastInfo.isWorking(t.path) || !podcastInfo.canSummarizeNow || !net.allows(NetFeature.ai)) return;
     final info = podcastInfo.infoFor(t.path);
     if (info != null && info.hasSummary) return;
     // já tentou: só tenta de novo sozinho se o erro foi temporário (Gemini sobrecarregado, 429...)
@@ -183,7 +187,7 @@ class AppState extends ChangeNotifier {
 
   /// Escolhe o próximo episódio que falhou por erro temporário e tenta de novo (devolve se começou).
   bool retryFailedSummaries() {
-    if (!podcastInfo.canSummarizeNow) return false;
+    if (!podcastInfo.canSummarizeNow || !net.allows(NetFeature.ai)) return false;
     for (final t in podcasts) {
       if (podcastInfo.isWorking(t.path)) return false; // já tem um resumo em andamento
     }
@@ -237,6 +241,7 @@ class AppState extends ChangeNotifier {
   Future<List<VisualResult>> playerVisualsFor(Track t) {
     if (isPodcast(t)) return Future.value(const []); // GIFs de podcast vêm numa fase própria (estúdio de rádio)
     if (gifSource == GifSource.anime || giphyKey.isEmpty || t.id == null) return Future.value(const []);
+    if (!net.allows(NetFeature.gifs)) return Future.value(const []); // GIFs do GIPHY passam pela internet
     // v2: sorteio por música (menos repetição no álbum). O nome entra na chave: corrigiu o artista ou o título,
     // a roda busca de novo com o nome certo (antes ficava 3 dias com os GIFs do nome errado)
     final key = '${t.id}|${t.mood}|${gifSource.name}|${_namesKey(t)}|v2';
@@ -542,6 +547,11 @@ class AppState extends ChangeNotifier {
     if (prefs.getBool('backupReady') == null && (await db.playlists()).isNotEmpty) await prefs.setBool('backupReady', true);
     await s.reload(rereadGifs: true);
     s._startSummaryRetries();
+    s.gifFetcher.allowLyrics = () => s.net.allows(NetFeature.lyrics);
+    if (Platform.isAndroid) s.net.watch();
+    // voltou a poder usar a internet (ex.: chegou no Wi-Fi): capas e informações que faltam
+    s._wasOnline = s.net.online;
+    s.net.addListener(s._onNetChanged);
     // teto de espaço: confere um pouco depois de abrir e sempre que chegam GIFs novos
     s._lastGifCount = s.gifs.count;
     s.gifs.addListener(s._onGifCountChanged);
@@ -666,7 +676,7 @@ class AppState extends ChangeNotifier {
   /// Tags do Last.fm de cada artista que ainda não tem (uma vez por artista, em segundo plano):
   /// dão estilos às músicas que ainda não têm tags próprias. Sem chave ou sem internet: tenta na próxima leitura.
   Future<int> fillArtistTags() async {
-    if (_fetchingArtistTags || lastFmKey.isEmpty) return 0;
+    if (_fetchingArtistTags || lastFmKey.isEmpty || !net.allows(NetFeature.info)) return 0;
     _fetchingArtistTags = true;
     var n = 0;
     try {
@@ -778,6 +788,7 @@ class AppState extends ChangeNotifier {
 
   /// Capas de álbum que faltam (Cover Art Archive), uma vez por álbum.
   Future<int> fetchMissingCovers() async {
+    if (!net.allows(NetFeature.covers)) return 0;
     while (fillingGenres) {
       await Future<void>.delayed(const Duration(seconds: 2)); // o MusicBrainz aceita 1 pedido por segundo
     }
@@ -846,7 +857,7 @@ class AppState extends ChangeNotifier {
   /// Conta como vazio o gênero genérico que vem no arquivo ("Music" é a categoria do vídeo no YouTube).
   /// O gênero achado fica guardado por artista: músicas novas do mesmo artista recebem sem consultar de novo.
   Future<int> fillMissingGenres() async {
-    if (fillingGenres) return 0;
+    if (fillingGenres || !net.allows(NetFeature.info)) return 0;
     fillingGenres = true;
     // v2: as versões antigas não procuravam onde estava "Music" e não tinham o Last.fm como segunda opção
     final tried = (prefs.getStringList('genreTried2') ?? const []).toSet();
@@ -988,7 +999,7 @@ class AppState extends ChangeNotifier {
     visualsEpoch++;
     notifyListeners();
     if (newArtist.toLowerCase() != oldArtist.toLowerCase()) {
-      artistPhotos.fetch(ArtistNames.current.main(after.artist)).then((n) {
+      _fetchPhotos(ArtistNames.current.main(after.artist)).then((n) {
         if (n == 0) return;
         visualsEpoch++;
         notifyListeners();
@@ -1087,7 +1098,7 @@ class AppState extends ChangeNotifier {
       return;
     }
     // fotos do artista: baixadas sozinhas, como os GIFs
-    artistPhotos.fetch(ArtistNames.current.main(fresh.artist)).then((n) {
+    _fetchPhotos(ArtistNames.current.main(fresh.artist)).then((n) {
       if (n == 0) return;
       visualsEpoch++; // a roda do Tocando agora ganha as fotos novas
       notifyListeners();
@@ -1107,8 +1118,11 @@ class AppState extends ChangeNotifier {
     _autoGifsFor(t.id, fresh);
   }
 
+  /// Fotos do artista, se a aba Internet deixa.
+  Future<int> _fetchPhotos(String artist) => net.allows(NetFeature.photos) ? artistPhotos.fetch(artist) : Future.value(0);
+
   void _autoGifsFor(int? id, Track fresh) {
-    if (!autoGifs || id == _lastAutoFetchId) return;
+    if (!autoGifs || id == _lastAutoFetchId || !net.allows(NetFeature.gifs)) return;
     _lastAutoFetchId = id;
     gifFetcher.fetchFor(fresh).catchError(_gifFetchFailed);
   }
@@ -1133,7 +1147,7 @@ class AppState extends ChangeNotifier {
   /// arquivo como pista). Se achar, grava como o Editar faz: tags, pasta Artista/Álbum e GIFs refeitos.
   /// Devolve true se o artista ou o título mudou (aí os GIFs já foram refeitos). Sem internet não conta como tentativa (tenta na próxima vez que tocar).
   Future<bool> retryInfo(Track t) async {
-    if (_retryingInfo || isPodcast(t)) return false;
+    if (_retryingInfo || isPodcast(t) || !net.allows(NetFeature.info)) return false;
     _retryingInfo = true;
     try {
       final hints = InfoRetry.hints(t, root: sourceRoot);
@@ -1186,6 +1200,7 @@ class AppState extends ChangeNotifier {
   /// Baixa GIFs para todas as músicas que ainda não têm 9.
   /// Com [only], baixa só para essas (ex.: músicas que acabaram de entrar na biblioteca).
   Future<int> fetchGifsForAll({List<Track>? only}) async {
+    if (!net.allows(NetFeature.gifs)) return 0;
     if (bulkGifProgress != null) {
       if (only != null) _pending.addAll(only);
       return 0;
@@ -1286,6 +1301,17 @@ class AppState extends ChangeNotifier {
     await prefs.setInt('storageCapMb', mb);
     notifyListeners();
     unawaited(autoClean());
+  }
+
+  bool _wasOnline = true;
+  void _onNetChanged() {
+    final on = net.online;
+    if (on && !_wasOnline) {
+      unawaited(fetchMissingCovers().catchError(_coversFailed));
+      unawaited(fillArtistTags());
+    }
+    _wasOnline = on;
+    notifyListeners();
   }
 
   int _lastGifCount = 0;
