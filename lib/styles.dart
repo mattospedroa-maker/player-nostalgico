@@ -209,12 +209,57 @@ class Styles {
   static final Map<String, StyleDef?> _tagCache = {};
   static Expando<List<String>> _cache = Expando();
   static Expando<Vibe> _vibeCache = Expando();
+  static Expando<Set<String>> _soundCache = Expando();
 
   /// Esquece os resultados guardados (tags novas chegaram, edições mudaram, biblioteca relida).
   static void invalidate() {
     _cache = Expando();
     _vibeCache = Expando();
+    _soundCache = Expando();
   }
+
+  /// Tags que não dizem nada do som (gosto pessoal, ocasião), ignoradas na comparação.
+  static final noiseTag = RegExp(r'^(seen live|favou?rites?|favou?rite songs?|my favou?rite|love|loved|awesome|beautiful|amazing|best|'
+      r'good|great|cool|epic|masterpiece|albums i own|under \d+ listeners|spotify|youtube|music|songs?|all|check out|wishlist)$');
+
+  /// Tags largas demais (quase toda música tem): contam menos que as de estilo (shoegaze, post punk...).
+  static const broadTags = {
+    'rock', 'pop', 'indie', 'alternative', 'electronic', 'metal', 'hip hop', 'rap', 'dance', 'instrumental', 'soundtrack',
+    'female vocalists', 'male vocalists', 'singer songwriter', '60s', '70s', '80s', '90s', '00s', '2000s', '2010s', '2020s',
+    'american', 'british', 'usa', 'uk',
+  };
+
+  static String _normTag(String t) => t.toLowerCase().replaceAll(RegExp(r'[-_]+'), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+
+  /// Até 10 tags mais fortes do Last.fm da música (sem as de gosto pessoal e sem o nome do artista).
+  /// Sem tags guardadas, o gênero vira a única "tag". Guardado por música; [tagsOf] (testes) não guarda.
+  static Set<String> soundTags(Track t, {List<MusicTag>? Function(Track)? tagsOf}) {
+    if (tagsOf == null) return _soundCache[t] ??= _soundTagsOf(t, trackTags);
+    return _soundTagsOf(t, tagsOf);
+  }
+
+  static Set<String> _soundTagsOf(Track t, List<MusicTag>? Function(Track) tagsOf) {
+    final tags = tagsOf(t);
+    final artist = _normTag(t.artist);
+    final out = <String>{};
+    if (tags != null && tags.isNotEmpty) {
+      final sorted = [...tags]..sort((a, b) => b.count.compareTo(a.count));
+      for (final tag in sorted) {
+        final n = _normTag(tag.name);
+        if (n.length < 2 || n == artist || noiseTag.hasMatch(n)) continue;
+        out.add(n);
+        if (out.length >= 10) break;
+      }
+    }
+    if (out.isEmpty && t.genre.trim().isNotEmpty) out.add(_normTag(t.genre));
+    return out;
+  }
+
+  /// Tags que dizem algo do som mas não são estilo nem largas demais ("dreamy", "melancholic", "rainy"...).
+  static Set<String> flavorTags(Track t) => {
+        for (final tag in soundTags(t))
+          if (!broadTags.contains(tag) && styleOf(tag) == null) tag
+      };
 
   static String normalize(String tag) => tag
       .toLowerCase()
