@@ -361,6 +361,9 @@ class _SuggestionChips extends StatelessWidget {
   final PlaylistSuggestion s;
   const _SuggestionChips(this.s);
 
+  static bool _extraReason(String r) =>
+      r.isNotEmpty && !r.startsWith('estilo') && !r.startsWith('clima') && r != 'artista novo na playlist' && r != 'uma das suas favoritas';
+
   Widget _chip(String text, Color bg, Color fg, Color border) => Container(
         margin: const EdgeInsets.only(right: 4, top: 2),
         padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
@@ -374,6 +377,8 @@ class _SuggestionChips extends StatelessWidget {
     return Wrap(children: [
       if (s.genre != null) _chip(s.genre!, const Color(0xFFE4ECFB), const Color(0xFF1C3F8A), const Color(0xFFB9CBEE)),
       if (m != null) _chip('${m.emoji} ${m.label}', const Color(0xFFEEF3E0), const Color(0xFF3D5A12), const Color(0xFFC8D9A6)),
+      // o motivo que mais pesou, quando não é o estilo nem o clima (já mostrados): "junto nas suas playlists"...
+      if (_extraReason(s.reason)) _chip(s.reason, const Color(0xFFFFF4D6), const Color(0xFF7A5300), const Color(0xFFE8D29A)),
     ]);
   }
 }
