@@ -11,6 +11,7 @@ import 'audio_handler.dart';
 import 'crossfade.dart';
 import 'db.dart';
 import 'error_log.dart';
+import 'focus_resume.dart';
 import 'models.dart';
 import 'mood.dart';
 import 'podcasts.dart';
@@ -26,6 +27,7 @@ enum MixMode { artist, vibe }
 class PlayerService extends ChangeNotifier implements CrossfadeSettings {
   final AppDb db;
   final AudioPlayer player = AudioPlayer();
+  late final FocusResume _focusResume;
   DateTime? _startedAt;
   int? _startedTrackId;
   final _subs = <StreamSubscription>[];
@@ -156,6 +158,7 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
     }));
     _subs.add(player.errorStream.listen((e) => unawaited(_serial(() => _skipBroken(e.index))), onError: (_, _) {}));
     _subs.add(player.loopModeStream.listen((_) => notifyListeners()));
+    _focusResume = FocusResume(player)..start(); // volta a tocar quando outro app (ex.: um Shorts) solta o som
   }
 
   // ---------- fila única de operações ----------
@@ -935,6 +938,7 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
     for (final s in _subs) {
       s.cancel();
     }
+    _focusResume.dispose();
     unawaited(crossfader.dispose());
     player.dispose();
     super.dispose();

@@ -95,8 +95,7 @@ class NowPlayingScreen extends StatelessWidget {
         Expanded(
           child: t == null
               ? const EmptyHint(Icons.music_off, 'Nada tocando.\nEscolha uma música na Biblioteca.')
-              : ListView(
-                  padding: EdgeInsets.zero,
+              : _KeepScrollList(
                   children: [
                     if (book) _BookPanel(key: ValueKey('livro-${t.id}'), track: t) else GifCarousel(key: ValueKey(t.id), track: t),
                     Padding(
@@ -267,6 +266,60 @@ class _BookBox extends StatelessWidget {
       ]),
     );
   }
+}
+
+/// Lista rolável do Tocando agora que não volta ao topo sozinha. Favoritar ou trocar o mix refaz o
+/// "A seguir": por um instante a lista fica mais curta, o Flutter encosta a rolagem no novo fim e ela
+/// ficava lá em cima. Aqui guardamos onde você deixou e, quando a lista cresce de novo, voltamos para lá.
+class _KeepScrollList extends StatefulWidget {
+  final List<Widget> children;
+  const _KeepScrollList({required this.children});
+
+  @override
+  State<_KeepScrollList> createState() => _KeepScrollListState();
+}
+
+class _KeepScrollListState extends State<_KeepScrollList> {
+  final _scroll = ScrollController();
+
+  /// Onde você deixou a rolagem (só muda quando a lista rola de verdade, não quando encolhe).
+  double _wanted = 0;
+  bool _restoring = false;
+  bool _jumping = false;
+
+  bool _onNotification(Notification n) {
+    if (n is ScrollUpdateNotification && n.depth == 0 && !_jumping) {
+      _wanted = n.metrics.pixels; // a fileira de GIFs (depth > 0) rola de lado e não conta
+    } else if (n is ScrollMetricsNotification && n.depth == 0) {
+      final m = n.metrics;
+      if (!_restoring && m.pixels < _wanted - 1 && m.maxScrollExtent > m.pixels + 1) {
+        _restoring = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _restoring = false;
+          if (!mounted || !_scroll.hasClients) return;
+          final pos = _scroll.position;
+          final target = _wanted.clamp(pos.minScrollExtent, pos.maxScrollExtent);
+          if ((target - pos.pixels).abs() <= 1) return;
+          _jumping = true; // voltar sozinho não muda onde você deixou (a lista pode crescer em etapas)
+          _scroll.jumpTo(target);
+          _jumping = false;
+        });
+      }
+    }
+    return false;
+  }
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => NotificationListener<Notification>(
+        onNotification: _onNotification,
+        child: ListView(controller: _scroll, padding: EdgeInsets.zero, children: widget.children),
+      );
 }
 
 /// Podcast tocando: botões próprios (fila, ouvido) e o que vem depois (próximo episódio ou a volta das músicas).
