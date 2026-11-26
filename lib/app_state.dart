@@ -45,6 +45,7 @@ import 'storage_service.dart';
 import 'recommender.dart';
 import 'style_learning.dart';
 import 'styles.dart';
+import 'track_sheet.dart';
 import 'visual_search.dart';
 
 /// Estado central do app: pasta-fonte, biblioteca, playlists e serviços.
@@ -64,6 +65,9 @@ class AppState extends ChangeNotifier {
   int? _lastAutoFetchId;
   late final ArtistPhotoService artistPhotos = ArtistPhotoService(dataDir);
   late final ArtistTagStore artistTags = ArtistTagStore(dataDir);
+
+  /// Ficha das músicas: o que a IA disse e as cenas mexidas à mão (`track_facts.json`).
+  late final TrackFactsStore trackFacts = TrackFactsStore(dataDir);
 
   /// O que o app pode buscar sozinho na internet agora (aba Internet das Opções).
   late final NetPolicy net = NetPolicy(prefs);
@@ -609,6 +613,9 @@ class AppState extends ChangeNotifier {
     Styles.trackTags = gifFetcher.cachedTags;
     Styles.artistTags = artistTags.get;
     Styles.learnedPair = (a, b) => StyleLearning.current.stylePair(a, b);
+    TrackSheet.aiOf = trackFacts.ai;
+    TrackSheet.editsOf = trackFacts.edits;
+    TrackSheet.lyricsOf = gifFetcher.cachedLyricScenes;
     Styles.invalidate();
     playlists = await db.playlists();
     await _relearn();
@@ -626,6 +633,73 @@ class AppState extends ChangeNotifier {
     } catch (e) {
       errorLog.info('Estilos', 'Não deu para aprender com as playlists', e);
     }
+    try {
+      TrackSheet.habits = ListeningHabits(await db.listeningHabits());
+    } catch (e) {
+      errorLog.info('Momentos', 'Não deu para ler em que horário você ouve cada música', e);
+    }
+    TrackSheet.invalidate();
+  }
+
+  /// Cenas postas/tiradas à mão na aba "Momentos".
+  Future<void> setSceneEdits(Track t, StyleEdits edits) async {
+    trackFacts.putEdits(t, edits);
+    TrackSheet.invalidate();
+    notifyListeners();
+    try {
+      await trackFacts.save();
+    } catch (e) {
+      errorLog.warn('Momentos', 'Não deu para salvar as cenas da música', error: e);
+    }
+  }
+
+  bool _fillingFacts = false;
+  bool get fillingFacts => _fillingFacts;
+
+  /// Lotes por vez (cada lote = [TrackSheet.batchSize] músicas): poupa a cota grátis do Gemini.
+  static const factBatchesPerRun = 8;
+
+  /// A IA preenche a ficha das músicas que ainda não leu: em lotes, em segundo plano, uma vez por música.
+  /// Respeita a aba Internet (item "IA"). Para no limite do plano grátis e continua na próxima vez.
+  /// [only]: só estas músicas (botão "Pedir à IA agora"), mesmo que a IA já tenha lido.
+  Future<int> fillTrackFacts({List<Track>? only}) async {
+    if (_fillingFacts || geminiKey.isEmpty) return 0;
+    if (only == null && !net.allows(NetFeature.ai)) return 0;
+    if (only != null && !net.online) return 0;
+    _fillingFacts = true;
+    var n = 0;
+    try {
+      final todo = only ??
+          [
+            for (final t in tracks)
+              if (t.artist != unknownArtist && t.artist.trim().isNotEmpty && t.title.trim().isNotEmpty && !trackFacts.hasAi(t)) t
+          ];
+      final ai = GeminiClient(gifFetcher.client, geminiKey);
+      for (var b = 0; b < factBatchesPerRun && b * TrackSheet.batchSize < todo.length; b++) {
+        final batch = todo.skip(b * TrackSheet.batchSize).take(TrackSheet.batchSize).toList();
+        final Map<String, dynamic> answer;
+        try {
+          answer = await ai.generateJson(TrackSheet.prompt(batch), timeout: const Duration(minutes: 2));
+        } on GeminiException catch (e) {
+          errorLog.info('Momentos', 'A IA não preencheu a ficha das músicas agora (${e.message})');
+          break;
+        }
+        final got = TrackSheet.parseAnswer(answer, batch.length);
+        for (var i = 0; i < batch.length; i++) {
+          // sem resposta para a música: fica marcada como lida (vazia) para não pedir de novo
+          trackFacts.putAi(batch[i], got[i] ?? AiFacts.empty);
+        }
+        n += batch.length;
+        await trackFacts.save();
+        TrackSheet.invalidate();
+        notifyListeners();
+      }
+    } catch (e) {
+      errorLog.info('Momentos', 'Não deu para preencher a ficha das músicas pela IA', e);
+    } finally {
+      _fillingFacts = false;
+    }
+    return n;
   }
 
   static const _sugAddedKey = 'sugestoesAdicionadas';
@@ -780,7 +854,7 @@ class AppState extends ChangeNotifier {
       return 0;
     });
     unawaited(fetchMissingCovers().catchError(_coversFailed));
-    unawaited(fillArtistTags());
+    unawaited(fillArtistTags().then((_) => fillTrackFacts()));
     if (added.isEmpty || !autoGifs) return;
     final ids = added.map((t) => t.id).toSet();
     await fetchGifsForAll(only: tracks.where((t) => ids.contains(t.id)).toList());
@@ -1309,7 +1383,7 @@ class AppState extends ChangeNotifier {
     final on = net.online;
     if (on && !_wasOnline) {
       unawaited(fetchMissingCovers().catchError(_coversFailed));
-      unawaited(fillArtistTags());
+      unawaited(fillArtistTags().then((_) => fillTrackFacts()));
     }
     _wasOnline = on;
     notifyListeners();

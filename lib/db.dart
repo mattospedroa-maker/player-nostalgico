@@ -270,6 +270,26 @@ class AppDb {
     return PlayStats(plays: plays, lastPlayed: last, skips: skips);
   }
 
+  /// Em que período do dia e da semana cada música tocou até o fim (para a ficha "Quando você costuma ouvir").
+  /// Uma consulta agrupada só; a hora é a do celular.
+  Future<Map<int, List<int>>> listeningHabits() async {
+    final rows = await db.rawQuery('''
+      SELECT track_id,
+        CAST(strftime('%H', played_at / 1000, 'unixepoch', 'localtime') AS INTEGER) AS h,
+        CAST(strftime('%w', played_at / 1000, 'unixepoch', 'localtime') AS INTEGER) AS w,
+        COUNT(*) AS n
+      FROM plays WHERE skipped = 0 GROUP BY track_id, h, w''');
+    final out = <int, List<int>>{};
+    for (final r in rows) {
+      final id = r['track_id'] as int;
+      final h = (r['h'] as int?) ?? 12, w = (r['w'] as int?) ?? 1, n = (r['n'] as int?) ?? 0;
+      final c = out[id] ??= [0, 0, 0, 0, 0];
+      c[h < 6 ? 0 : (h < 12 ? 1 : (h < 18 ? 2 : 3))] += n;
+      if (w == 0 || w == 6) c[4] += n;
+    }
+    return out;
+  }
+
   // ---------- GIFs fixados ----------
   Future<List<String>> pinnedGifs(int trackId) async =>
       (await db.query('track_gifs', where: 'track_id = ?', whereArgs: [trackId])).map((r) => r['gif_path'] as String).toList();
