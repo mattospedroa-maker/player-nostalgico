@@ -6,6 +6,7 @@ import 'package:flutter/painting.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:player_nostalgico/audiobooks.dart';
+import 'package:player_nostalgico/author_photos.dart';
 import 'package:player_nostalgico/book_service.dart';
 import 'package:player_nostalgico/book_text.dart';
 import 'package:player_nostalgico/podcast_info.dart' show Chapter;
@@ -522,7 +523,34 @@ void main() {
       expect((info.language, info.searchVersion), ('pt', 2));
     });
   });
+  group('foto do autor', () {
+    Map<String, dynamic> wiki(List<Map<String, Object>> pages) => {
+          'query': {
+            'pages': {for (var i = 0; i < pages.length; i++) '$i': {'index': i + 1, ...pages[i]}},
+          },
+        };
+    const img = {'source': 'https://upload.wikimedia.org/x.jpg'};
+
+    test('acha o escritor certo e ignora homônimos e páginas sem foto', () {
+      final r = AuthorPhotoService.pickAuthorPage(
+          wiki([
+            {'title': 'Noites Brancas', 'description': 'novela de Fiódor Dostoiévski', 'thumbnail': img},
+            {'title': 'Fiódor Dostoiévski', 'description': 'escritor russo'},
+            {'title': 'Fiódor Dostoiévski', 'description': 'escritor e filósofo russo', 'thumbnail': img},
+          ]),
+          'Dostoiévski')!;
+      expect(r.title, 'Fiódor Dostoiévski');
+      expect(r.about, 'escritor e filósofo russo');
+      // prenome em outra grafia (Leo/Liev) vale pelo sobrenome
+      expect(AuthorPhotoService.pickAuthorPage(wiki([{'title': 'Leo Tolstoy', 'description': 'Russian writer (1828–1910)', 'thumbnail': img}]), 'Liev Tolstói')?.title,
+          'Leo Tolstoy');
+      // mesmo nome, mas não é escritor; ou nome de canal sem página
+      expect(AuthorPhotoService.pickAuthorPage(wiki([{'title': 'George Lewis', 'description': 'jogador de futebol', 'thumbnail': img}]), 'C.S Lewis'), isNull);
+      expect(AuthorPhotoService.pickAuthorPage(wiki([{'title': 'Livros Falados', 'description': 'escritor', 'thumbnail': img}]), 'Canal Audiolivros BR'), isNull);
+    });
+  });
 }
+
 
 class _NoNet extends http.BaseClient {
   @override

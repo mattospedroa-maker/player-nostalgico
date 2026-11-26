@@ -15,6 +15,7 @@ import '../player_service.dart';
 import '../podcasts.dart' show formatClock, formatDuration;
 import '../skip_notice.dart' show appMessengerKey;
 import '../theme.dart';
+import '../thumbnails.dart' show indexLetter;
 import '../widgets.dart';
 import '../xp_icons.dart';
 import 'track_list_screen.dart' show GroupThumb, ThumbFrame;
@@ -41,20 +42,70 @@ Future<void> playBookAt(BuildContext context, Track book, {Duration? at}) async 
 // ---------------------------------------------------------------------------
 // Início dos audiolivros (dentro da Biblioteca, quando o Endereço está em "Audiolivros")
 
-class AudiobooksHome extends StatelessWidget {
+class AudiobooksHome extends StatefulWidget {
   final String query;
   const AudiobooksHome({super.key, this.query = ''});
 
-  void _push(BuildContext context, Widget w) => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => w));
+  @override
+  State<AudiobooksHome> createState() => _AudiobooksHomeState();
+}
+
+void _push(BuildContext context, Widget w) => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => w));
+
+/// Miniatura do autor: a foto dele; sem foto, a capa do livro dele baixado por último.
+GroupThumb authorThumb(AppState app, String author, List<Audiobook> books) {
+  final photo = app.authorPhotos.photoFor(author);
+  if (photo != null) return GroupThumb(file: photo, color: colorFor(author));
+  final latest = books.reduce((a, b) => (a.track.id ?? 0) >= (b.track.id ?? 0) ? a : b);
+  return bookThumb(app, latest.track);
+}
+
+/// Um livro na grade: capa com selo LIVRO/LIDO, título, capítulos e duração.
+Widget bookTile(BuildContext context, AppState app, Audiobook b) {
+  final done = app.podcastProgress.listened(b.track.path);
+  final ch = b.chapters.length;
+  return GestureDetector(
+    onTap: () => _push(context, BookScreen(trackId: b.track.id!)),
+    child: Column(children: [
+      ThumbFrame(thumb: bookThumb(app, b.track), size: 104, name: b.title, badge: done ? 'LIDO' : 'LIVRO', placeholderIcon: XpIcons.book),
+      const SizedBox(height: 4),
+      Text(b.title, maxLines: 2, textAlign: TextAlign.center, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12.5, height: 1.15)),
+      Text(
+        [if (ch > 0) '$ch cap.', if (b.track.durationMs > 0) formatDuration(Duration(milliseconds: b.track.durationMs))].join(' · '),
+        maxLines: 1,
+        style: const TextStyle(fontSize: 11, color: Color(0xFF666666)),
+      ),
+    ]),
+  );
+}
+
+String _livros(int n) => '$n ${n == 1 ? 'livro' : 'livros'}';
+
+class _AudiobooksHomeState extends State<AudiobooksHome> {
+  final _scroll = ScrollController();
+  String? _letter;
+  static const _cols = 3;
+  static const _tileHeight = 178.0;
+  static const _prefKey = 'livrosExibir';
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
-    return ListenableBuilder(listenable: Listenable.merge([app.bookService, app.programArt]), builder: (context, _) => _build(context, app));
+    return ListenableBuilder(
+      listenable: Listenable.merge([app.bookService, app.programArt, app.authorPhotos]),
+      builder: (context, _) => _build(context, app),
+    );
   }
 
   Widget _build(BuildContext context, AppState app) {
     context.select<PlayerService, int?>((p) => p.current?.id);
+    final query = widget.query;
     var books = app.audiobookList();
     final resume = app.podcastProgress.lastInProgress(app.audiobooks);
     if (query.isNotEmpty) {
@@ -62,7 +113,11 @@ class AudiobooksHome extends StatelessWidget {
       books = [for (final b in books) if (words.every(normalizeText('${b.title} ${b.author}').contains)) b];
     }
     final groups = groupByAuthor(books);
-    return ListView(padding: EdgeInsets.zero, children: [
+    final grid = app.prefs.getString(_prefKey) != 'list';
+    if (grid && groups.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(app.authorPhotos.fetchMissing([for (final g in groups) g.$1])));
+    }
+    final header = <Widget>[
       if (query.isEmpty)
         XpTaskPane(title: 'Tarefas de audiolivro', tasks: [
           if (resume != null) (XpIcons.play, 'Continuar de onde parei', () => playBookAt(context, resume)),
@@ -73,7 +128,10 @@ class AudiobooksHome extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),
           child: Text(_whereStopped(app, resume), maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12.5, color: Xp.blueText)),
         ),
-      if (books.isEmpty)
+    ];
+    if (books.isEmpty) {
+      return ListView(padding: EdgeInsets.zero, children: [
+        ...header,
         Padding(
           padding: const EdgeInsets.all(16),
           child: Text(
@@ -82,38 +140,191 @@ class AudiobooksHome extends StatelessWidget {
                 : 'Nenhum audiolivro ainda.\n\nBaixe pelo "Baixar do YouTube" marcando "Audiolivro", ou coloque os arquivos na pasta Audiolivros/Nome do autor/ dentro da sua pasta de músicas.',
             style: const TextStyle(color: Xp.blueText, fontSize: 13.5),
           ),
-        )
-      else
+        ),
+      ]);
+    }
+    final toggle = Container(
+      margin: const EdgeInsets.only(top: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+      decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0xFFD4D0C8)))),
+      child: Row(children: [
+        const Text('Exibir:', style: TextStyle(fontSize: 13)),
+        const SizedBox(width: 6),
+        _viewToggle(app, 'Miniaturas', 'grid', grid),
+        const SizedBox(width: 4),
+        _viewToggle(app, 'Detalhes', 'list', !grid),
+      ]),
+    );
+    if (!grid) {
+      // Detalhes: cada autor com os livros dele embaixo
+      return ListView(padding: EdgeInsets.zero, children: [
+        ...header,
+        toggle,
         for (final (author, list) in groups) ...[
-          XpColumnHeader(author, right: '${list.length} ${list.length == 1 ? 'livro' : 'livros'}'),
+          XpColumnHeader(author, right: _livros(list.length)),
           GridView.builder(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
             padding: const EdgeInsets.fromLTRB(6, 10, 6, 6),
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, mainAxisExtent: 190),
             itemCount: list.length,
-            itemBuilder: (context, i) {
-              final b = list[i];
-              final done = app.podcastProgress.listened(b.track.path);
-              final ch = b.chapters.length;
-              return GestureDetector(
-                onTap: () => _push(context, BookScreen(trackId: b.track.id!)),
-                child: Column(children: [
-                  ThumbFrame(thumb: bookThumb(app, b.track), size: 104, name: b.title, badge: done ? 'LIDO' : 'LIVRO', placeholderIcon: XpIcons.book),
-                  const SizedBox(height: 4),
-                  Text(b.title, maxLines: 2, textAlign: TextAlign.center, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12.5, height: 1.15)),
-                  Text(
-                    [if (ch > 0) '$ch cap.', if (b.track.durationMs > 0) formatDuration(Duration(milliseconds: b.track.durationMs))].join(' · '),
-                    maxLines: 1,
-                    style: const TextStyle(fontSize: 11, color: Color(0xFF666666)),
-                  ),
-                ]),
-              );
-            },
+            itemBuilder: (context, i) => bookTile(context, app, list[i]),
           ),
         ],
-      const SizedBox(height: 12),
+        const SizedBox(height: 12),
+      ]);
+    }
+    final keys = [for (final g in groups) g.$1];
+    return Column(children: [
+      ...header,
+      toggle,
+      Expanded(
+        child: ColoredBox(
+          color: Colors.white,
+          child: Row(children: [
+            Expanded(
+              child: GridView.builder(
+                controller: _scroll,
+                padding: const EdgeInsets.fromLTRB(6, 8, 2, 8),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: _cols, mainAxisExtent: _tileHeight),
+                itemCount: groups.length,
+                itemBuilder: (context, i) {
+                  final (author, list) = groups[i];
+                  return GestureDetector(
+                    onTap: () => _push(context, AuthorScreen(author: author)),
+                    child: Column(children: [
+                      ThumbFrame(thumb: authorThumb(app, author, list), size: 104, name: author, badge: '', placeholderIcon: XpIcons.person),
+                      const SizedBox(height: 4),
+                      Text(author, maxLines: 2, textAlign: TextAlign.center, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12.5, height: 1.15)),
+                      Text(_livros(list.length), maxLines: 1, style: const TextStyle(fontSize: 11, color: Color(0xFF666666))),
+                    ]),
+                  );
+                },
+              ),
+            ),
+            _azRail(keys),
+          ]),
+        ),
+      ),
     ]);
+  }
+
+  Widget _viewToggle(AppState app, String label, String value, bool on) => GestureDetector(
+        onTap: () async {
+          await app.prefs.setString(_prefKey, value);
+          setState(() {});
+        },
+        child: Bevel(
+          sunken: on,
+          color: on ? const Color(0xFFE3E1D4) : Xp.beige,
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+          child: Text(label, style: TextStyle(fontSize: 13, fontWeight: on ? FontWeight.bold : FontWeight.normal)),
+        ),
+      );
+
+  /// Índice A–Z na lateral (igual ao de Artistas): toque ou arraste para pular para a letra.
+  Widget _azRail(List<String> keys) {
+    const all = '#ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    final present = keys.map(indexLetter).toSet();
+    return LayoutBuilder(builder: (context, c) {
+      void at(double y) {
+        final l = all[(y / c.maxHeight * all.length).floor().clamp(0, all.length - 1)];
+        if (l == _letter) return;
+        setState(() => _letter = l);
+        final i = keys.indexWhere((k) => all.indexOf(indexLetter(k)) >= all.indexOf(l));
+        if (i < 0 || !_scroll.hasClients) return;
+        _scroll.jumpTo(((i ~/ _cols) * _tileHeight).clamp(0.0, _scroll.position.maxScrollExtent));
+      }
+
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTapDown: (d) => at(d.localPosition.dy),
+        onVerticalDragUpdate: (d) => at(d.localPosition.dy),
+        child: Container(
+          width: 22,
+          color: const Color(0xFFF1F4FB),
+          child: Column(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+            for (final l in all.split(''))
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 3),
+                decoration: BoxDecoration(color: l == _letter ? Xp.select : null, borderRadius: BorderRadius.circular(2)),
+                child: Text(l,
+                    style: TextStyle(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.bold,
+                      color: l == _letter ? Colors.white : (present.contains(l) ? const Color(0xFF1C3F94) : const Color(0xFFB5BDCF)),
+                    )),
+              ),
+          ]),
+        ),
+      );
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Um autor: foto, quem é (Wikipedia) e os livros dele
+
+class AuthorScreen extends StatelessWidget {
+  final String author;
+  const AuthorScreen({super.key, required this.author});
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
+    return ListenableBuilder(
+      listenable: Listenable.merge([app.bookService, app.programArt, app.authorPhotos]),
+      builder: (context, _) {
+        final books = [for (final b in app.audiobookList()) if (b.author == author) b]..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+        final facts = app.authorPhotos.factsFor(author);
+        final total = books.fold(0, (s, b) => s + b.track.durationMs);
+        return Scaffold(
+          backgroundColor: Xp.beige,
+          body: SafeArea(
+            child: Column(children: [
+              XpTitleBar(title: author, icon: XpIcons.person, actions: [
+                XpTitleButton(icon: Icons.close, tooltip: 'Fechar', onTap: () => Navigator.pop(context)),
+              ]),
+              XpAddressBar('Audiolivros\\$author', icon: XpIcons.book),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Xp.bgTop, Xp.bgBottom]),
+                  border: Border(bottom: BorderSide(color: Color(0xFF9FB3D6))),
+                ),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  if (books.isNotEmpty) ThumbFrame(thumb: authorThumb(app, author, books), size: 96, name: author, padding: 3, badge: '', placeholderIcon: XpIcons.person),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(author, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 16.5, fontWeight: FontWeight.bold, color: Xp.navy)),
+                      if (facts != null && facts.name.isNotEmpty && normalizeText(facts.name) != normalizeText(author))
+                        Text(facts.name, style: const TextStyle(fontSize: 12.5, color: Xp.blueText)),
+                      if (facts != null && facts.about.isNotEmpty) Text(facts.about, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12.5, color: Xp.blueText)),
+                      Text([_livros(books.length), if (total > 0) formatDuration(Duration(milliseconds: total))].join(' · '),
+                          style: const TextStyle(fontSize: 12.5, color: Xp.blueText)),
+                    ]),
+                  ),
+                ]),
+              ),
+              Expanded(
+                child: ColoredBox(
+                  color: Colors.white,
+                  child: GridView.builder(
+                    padding: const EdgeInsets.fromLTRB(6, 10, 6, 6),
+                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, mainAxisExtent: 190),
+                    itemCount: books.length,
+                    itemBuilder: (context, i) => bookTile(context, app, books[i]),
+                  ),
+                ),
+              ),
+              XpStatusBar([_livros(books.length)]),
+            ]),
+          ),
+        );
+      },
+    );
   }
 }
 
