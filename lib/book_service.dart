@@ -204,6 +204,9 @@ class BookService extends ChangeNotifier {
   }
 
   /// Gutenberg (EPUB pronto, sem imagens) → Wikisource (EPUB gerado pelo ws-export). (bytes, de onde veio)
+  /// Não achou com o nome em português? O Gemini diz o nome da obra em inglês (e o autor na grafia do Gutenberg)
+  /// e tenta de novo: traduções em português de obras russas/alemãs quase sempre ainda têm direitos autorais,
+  /// então o texto livre costuma estar em inglês.
   Future<(Uint8List, String)?> _findEpub(String title, String author) async {
     if (title.trim().isEmpty) return null;
     final g = await _gutenberg(title, author);
@@ -212,25 +215,69 @@ class BookService extends ChangeNotifier {
       final w = await _wikisource(title, author, lang);
       if (w != null) return w;
     }
-    return null;
+    final other = await _identify(title, author);
+    if (other == null) return null;
+    final g2 = await _gutenberg(other.title, other.author);
+    if (g2 != null) return g2;
+    return _wikisource(other.title, other.author, 'en');
+  }
+
+  /// Nome da obra e do autor em inglês, pelo Gemini (uma pergunta curta, só quando a busca normal falhou).
+  Future<({String title, String author})?> _identify(String title, String author) async {
+    final key = geminiKey();
+    if (key.isEmpty || !allowAi()) return null;
+    try {
+      final r = bookIdentityFromAi(await GeminiClient(client, key).generateJson(identifyPrompt(title, author)));
+      if (r == null || (titleSimilarity(r.title, title) == 1 && normalizeText(r.author) == normalizeText(author))) return null;
+      return r;
+    } catch (e) {
+      errorLog.info('Audiolivros', 'O Gemini não reconheceu a obra "$title"', e);
+      return null;
+    }
+  }
+
+  static String identifyPrompt(String title, String author) => '''
+Audiolivro: "$title", autor "$author" (pode estar em português e com grafia brasileira).
+Que obra é essa? Diga o título mais usado EM INGLÊS e o nome do autor como aparece no Projeto Gutenberg (grafia inglesa).
+Responda só com JSON: {"titulo_en": "White Nights", "autor_en": "Fyodor Dostoyevsky"}. Se não souber, {"titulo_en": ""}.
+''';
+
+  @visibleForTesting
+  static ({String title, String author})? bookIdentityFromAi(Object? ai) {
+    if (ai is! Map) return null;
+    final t = '${ai['titulo_en'] ?? ''}'.trim(), a = '${ai['autor_en'] ?? ''}'.trim();
+    return t.isEmpty ? null : (title: t, author: a);
   }
 
   Future<(Uint8List, String)?> _gutenberg(String title, String author) async {
     try {
-      final r = await client
-          .get(Uri.https('gutendex.com', '/books', {'search': '$title ${_lastName(author)}'.trim()}), headers: _ua)
-          .timeout(const Duration(seconds: 30));
-      if (r.statusCode != 200) return null;
-      final best = pickGutenberg(jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>, title, author);
-      if (best == null) return null;
-      final epub = await client.get(Uri.parse('https://www.gutenberg.org/ebooks/$best.epub.noimages'), headers: _ua).timeout(const Duration(minutes: 2));
-      if (epub.statusCode != 200 || epub.bodyBytes.length < 1000) return null;
-      return (epub.bodyBytes, 'Projeto Gutenberg #$best');
+      // o autor em várias grafias ("Dostoiévski" → dostoyevsky, dostoevsky) e, por último, só o título
+      final queries = <String>{for (final v in surnameVariants(author).take(3)) '$title $v', title};
+      for (final q in queries) {
+        final r = await client.get(Uri.https('gutendex.com', '/books', {'search': q.trim()}), headers: _ua).timeout(const Duration(seconds: 30));
+        if (r.statusCode != 200) continue;
+        final best = pickGutenberg(jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>, title, author);
+        if (best == null) continue;
+        final epub =
+            await client.get(Uri.parse('https://www.gutenberg.org/ebooks/${best.id}.epub.noimages'), headers: _ua).timeout(const Duration(minutes: 2));
+        if (epub.statusCode != 200 || epub.bodyBytes.length < 1000) return null;
+        return (epub.bodyBytes, 'Projeto Gutenberg #${best.id}${langLabel(best.lang)}');
+      }
+      return null;
     } catch (e) {
       errorLog.info('Audiolivros', 'Projeto Gutenberg não respondeu', e);
       return null;
     }
   }
+
+  /// " (em inglês)" para mostrar de onde veio o texto quando não é português.
+  static String langLabel(String lang) => switch (lang) {
+        'pt' || '' => '',
+        'en' => ' (em inglês)',
+        'es' => ' (em espanhol)',
+        'fr' => ' (em francês)',
+        _ => ' ($lang)',
+      };
 
   Future<(Uint8List, String)?> _wikisource(String title, String author, String lang) async {
     try {
@@ -253,7 +300,7 @@ class BookService extends ChangeNotifier {
           .get(Uri.https('ws-export.wmcloud.org', '/', {'format': 'epub', 'lang': lang, 'page': page}), headers: _ua)
           .timeout(const Duration(minutes: 3));
       if (epub.statusCode != 200 || epub.bodyBytes.length < 1000) return null;
-      return (epub.bodyBytes, 'Wikisource ($lang): $page');
+      return (epub.bodyBytes, 'Wikisource ($lang): $page${langLabel(lang)}');
     } catch (e) {
       errorLog.info('Audiolivros', 'Wikisource não respondeu', e);
       return null;
@@ -265,24 +312,28 @@ class BookService extends ChangeNotifier {
     return author == unknownAuthor || w.isEmpty ? '' : w.last;
   }
 
-  /// Escolhe o livro certo na resposta do Gutendex: título parecido (e autor, quando conhecido); prefere português.
+  /// Escolhe o livro certo na resposta do Gutendex: título parecido (e autor, quando conhecido, em qualquer grafia);
+  /// prefere português.
   @visibleForTesting
-  static int? pickGutenberg(Map<String, dynamic> json, String title, String author) {
-    int? best;
+  static ({int id, String lang})? pickGutenberg(Map<String, dynamic> json, String title, String author) {
+    ({int id, String lang})? best;
     var bestScore = 0.0;
+    final names = author == unknownAuthor ? const <String>[] : surnameVariants(author);
     for (final b in (json['results'] as List?) ?? const []) {
       if (b is! Map) continue;
       final formats = (b['formats'] as Map?) ?? const {};
       if (!formats.keys.any((k) => '$k'.startsWith('application/epub'))) continue;
-      final authors = [for (final a in (b['authors'] as List?) ?? const []) if (a is Map) '${a['name'] ?? ''}'].join(' ');
+      final id = (b['id'] as num?)?.toInt();
+      if (id == null) continue;
+      final authors = normalizeText([for (final a in (b['authors'] as List?) ?? const []) if (a is Map) '${a['name'] ?? ''}'].join(' '));
       var score = titleSimilarity(title, '${b['title'] ?? ''}');
       if (score < .6) continue;
-      final last = normalizeText(_lastName(author));
-      if (last.isNotEmpty) score += normalizeText(authors).contains(last) ? .3 : -.4;
-      if (((b['languages'] as List?) ?? const []).contains('pt')) score += .1;
+      if (names.isNotEmpty) score += names.any(authors.contains) ? .3 : -.4;
+      final langs = [for (final l in (b['languages'] as List?) ?? const []) '$l'];
+      if (langs.contains('pt')) score += .1;
       if (score > bestScore) {
         bestScore = score;
-        best = (b['id'] as num?)?.toInt();
+        best = (id: id, lang: langs.contains('pt') ? 'pt' : (langs.firstOrNull ?? ''));
       }
     }
     return bestScore >= .6 ? best : null;
