@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
@@ -14,12 +15,20 @@ import 'podcast_info.dart' show Chapter;
 class BookChapter {
   final String title;
   final List<String> paragraphs;
-  const BookChapter(this.title, this.paragraphs);
 
+  /// Quando cada parágrafo começa no áudio (ms). Só no texto feito pela transcrição do vídeo; vazio no EPUB.
+  final List<int> times;
+  const BookChapter(this.title, this.paragraphs, [this.times = const []]);
+
+  bool get timed => times.isNotEmpty && times.length == paragraphs.length;
   int get length => paragraphs.fold(0, (s, x) => s + x.length + 1);
 
-  Map<String, Object> toJson() => {'t': title, 'p': paragraphs};
-  static BookChapter fromJson(Map<String, dynamic> m) => BookChapter('${m['t'] ?? ''}', [for (final x in (m['p'] as List?) ?? const []) '$x']);
+  Map<String, Object> toJson() => {'t': title, 'p': paragraphs, if (timed) 'ms': times};
+  static BookChapter fromJson(Map<String, dynamic> m) => BookChapter(
+        '${m['t'] ?? ''}',
+        [for (final x in (m['p'] as List?) ?? const []) '$x'],
+        [for (final x in (m['ms'] as List?) ?? const []) (x as num).toInt()],
+      );
 }
 
 class BookText {
@@ -29,6 +38,9 @@ class BookText {
   const BookText({this.title = '', this.author = '', this.chapters = const []});
 
   bool get isEmpty => chapters.every((c) => c.paragraphs.isEmpty);
+
+  /// Texto da transcrição: cada parágrafo sabe quando é lido.
+  bool get timed => chapters.isNotEmpty && chapters.every((c) => c.timed || c.paragraphs.isEmpty);
   int get length => chapters.fold(0, (s, c) => s + c.length);
 
   Map<String, Object> toJson() => {'versao': 1, 'titulo': title, 'autor': author, 'capitulos': [for (final c in chapters) c.toJson()]};
@@ -260,6 +272,7 @@ List<int> matchChapters(List<Chapter> audio, List<BookChapter> text) {
 }) {
   if (text.chapters.isEmpty) return (chapter: 0, fraction: 0);
   final ms = pos.inMilliseconds, tot = total.inMilliseconds;
+  if (text.timed) return timedPosition(text, ms, tot);
   if (audio.isNotEmpty && match.length == audio.length) {
     var i = 0;
     for (var k = 0; k < audio.length; k++) {
@@ -300,4 +313,183 @@ Duration? audioStartOfText(int textIndex, List<Chapter> audio, List<int> match) 
     if (match[i] == textIndex) return Duration(milliseconds: audio[i].startMs);
   }
   return null;
+}
+
+/// Posição exata no texto da transcrição: o parágrafo que está sendo lido, e quanto dele (pelo tempo até o próximo).
+({int chapter, double fraction}) timedPosition(BookText text, int ms, int totalMs) {
+  var c = 0, k = 0;
+  for (var i = 0; i < text.chapters.length; i++) {
+    final t = text.chapters[i].times;
+    if (t.isEmpty) continue;
+    if (t.first > ms && i > 0) break;
+    c = i;
+    k = 0;
+    for (var j = 0; j < t.length; j++) {
+      if (t[j] <= ms) k = j;
+    }
+  }
+  final ch = text.chapters[c];
+  if (ch.paragraphs.isEmpty) return (chapter: c, fraction: 0);
+  var before = 0;
+  for (var j = 0; j < k; j++) {
+    before += ch.paragraphs[j].length + 1;
+  }
+  // próximo parágrafo (deste capítulo ou do seguinte) marca o fim deste
+  int? next = k + 1 < ch.times.length ? ch.times[k + 1] : null;
+  if (next == null) {
+    for (var i = c + 1; i < text.chapters.length && next == null; i++) {
+      if (text.chapters[i].times.isNotEmpty) next = text.chapters[i].times.first;
+    }
+  }
+  next ??= totalMs > ch.times[k] ? totalMs : ch.times[k] + 1;
+  final inside = ((ms - ch.times[k]) / (next - ch.times[k])).clamp(0.0, 1.0);
+  return (chapter: c, fraction: ((before + inside * ch.paragraphs[k].length) / ch.length).clamp(0.0, 1.0));
+}
+
+// ---------------------------------------------------------------------------
+// Transcrição do vídeo -> BookText
+
+/// Trechos da legenda automática do vídeo, guardados ao lado do áudio ("Livro.transcricao.json"),
+/// e os parágrafos que o Gemini já arrumou (pedaço a pedaço, mantendo os tempos).
+class Transcript {
+  /// (início em ms, texto) de cada trecho da legenda.
+  final List<(int, String)> segs;
+
+  /// Parágrafos arrumados (início em ms, texto) dos primeiros [done] pedaços.
+  final List<(int, String)> polished;
+  final int done;
+  const Transcript(this.segs, {this.polished = const [], this.done = 0});
+
+  /// Trechos por pedaço mandado ao Gemini (~12 min de leitura, uns 2 mil palavras).
+  static const chunk = 250;
+  int get chunks => (segs.length + chunk - 1) ~/ chunk;
+  bool get finished => done >= chunks;
+
+  Map<String, Object> toJson() => {
+        'versao': 1,
+        'trechos': [for (final (ms, t) in segs) [ms, t]],
+        'arrumados': [for (final (ms, t) in polished) [ms, t]],
+        'pedacos': done,
+      };
+
+  static List<(int, String)> _pairs(Object? v) => [
+        for (final x in (v as List?) ?? const [])
+          if (x is List && x.length == 2) ((x[0] as num).toInt(), '${x[1]}'),
+      ];
+
+  static Transcript fromJson(Map<String, dynamic> m) =>
+      Transcript(_pairs(m['trechos']), polished: _pairs(m['arrumados']), done: (m['pedacos'] as num?)?.toInt() ?? 0);
+
+  static Transcript? read(String audioPath) {
+    try {
+      final f = File(transcriptPath(audioPath));
+      if (!f.existsSync()) return null;
+      return fromJson(jsonDecode(f.readAsStringSync()) as Map<String, dynamic>);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> save(String audioPath) => File(transcriptPath(audioPath)).writeAsString(jsonEncode(toJson()));
+
+  /// Parágrafos de agora: os já arrumados + o resto montado pelas pausas da fala.
+  List<(int, String)> paragraphs() => [...polished, ...roughParagraphs(segs.sublist(math.min(done * chunk, segs.length)))];
+
+  /// Texto do livro: um capítulo do texto por capítulo do áudio (mesmos títulos); sem capítulos, partes de 30 min.
+  BookText toBook({required String title, required String author, required List<Chapter> audio}) =>
+      BookText(title: title, author: author, chapters: splitByTime(paragraphs(), audio));
+}
+
+/// Legenda automática não tem pontuação: um parágrafo novo a cada pausa longa (ou a cada ~120 palavras),
+/// com a primeira letra maiúscula e ponto no fim.
+List<(int, String)> roughParagraphs(List<(int, String)> segs) {
+  final out = <(int, String)>[];
+  var start = -1, words = 0;
+  final buf = StringBuffer();
+  void flush() {
+    final t = buf.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (t.isNotEmpty) {
+      var p = t[0].toUpperCase() + t.substring(1);
+      if (!RegExp(r'[.!?…:;"”»]$').hasMatch(p)) p = '$p.';
+      out.add((start, p));
+    }
+    buf.clear();
+    words = 0;
+    start = -1;
+  }
+
+  for (var i = 0; i < segs.length; i++) {
+    final (ms, text) = segs[i];
+    final clean = text.replaceAll(RegExp(r'\[(música|music|aplausos|risos|applause|laughter)\]', caseSensitive: false), ' ').trim();
+    if (clean.isEmpty) continue;
+    if (start < 0) start = ms;
+    buf
+      ..write(clean)
+      ..write(' ');
+    words += clean.split(RegExp(r'\s+')).length;
+    final gap = i + 1 < segs.length ? segs[i + 1].$1 - ms : 0;
+    // pausa: o próximo trecho demora a chegar (leitura de audiolivro: ~2-4 s por trecho)
+    if ((words >= 40 && gap >= 5500) || words >= 120) flush();
+  }
+  flush();
+  return out;
+}
+
+/// Divide os parágrafos pelos capítulos do áudio (pelo tempo em que cada um começa).
+List<BookChapter> splitByTime(List<(int, String)> pars, List<Chapter> audio) {
+  if (pars.isEmpty) return const [];
+  final starts = <(int, String)>[
+    if (audio.isNotEmpty) ...[for (final c in audio) (c.startMs, c.title)]
+    else
+      for (var k = 0; k * 1800000 <= pars.last.$1; k++) (k * 1800000, 'Parte ${k + 1}'),
+  ];
+  final out = <BookChapter>[];
+  for (var i = 0; i < starts.length; i++) {
+    final from = i == 0 ? -1 : starts[i].$1;
+    final to = i + 1 < starts.length ? starts[i + 1].$1 : 1 << 62;
+    final mine = [for (final x in pars) if (x.$1 >= from && x.$1 < to) x];
+    out.add(BookChapter(starts[i].$2, [for (final x in mine) x.$2], [for (final x in mine) x.$1]));
+  }
+  return out;
+}
+
+/// Pedido ao Gemini para arrumar um pedaço da legenda (pontuação e parágrafos), sem resumir.
+String polishPrompt({required String title, required String author, required List<(int, String)> segs, required int firstIndex}) => '''
+Abaixo há trechos numerados da legenda automática da leitura do livro "$title", de $author.
+A legenda não tem pontuação e pode ter palavras erradas. Reescreva como texto de livro:
+- ponha pontuação, letras maiúsculas e travessões nos diálogos; divida em parágrafos como num livro;
+- corrija só palavras que a legenda claramente ouviu errado;
+- NÃO resuma, NÃO pule e NÃO invente frases: todo o conteúdo tem que continuar;
+- tire falas que não são do livro (ex.: "inscreva-se no canal", "[música]").
+Para cada parágrafo, diga o número do trecho em que ele começa ("i"), em ordem crescente.
+Responda só com JSON: {"p": [{"i": $firstIndex, "t": "Parágrafo pontuado."}]}
+
+Trechos:
+${[for (var k = 0; k < segs.length; k++) '[${firstIndex + k}] ${segs[k].$2}'].join('\n')}
+''';
+
+/// Confere a resposta do Gemini para um pedaço: começa no 1º trecho, números crescentes dentro do pedaço e
+/// quase o mesmo tanto de palavras (não resumiu nem inventou). Null = resposta ruim (fica a versão das pausas).
+List<(int, String)>? polishedFromAi(Object? ai, List<(int, String)> segs, int firstIndex) {
+  if (ai is! Map || ai['p'] is! List) return null;
+  final out = <(int, String)>[];
+  var last = firstIndex - 1;
+  for (final x in ai['p'] as List) {
+    if (x is! Map) return null;
+    final i = (x['i'] as num?)?.toInt();
+    final t = '${x['t'] ?? ''}'.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (t.isEmpty) continue;
+    if (i == null || i <= last || i < firstIndex || i >= firstIndex + segs.length) return null;
+    last = i;
+    out.add((segs[i - firstIndex].$1, t));
+  }
+  if (out.isEmpty) return null;
+  // o primeiro parágrafo começa no primeiro trecho (nada some no começo)
+  out[0] = (segs.first.$1, out[0].$2);
+  int count(String s) => s.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
+  final before = segs.fold(0, (n, s) => n + count(s.$2));
+  final after = out.fold(0, (n, p) => n + count(p.$2));
+  if (before == 0) return null;
+  final r = after / before;
+  return r >= .8 && r <= 1.25 ? out : null;
 }
