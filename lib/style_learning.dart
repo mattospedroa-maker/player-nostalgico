@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'artist_names.dart';
+import 'error_log.dart';
 import 'lastfm.dart' show MusicTag;
 import 'models.dart';
 import 'mood.dart';
@@ -127,8 +128,15 @@ class ArtistTagStore {
       if (!file.existsSync()) return;
       final raw = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
       _tags = raw.map((k, v) => MapEntry(k, [for (final m in (v as List)) MusicTag.fromJson((m as Map).cast<String, dynamic>())]));
-    } catch (_) {
+    } catch (e) {
+      // arquivo estragado: guarda uma cópia (antes era sobrescrito calado na próxima gravação) e recomeça
       _tags = {};
+      try {
+        file.copySync('${file.path}.estragado');
+      } catch (_) {
+        // sem cópia: o aviso abaixo continua valendo
+      }
+      errorLog.warn('Estilos', 'As tags dos artistas estavam ilegíveis; recomeçando (cópia em ${file.path.split(Platform.pathSeparator).last}.estragado)', error: e);
     }
   }
 

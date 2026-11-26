@@ -29,6 +29,7 @@ import 'edit_track_screen.dart';
 import 'episode_summary.dart';
 import 'gif_vibe_screen.dart';
 import 'gif_web_screen.dart';
+import 'why_screen.dart';
 
 class NowPlayingScreen extends StatelessWidget {
   const NowPlayingScreen({super.key});
@@ -295,20 +296,27 @@ class _MixBox extends StatelessWidget {
           const SizedBox(height: 8),
           const Text('A seguir:', style: TextStyle(fontSize: 12, color: Xp.blueMuted)),
           for (final t in next)
-            Container(
-              padding: const EdgeInsets.symmetric(vertical: 5),
-              decoration: const BoxDecoration(border: Border(top: BorderSide(color: Color(0xFFE3EAF6)))),
-              child: Row(children: [
-                CoverSquare(t, size: 28),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, color: Xp.navy)),
-                    Text([t.artist, if (t.genre.isNotEmpty) t.genre].join(' · '),
-                        maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: Xp.blueMuted)),
-                  ]),
-                ),
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onLongPressStart: (d) => showXpContextMenu(context, header: '${t.title} — ${t.artist}', at: d.globalPosition, items: [
+                XpMenuEntry('Por que está aqui?', () => showWhyWindow(context, t), icon: XpIcons.info),
               ]),
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 5),
+                decoration: const BoxDecoration(border: Border(top: BorderSide(color: Color(0xFFE3EAF6)))),
+                child: Row(children: [
+                  CoverSquare(t, size: 28),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, color: Xp.navy)),
+                      Text([t.artist, if (t.genre.isNotEmpty) t.genre].join(' · '),
+                          maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: Xp.blueMuted)),
+                      if (ps.mixReason(t) case final why?) WhyLine(why, onTap: () => showWhyWindow(context, t)),
+                    ]),
+                  ),
+                ]),
+              ),
             ),
         ],
         ]),
@@ -393,6 +401,19 @@ class _QueueWindowState extends State<_QueueWindow> {
     ]);
   }
 
+  /// Segurar uma música da fila: por que ela está aqui, tirar ou ver as propriedades.
+  void _rowMenu(PlayerService ps, Track t, int i, Offset at) {
+    showXpContextMenu(context, header: '${t.title} — ${t.artist}', at: at, items: [
+      XpMenuEntry('Por que está aqui?', () => showWhyWindow(context, t), icon: XpIcons.info),
+      XpMenuEntry('Tirar da fila', i == ps.player.currentIndex ? null : () => ps.removeAt(i), icon: XpIcons.bin),
+      null,
+      XpMenuEntry('Propriedades…', () {
+        final known = context.read<AppState>().byId(t.id) ?? t;
+        Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => EditTrackScreen(track: known)));
+      }, icon: XpIcons.edit),
+    ]);
+  }
+
   Future<void> _confirmDelete(PlayerService ps, Track t) async {
     final app = context.read<AppState>();
     final ok = await showDialog<bool>(
@@ -463,7 +484,10 @@ class _QueueWindowState extends State<_QueueWindow> {
                     final picked = i == sel;
                     final bad = ps.failureOf(t);
                     if (bad != null && !on) return _failedRow(ps, t, i, bad, picked);
-                    return InkWell(
+                    final why = ps.mixReason(t);
+                    return GestureDetector(
+                      onLongPressStart: (d) => _rowMenu(ps, t, i, d.globalPosition),
+                      child: InkWell(
                       onTap: () => setState(() => _sel = i),
                       onDoubleTap: () {
                         ps.jumpTo(i);
@@ -480,18 +504,22 @@ class _QueueWindowState extends State<_QueueWindow> {
                           SizedBox(width: 34, child: Text('${i + 1}', textAlign: TextAlign.right, style: TextStyle(fontSize: 13, color: on ? const Color(0xFFCCEEFF) : const Color(0xFF888888)))),
                           const SizedBox(width: 10),
                           Expanded(
-                            child: Text.rich(
-                              TextSpan(children: [
-                                TextSpan(text: t.title, style: TextStyle(fontWeight: on ? FontWeight.bold : FontWeight.normal)),
-                                TextSpan(text: '  ${t.artist}', style: TextStyle(fontSize: 12, color: on ? const Color(0xFFDFE8FF) : const Color(0xFF888888))),
-                              ]),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(fontSize: 14, color: on ? Colors.white : Colors.black),
-                            ),
+                            child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              Text.rich(
+                                TextSpan(children: [
+                                  TextSpan(text: t.title, style: TextStyle(fontWeight: on ? FontWeight.bold : FontWeight.normal)),
+                                  TextSpan(text: '  ${t.artist}', style: TextStyle(fontSize: 12, color: on ? const Color(0xFFDFE8FF) : const Color(0xFF888888))),
+                                ]),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(fontSize: why == null ? 14 : 13.5, color: on ? Colors.white : Colors.black),
+                              ),
+                              if (why != null) WhyLine(why, light: on, onTap: () => showWhyWindow(context, t)),
+                            ]),
                           ),
                           Text(fmtDuration(Duration(milliseconds: t.durationMs)), style: TextStyle(fontSize: 12.5, color: on ? const Color(0xFFDFE8FF) : const Color(0xFF888888))),
                         ]),
+                      ),
                       ),
                     );
                   },

@@ -498,6 +498,19 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
     }
   }
 
+  /// A música veio do mix automático (não foi você que escolheu).
+  bool isFromMix(Track t) => _autoAdded.contains(t.id);
+
+  /// Por que a música entrou no mix: o motivo de maior peso em relação à música que guia o mix
+  /// ("mesmo artista", "mesmo estilo (Shoegaze)"...). null se ela não veio do mix.
+  String? mixReason(Track t) {
+    if (!_autoAdded.contains(t.id)) return null;
+    final seed = mixSeed;
+    if (seed == null || seed.id == t.id) return null;
+    final r = Recommender.affinityWhy(seed, t).$2;
+    return r.isEmpty ? 'para variar um pouco' : r;
+  }
+
   /// A música que guia o mix. "Do mesmo artista": a que está tocando agora (é o artista dela que
   /// você quer ouvir). "Da mesma vibe": a primeira escolhida (com o clima atual dela).
   Track? get mixSeed {
