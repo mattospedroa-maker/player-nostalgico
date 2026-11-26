@@ -20,6 +20,7 @@ import 'cover_service.dart';
 import 'crossfade.dart';
 import 'db.dart';
 import 'download_service.dart';
+import 'experiences.dart';
 import 'error_log.dart';
 import 'filename_parser.dart';
 import 'gif_fetcher.dart';
@@ -622,6 +623,7 @@ class AppState extends ChangeNotifier {
     if (rereadGifs) await gifs.refresh();
     notifyListeners();
     _scheduleBackup();
+    if (rereadGifs) unawaited(refreshExperiences());
   }
 
   /// Refaz o que o app aprende com as playlists (músicas/artistas/estilos que você junta). Conta em memória.
@@ -651,6 +653,66 @@ class AppState extends ChangeNotifier {
     } catch (e) {
       errorLog.warn('Momentos', 'Não deu para salvar as cenas da música', error: e);
     }
+  }
+
+  // ---------- playlists do momento ----------
+
+  static const _expKey = 'experiencias';
+  ExperienceState _exp = ExperienceState.empty;
+  bool _expLoaded = false;
+
+  /// As playlists do momento no ar agora (as vencidas já saem daqui, mesmo antes de renovar).
+  List<Experience> get experiences {
+    if (!_expLoaded) {
+      _expLoaded = true;
+      _exp = ExperienceState.decode(prefs.getString(_expKey));
+    }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    return [for (final e in _exp.active) if (!e.expired(now)) e]..sort((a, b) => a.expiresAt.compareTo(b.expiresAt));
+  }
+
+  Experience? experienceById(String id) => experiences.where((e) => e.id == id).firstOrNull;
+
+  Timer? _expTimer;
+
+  /// Tira as vencidas e cria novas (conta em memória, sem internet). Chamado ao abrir, ao reler e quando uma vence.
+  Future<void> refreshExperiences() async {
+    experiences; // carrega
+    try {
+      final stats = await playStats();
+      final next = ExperienceEngine.refresh(_exp, tracks, stats: stats);
+      if (!identical(next, _exp)) {
+        _exp = next;
+        await prefs.setString(_expKey, _exp.encode());
+        notifyListeners();
+      }
+    } catch (e) {
+      errorLog.info('Momentos', 'Não deu para renovar as playlists do momento', e);
+    }
+    // acorda quando a próxima vencer
+    _expTimer?.cancel();
+    final list = experiences;
+    if (list.isNotEmpty) {
+      final wait = list.first.expiresAt - DateTime.now().millisecondsSinceEpoch;
+      _expTimer = Timer(Duration(milliseconds: wait.clamp(60000, 86400000)), () => unawaited(refreshExperiences()));
+    }
+  }
+
+  /// "Salvar nas minhas playlists": vira uma playlist normal (com as músicas na mesma ordem) e sai do momento.
+  Future<int?> saveExperience(Experience e) async {
+    final taken = {for (final p in playlists) p.name.toLowerCase()};
+    var name = e.title;
+    for (var i = 2; taken.contains(name.toLowerCase()); i++) {
+      name = '${e.title} ($i)';
+    }
+    final id = await db.createPlaylist(name);
+    final ids = {for (final t in tracks) t.id};
+    await db.setPlaylistOrder(id, [for (final t in e.trackIds) if (ids.contains(t)) t]);
+    _exp = ExperienceState([for (final x in _exp.active) if (x.id != e.id) x], _exp.recent);
+    await prefs.setString(_expKey, _exp.encode());
+    await reload();
+    unawaited(refreshExperiences()); // outra entra no lugar
+    return id;
   }
 
   bool _fillingFacts = false;
@@ -699,6 +761,7 @@ class AppState extends ChangeNotifier {
     } finally {
       _fillingFacts = false;
     }
+    if (n > 0 && only == null) unawaited(refreshExperiences()); // fichas novas: talvez caibam temas que antes não cabiam
     return n;
   }
 
