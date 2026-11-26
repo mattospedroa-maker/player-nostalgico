@@ -20,10 +20,7 @@ import 'cover_service.dart';
 import 'crossfade.dart';
 import 'db.dart';
 import 'download_service.dart';
-<<<<<<< HEAD
 import 'experience_ai.dart';
-=======
->>>>>>> 6975244986c5c8a7b6324eb77efc31f8f10b277e
 import 'experiences.dart';
 import 'error_log.dart';
 import 'filename_parser.dart';
@@ -684,11 +681,7 @@ class AppState extends ChangeNotifier {
     experiences; // carrega
     try {
       final stats = await playStats();
-<<<<<<< HEAD
       final next = ExperienceEngine.refresh(_exp, tracks, stats: stats, aiThemes: _aiThemes());
-=======
-      final next = ExperienceEngine.refresh(_exp, tracks, stats: stats);
->>>>>>> 6975244986c5c8a7b6324eb77efc31f8f10b277e
       if (!identical(next, _exp)) {
         _exp = next;
         await prefs.setString(_expKey, _exp.encode());
@@ -697,10 +690,7 @@ class AppState extends ChangeNotifier {
     } catch (e) {
       errorLog.info('Momentos', 'Não deu para renovar as playlists do momento', e);
     }
-<<<<<<< HEAD
     unawaited(_maybeFetchAiThemes());
-=======
->>>>>>> 6975244986c5c8a7b6324eb77efc31f8f10b277e
     // acorda quando a próxima vencer
     _expTimer?.cancel();
     final list = experiences;
@@ -710,7 +700,6 @@ class AppState extends ChangeNotifier {
     }
   }
 
-<<<<<<< HEAD
   static const _aiThemesKey = 'iaTemas';
 
   /// Temas que a IA inventou nesta semana (ainda não usados).
@@ -791,8 +780,6 @@ class AppState extends ChangeNotifier {
     return (e, null);
   }
 
-=======
->>>>>>> 6975244986c5c8a7b6324eb77efc31f8f10b277e
   /// "Salvar nas minhas playlists": vira uma playlist normal (com as músicas na mesma ordem) e sai do momento.
   Future<int?> saveExperience(Experience e) async {
     final taken = {for (final p in playlists) p.name.toLowerCase()};
