@@ -20,6 +20,7 @@ import 'models.dart';
 import 'mood.dart';
 import 'organizer.dart' show safeFolderName;
 import 'service_health.dart';
+import 'styles.dart';
 import 'visual_search.dart';
 import 'visual_tags.dart';
 
@@ -62,6 +63,9 @@ class GifFetcher {
 
   /// Ler a letra para tirar as cenas (desligável nos testes).
   bool useLyrics = true;
+
+  /// A aba Internet deixa buscar letras agora? (sem: só as que já estão no cache)
+  bool Function()? allowLyrics;
 
   /// Últimas cenas da letra por música (a letra mesmo nunca é guardada).
   final Map<int?, List<LyricScene>> lyricScenes = {};
@@ -353,7 +357,10 @@ class GifFetcher {
       }
       _tagCache?.put(artist, title, r);
       // tags novas podem mudar o clima automático desta música
-      if (r.tags.isNotEmpty) MoodClues.invalidate();
+      if (r.tags.isNotEmpty) {
+        MoodClues.invalidate();
+        Styles.invalidate(); // os estilos e as réguas também vêm das tags
+      }
     }
     tagStatus[t.id] = r.status;
     return r;
@@ -396,7 +403,7 @@ class GifFetcher {
     }
     final cached = _lyricsCache?.get(artist, title);
     if (cached != null) return lyricScenes[t.id] = cached;
-    if (!online) return const [];
+    if (!online || allowLyrics?.call() == false) return const [];
     final key = LyricsCache.keyFor(artist, title);
     final failed = _lyricsFailedAt[key];
     if (failed != null && DateTime.now().difference(failed) < const Duration(minutes: 10)) return const [];

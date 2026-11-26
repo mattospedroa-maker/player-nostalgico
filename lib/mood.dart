@@ -21,6 +21,17 @@ enum Mood {
 
   /// Clima que só o gênero sugere (sem as outras pistas). Gêneros vagos (rock, pop, rap, indie...) dão null.
   static Mood? fromGenre(String genre) => MoodClues.guess(genre: genre).mood;
+
+  /// Selo a partir das réguas (energia e humor de 0 a 100). Meio a meio = neutro.
+  static Mood? fromVibe(int energy, int humor) {
+    if (energy >= 65 && humor >= 55) return festa;
+    if (energy >= 65 && humor < 40) return acao;
+    if (energy >= 60) return epico;
+    if (humor < 35) return triste;
+    if (energy < 40 && humor >= 70) return romantico;
+    if (energy < 40) return calmo;
+    return null;
+  }
 }
 
 /// Resultado do clima automático: o vencedor (ou null = neutro), os pontos e de onde vieram.
@@ -300,8 +311,8 @@ extension TrackMood on Track {
   /// Clima escolhido pelo usuário (ou null = automático).
   Mood? get chosenMood => Mood.byName(mood);
 
-  /// Clima automático por pistas (null = neutro).
-  Mood? get autoMood => MoodClues.forTrack(this).mood;
+  /// Clima automático por pistas (null = neutro). Réguas arrastadas à mão na aba "Estilo" mandam no selo.
+  Mood? get autoMood => energy != null && humor != null ? Mood.fromVibe(energy!, humor!) : MoodClues.forTrack(this).mood;
 
   /// Clima que vale: o escolhido, senão o automático.
   Mood? get effectiveMood => chosenMood ?? autoMood;

@@ -2,6 +2,7 @@ import 'dart:math';
 
 import 'package:material_ui/material_ui.dart';
 
+import 'net_policy.dart';
 import 'xp_icons.dart';
 
 /// Paleta "Windows XP / WMP 9" usada em todo o app.
@@ -323,10 +324,49 @@ class XpStatusBar extends StatelessWidget {
 
   /// Quando há, a primeira parte vira um aviso amarelo com ⚠ (ex.: "2 músicas não abriram").
   final bool warn;
-  const XpStatusBar(this.parts, {super.key, this.warn = false});
+
+  /// Mostra no canto o modo da internet ("Internet", "Só Wi-Fi", "Trabalhando off-line"), como a zona do IE.
+  final bool showNet;
+  const XpStatusBar(this.parts, {super.key, this.warn = false, this.showNet = true});
+
+  /// Toque na zona da internet (o app abre a aba Internet das Opções).
+  static void Function(BuildContext context)? onNetTap;
 
   @override
-  Widget build(BuildContext context) => Container(
+  Widget build(BuildContext context) => !showNet
+      ? _bar(context, null)
+      : ValueListenableBuilder<NetStatus?>(valueListenable: NetPolicy.status, builder: (context, st, _) => _bar(context, st));
+
+  static const _sunken = Border(
+    top: BorderSide(color: Xp.beigeBorder),
+    left: BorderSide(color: Xp.beigeBorder),
+    right: BorderSide(color: Colors.white),
+    bottom: BorderSide(color: Colors.white),
+  );
+
+  Widget _netZone(BuildContext context, NetStatus st) {
+    final (IconData icon, Color color) = switch (st.mode) {
+      NetMode.online => (Icons.public, const Color(0xFF1E5BD6)),
+      NetMode.wifiOnly => (Icons.wifi, st.onWifi ? const Color(0xFF1E5BD6) : const Color(0xFFB07800)),
+      NetMode.offline => (Icons.cloud_off, const Color(0xFFC0392B)),
+    };
+    return GestureDetector(
+      key: const Key('statusbar-net'),
+      onTap: onNetTap == null ? null : () => onNetTap!(context),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6),
+        alignment: Alignment.centerLeft,
+        decoration: const BoxDecoration(border: _sunken),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 4),
+          Text(st.label, maxLines: 1, style: const TextStyle(fontSize: 12, color: Color(0xFF222222))),
+        ]),
+      ),
+    );
+  }
+
+  Widget _bar(BuildContext context, NetStatus? net) => Container(
     height: 26,
     padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
     decoration: const BoxDecoration(
@@ -366,6 +406,7 @@ class XpStatusBar extends StatelessWidget {
             ),
           ),
         ],
+        if (net != null) ...[const SizedBox(width: 3), _netZone(context, net)],
       ],
     ),
   );
@@ -1069,7 +1110,8 @@ class XpTabs extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+        // tela estreita: as abas rolam para o lado em vez de estourar
+        child: SingleChildScrollView(scrollDirection: Axis.horizontal, child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
           for (var i = 0; i < labels.length; i++)
             GestureDetector(
               onTap: () => onTap(i),
@@ -1088,7 +1130,7 @@ class XpTabs extends StatelessWidget {
                 child: Text(labels[i], style: TextStyle(fontSize: 14, fontWeight: i == current ? FontWeight.bold : FontWeight.normal)),
               ),
             ),
-        ]),
+        ])),
       );
 }
 

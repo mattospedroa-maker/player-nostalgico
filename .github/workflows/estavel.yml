@@ -1,0 +1,41 @@
+name: Marcar versão estável
+
+# Copia o APK de uma versão já publicada (ex.: 2.0.153) para a release "estavel".
+# Link fixo, que sempre aponta para a última versão marcada como estável:
+#   https://github.com/mattospedroa-maker/player-nostalgico/releases/download/estavel/player-nostalgico.apk
+# Não gera APK novo nem mexe na "latest" (as versões de teste continuam saindo normalmente).
+
+on:
+  workflow_dispatch:
+    inputs:
+      versao:
+        description: 'Versão que vira estável (ex.: 2.0.153)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  estavel:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSAO: ${{ inputs.versao }}
+    steps:
+      - name: Baixar o APK da versão escolhida
+        run: |
+          V="${VERSAO#v}"
+          echo "V=$V" >> "$GITHUB_ENV"
+          gh release download "v$V" --pattern player-nostalgico.apk --dir .
+          SHA=$(gh api "repos/$GH_REPO/commits/v$V" --jq .sha)
+          echo "SHA=$SHA" >> "$GITHUB_ENV"
+          ls -la player-nostalgico.apk
+      - name: Trocar a release "estavel" por esta versão
+        run: |
+          gh release delete estavel --yes --cleanup-tag || true
+          gh release create estavel player-nostalgico.apk \
+            --target "$SHA" \
+            --title "Estável: Player Nostálgico $V" \
+            --notes "Versão $V marcada como estável em $(date -u +%d/%m/%Y). Código: $SHA. Link fixo: https://github.com/$GH_REPO/releases/download/estavel/player-nostalgico.apk" \
+            --latest=false

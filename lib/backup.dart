@@ -53,6 +53,12 @@ class LibraryBackup {
       'playlists': lists,
       'favorites': [for (final t in tracks) if (t.favorite) _ref(t, root)],
       'moods': [for (final t in tracks) if (t.mood.isNotEmpty) {..._ref(t, root), 'mood': t.mood}],
+      // aba "Estilo": estilos postos/tirados e réguas arrastadas à mão
+      'styles': [
+        for (final t in tracks)
+          if (t.stylesEdit.isNotEmpty || t.energy != null)
+            {..._ref(t, root), if (t.stylesEdit.isNotEmpty) 'edit': t.stylesEdit, if (t.energy != null) 'energy': t.energy, if (t.humor != null) 'humor': t.humor}
+      ],
       'm3u': written,
     };
     final tmp = File('${dataFileOf(root).path}.tmp');
@@ -98,6 +104,14 @@ class LibraryBackup {
         if (t == null || mood.isEmpty) continue;
         await db.setMood(t.id!, mood);
         r.moods++;
+      }
+      for (final ref in (data['styles'] as List? ?? const [])) {
+        final t = finder.find(ref as Map);
+        if (t == null) continue;
+        final edit = ref['edit'];
+        if (edit is String && edit.isNotEmpty) await db.setStylesEdit(t.id!, edit);
+        final e = ref['energy'], h = ref['humor'];
+        if (e is int && h is int) await db.setVibe(t.id!, e, h);
       }
       return r;
     }

@@ -263,6 +263,8 @@ class _HomeShellState extends State<HomeShell> {
     unawaited(ShareIntake.attach(_openShared));
     // músicas com cara de podcast: balão perto do relógio (nunca move nada sozinho)
     context.read<AppState>().onPodcastSuggestions = showPodcastSuggestionBalloon;
+    // tocar em "Internet / Trabalhando off-line" na barra de status abre a aba Internet das Opções
+    XpStatusBar.onNetTap = (_) => _openTool(const OptionsScreen(initialTab: 2));
   }
 
   /// Link compartilhado de outro app: fecha o que estiver aberto por cima e abre "Baixar do YouTube" já buscando.
