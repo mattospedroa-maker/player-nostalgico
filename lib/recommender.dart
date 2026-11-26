@@ -28,8 +28,12 @@ class _Why {
   double score = 0;
   double _best = 0;
   String reason = '';
+
+  /// Cada termo que somou, na ordem em que entrou (para a janela "Por que esta música?").
+  final List<(String, double)> parts = [];
   void add(double v, String why) {
     score += v;
+    if (v > 0) parts.add((why, v));
     if (v > _best) {
       _best = v;
       reason = why;
@@ -73,6 +77,12 @@ class Recommender {
   static (double, String) affinityWhy(Track a, Track b) {
     final w = _affinity(a, b);
     return (w.score, w.reason);
+  }
+
+  /// Tudo o que somou entre [a] e [b], do termo que mais pesou para o que menos pesou.
+  static ({double score, String reason, List<(String, double)> parts}) explain(Track a, Track b) {
+    final w = _affinity(a, b);
+    return (score: w.score, reason: w.reason, parts: List.of(w.parts)..sort((x, y) => y.$2.compareTo(x.$2)));
   }
 
   static _Why _affinity(Track a, Track b) {

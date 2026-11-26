@@ -350,7 +350,8 @@ class Crossfader {
       if (drift.abs() <= _maxDrift) return;
       try {
         await main.seek(tail.position + _seekLag);
-      } catch (_) {
+      } catch (e) {
+        errorLog.info('Transição', 'Não deu para realinhar os dois players', e);
         return;
       }
       if (tries > 1) _alignLater(gen, tries - 1);

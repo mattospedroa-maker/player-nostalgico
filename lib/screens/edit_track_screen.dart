@@ -20,7 +20,10 @@ import 'now_playing_screen.dart' show showGifManager;
 /// "Editar música": título, artista, álbum, gênero e ano; grava nas tags, move de pasta ou apaga.
 class EditTrackScreen extends StatefulWidget {
   final Track track;
-  const EditTrackScreen({super.key, required this.track});
+
+  /// Aba que abre primeiro (0 Geral, 1 Estilo, 2 Arquivo, 3 GIFs).
+  final int initialTab;
+  const EditTrackScreen({super.key, required this.track, this.initialTab = 0});
 
   @override
   State<EditTrackScreen> createState() => _EditTrackScreenState();
@@ -37,7 +40,7 @@ class _EditTrackScreenState extends State<EditTrackScreen> {
   bool _busy = false;
   String? _gif;
   List<String> _gifs = const [];
-  int _tab = 0;
+  late int _tab = widget.initialTab;
 
   @override
   void dispose() {

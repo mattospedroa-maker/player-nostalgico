@@ -1,60 +1,75 @@
-# Player Nostálgico
+# Nostalgic MPlayer (Player Nostálgico)
 
-Player de música offline para Android, com visual inspirado no Windows Media Player do XP, no iPod e no Walkman.
+Player de música para Android com visual do Windows Media Player 9 do XP: janelas Luna azuis, botões redondos prateados, visor LCD e barra de status. Toca tudo off-line; a internet só serve para enfeitar (GIFs, capas, fotos, letras, gênero) e para baixar do YouTube.
 
-## O que já funciona
+Projeto pessoal, sem fim comercial.
 
-- **Biblioteca**: escolhe uma pasta do celular, lê as músicas (mp3, flac, m4a, ogg, opus, wav) e as tags. Navega por artistas, álbuns, gêneros e pastas, e tem busca.
-- **Buscar novas músicas** (na Biblioteca, que é a tela inicial): lê cada música da pasta, descobre o artista e o álbum (pelas tags; se faltar, pesquisa o título no [MusicBrainz](https://musicbrainz.org)) e move para `Pasta/Artista/Álbum/`. Antes de mover, mostra a lista para conferir e desmarcar. Dá para **desfazer** a última organização. Favoritas, playlists e histórico continuam valendo depois de mover.
-- **Tocando agora**: a "capa" é uma sequência de GIFs que trocam a cada 8 s, com miniaturas dos próximos. Controles redondos prateados na barra azul, aleatório e repetir. Toca em segundo plano, com controles na notificação.
-- **GIFs offline**: ficam na pasta `GIFs/` dentro da pasta de músicas. Uma subpasta com o nome do artista, álbum ou gênero (ex.: `GIFs/Hatsune Miku/`) faz os GIFs aparecerem nas músicas que combinam. GIFs soltos em `GIFs/` aparecem em qualquer música. Em "GIFs desta" dá para adicionar GIFs do celular e fixar na música.
-- **GIFs automáticos (anime)**: quando a música toca, o app baixa até 9 GIFs de anime do [nekos.best](https://nekos.best) no clima do gênero (metal: lutas; pop: dança; lo-fi: calmos...), mais os das palavras extras. Sem repetidos; um GIF usado por várias músicas é guardado uma vez só. Não baixa em massa (os termos da fonte proíbem).
-- **Palavras extras** (em "GIFs desta"): associações para a busca, ex.: "rock lee vs gaara" para Numb. Ficam em `GIFs/palavras.json`.
-- **Buscar na web** (em "GIFs desta"): abre Google, Tenor, GIPHY ou Pinterest com a busca pronta; com o **Modo salvar** ligado, tocar num GIF guarda na música. É o caminho para GIFs de anime e filmes, que não existem nas fontes livres.
-- **Nomes limpos**: "00 - 002 - 【Hatsune Miku】 World is Mine 【Legenda PT-BR】" vira artista "Hatsune Miku", título "World is Mine". O organizador também renomeia o arquivo para o título limpo.
-- **Notificação e tela de bloqueio**: ♥ curtir, ⏮ ⏯ ⏭, e a arte é o GIF que está passando (um quadro parado, que troca junto com o GIF).
-- **Editar música** (segurar na lista ou "Editar" no Tocando agora): título, artista, álbum, gênero e ano; preenche pelo MusicBrainz, grava nas tags, move para a pasta nova e permite apagar a música. Pastas vazias são apagadas sozinhas.
-- **Capas de álbum**: quando a música não tem capa, o app busca no [Cover Art Archive](https://coverartarchive.org) (MusicBrainz) e mostra nas listas, no Tocando agora sem GIF e na notificação.
-- **Gênero automático**: quando falta, vem das tags do artista no MusicBrainz (ex.: "Industrial Metal").
-- **Mix automático**: tocar uma música solta (ou chegar ao fim de uma lista) continua com um mix. No Tocando agora, "Depois desta, tocar:" alterna entre **Do mesmo artista** e **Da mesma vibe** a qualquer momento e mostra as 3 próximas.
-- **Fila que se adapta** (aleatório e Mix do momento): pular manda as parecidas para o fim; curtir traz parecidas para perto, intercaladas.
-- **Favoritas**, **Playlists** (criar, renomear, reordenar arrastando, remover deslizando) e **Para você** (mix, rádio da música atual e "Redescobrir", tudo calculado no aparelho).
+## Instalar
 
-## Como testar
+- **Versão estável** (a que foi testada e não incomoda): https://github.com/mattospedroa-maker/player-nostalgico/releases/download/estavel/player-nostalgico.apk
+- **Última versão** (cada mudança gera uma nova, `v2.0.N`): https://github.com/mattospedroa-maker/player-nostalgico/releases/latest/download/player-nostalgico.apk
 
-### No celular (mais fácil)
-1. Baixe o APK mais recente: https://github.com/mattospedroa-maker/player-nostalgico/releases/latest/download/player-nostalgico.apk (cada mudança gera uma versão nova em *Releases*). Abra o arquivo no celular. O Android vai pedir para permitir "instalar apps desconhecidos".
-2. Na primeira abertura, toque em **Escolher pasta de músicas** e permita o **acesso a todos os arquivos** (necessário para ler e mover as músicas).
+Abra o APK no celular e permita "instalar apps desconhecidos". Na primeira abertura, escolha a pasta de músicas e permita o **acesso a todos os arquivos** (para ler, organizar e mover as músicas).
 
-### No computador, durante o desenvolvimento
+Para marcar outra versão como estável: *Actions → Marcar versão estável → Run workflow* com o número da versão (ex.: `2.0.161`). A release "estavel" passa a apontar para ela sem mexer na última.
+
+## O que o app faz
+
+### Biblioteca
+- Lê mp3, flac, m4a, ogg, opus e wav da pasta escolhida. Navega por artistas, álbuns, gêneros, estilos e pastas, com busca geral e busca dentro de qualquer lista (lupa na barra azul).
+- **Buscar novas músicas**: limpa nomes ("00 - 002 - 【Hatsune Miku】 World is Mine" vira "World is Mine", de Hatsune Miku), descobre artista e álbum pelas tags ou pelo [MusicBrainz](https://musicbrainz.org) e move para `Fonte/Artista/Álbum/`. Mostra a lista antes, e dá para desfazer.
+- Parcerias ("A feat. B") ficam no artista principal. Músicas repetidas: fica a original e só uma versão de cada tipo (uma ao vivo, um remix, uma acústica).
+- **Estilo e clima automáticos**: estilos vindos das tags do Last.fm e do gênero, réguas de energia e humor, e um clima (triste, calmo, épico...) somando pistas. Tudo pode ser corrigido à mão na aba *Estilo* de Editar, e o app aprende com as suas playlists.
+- Favoritas, playlists (com cópia de segurança na pasta `Playlists/`), coleções inteligentes e sugestões no fim de cada playlist.
+
+### Tocando agora
+- A capa é um carrossel de GIFs, capa do álbum e fotos do artista. Ele para quando o app sai da tela, para não gastar bateria.
+- **Depois desta, tocar:** *Da mesma vibe* ou *Do mesmo artista*. Cada música que o mix colocou mostra uma linha curta com o motivo ("↳ mesmo estilo (Shoegaze)"). Tocar na linha, ou segurar a música, abre a janela **Por que esta música?** com os pontos de cada parecença, o clima e o estilo.
+- Fila (Lista de reprodução) com *Tocar a seguir* e *Adicionar à fila*, transição ajustável entre músicas (dois players se revezando), pular música que não abre e controles na notificação e na tela de bloqueio.
+
+### GIFs
+- Baixa até 9 GIFs por música quando ela toca, escolhidos pelo clima, pelo ritmo e pela letra. Mistura anime ([nekos.best](https://nekos.best)) com GIFs gerais (GIPHY, Openverse, Wikimedia). Um GIF usado por várias músicas é guardado uma vez só.
+- Ficam em `GIFs/` dentro da pasta de músicas. Subpastas com o nome do artista, álbum ou gênero valem para as músicas que combinam. Em *GIFs desta* dá para escolher GIFs do celular ou buscar na web.
+
+### Downloads e podcasts
+- **Baixar do YouTube** (também pelo *Compartilhar* do Android, "Baixar MP3"): baixa o áudio em M4A sem converter, com capa, em segundo plano e com fila que continua depois.
+- **Podcasts**: episódios agrupados por programa e por tema, imagem por programa, e resumo do episódio por IA (botão *Resumo*).
+
+### Opções
+- **Armazenamento**: pizza "deitada" estilo Propriedades do disco do XP com o espaço de GIFs, fotos e capas. Tem um teto (padrão 1 GB) e **Limpar agora**. A limpeza automática apaga GIFs que nenhuma música usa e, passando do teto, os GIFs automáticos das músicas ouvidas há mais tempo. Nunca apaga favoritas, a que está tocando ou GIFs escolhidos por você.
+- **Internet**: *Trabalhar off-line*, *Só no Wi-Fi* e uma caixa para cada serviço (GIFs, fotos, capas, letras, gênero/artista/álbum, resumo por IA). O modo aparece na barra de status de cada tela, como a zona do Internet Explorer. O YouTube e o que você pede na hora sempre funcionam.
+- **Reprodução**: tempo da transição entre músicas e outras preferências de tocar.
+
+## Serviços on-line usados
+MusicBrainz e Cover Art Archive (artista, álbum, capas), Last.fm (tags e gênero), Deezer (fotos de artista), LRCLIB (letras), nekos.best, GIPHY, Openverse e Wikimedia (GIFs), YouTube via yt-dlp (downloads) e Gemini/Mistral (resumo e temas de podcast). Todos podem ser desligados na aba Internet, menos o YouTube.
+
+As chaves `LASTFM_KEY`, `GIPHY_KEY`, `GEMINI_KEY` e `MISTRAL_KEY` ficam nos *secrets* do GitHub e entram no APK na hora do build.
+
+## Desenvolvimento
+
 1. Instale o [Flutter](https://docs.flutter.dev/get-started/install) e o [Android Studio](https://developer.android.com/studio).
-2. No Android Studio, crie um celular virtual em *Device Manager*.
-3. Nesta pasta: `flutter pub get` e depois `flutter run`. Com o emulador aberto, o app abre nele; com o celular ligado por USB (depuração USB ativada), abre no celular. Salvar um arquivo atualiza o app na hora (*hot reload*).
-4. Para colocar músicas no emulador, arraste os arquivos para a janela dele (vão para `Download/`).
+2. `flutter pub get` e depois `flutter run` (com emulador aberto ou celular ligado por USB com depuração ativada).
+3. `flutter test` roda os testes; `flutter analyze` precisa sair limpo (o build do GitHub falha até com avisos).
 
-### Testes automáticos
-`flutter test` roda os testes do organizador (MusicBrainz simulado, mover e desfazer), da biblioteca, dos GIFs e da recomendação.
+Cada push na `main` gera um APK novo em *Releases* (`.github/workflows/apk.yml`).
 
-## Estrutura
+### Onde fica cada coisa
 
 | Arquivo | O que faz |
 | --- | --- |
-| `lib/organizer.dart` | Botão "Buscar novas músicas": identifica artista/álbum e move os arquivos |
-| `lib/library_scanner.dart` | Varre a pasta e atualiza o banco |
+| `lib/app_state.dart` | Estado do app: biblioteca, buscas automáticas, limpeza |
+| `lib/player_service.dart`, `lib/crossfade.dart` | Fila, mix automático e transição entre músicas |
+| `lib/recommender.dart`, `lib/styles.dart`, `lib/mood.dart` | Parecença entre músicas, estilos, réguas e clima |
+| `lib/organizer.dart`, `lib/library_scanner.dart` | Organizar e varrer a pasta de músicas |
+| `lib/gif_fetcher.dart`, `lib/gif_providers.dart`, `lib/gif_service.dart` | Escolha, download e acervo de GIFs |
+| `lib/storage_service.dart` | Espaço usado, teto e limpeza |
+| `lib/net_policy.dart` | Modo off-line, Só Wi-Fi e serviços ligados |
+| `lib/download_service.dart`, `lib/ytdlp.dart` | Download do YouTube em segundo plano |
+| `lib/podcasts.dart`, `lib/podcast_info.dart` | Podcasts, temas e resumo |
 | `lib/db.dart` | Banco SQLite: faixas, playlists, histórico, GIFs fixados |
-| `lib/player_service.dart` | Fila e reprodução (just_audio), registra o histórico |
-| `lib/gif_service.dart` | Acervo local de GIFs e combinação com as músicas |
-| `lib/gif_fetcher.dart`, `lib/gif_providers.dart` | Busca e download automático de GIFs (Openverse, Wikimedia) |
-| `lib/recommender.dart` | Recomendação offline |
-| `lib/theme.dart` | Visual anos 2000: janelas Luna do XP, relevo 3D do Win98, visor LCD, barra do WMP 9, listas do Explorer |
-| `lib/xp_icons.dart` | Ícones coloridos estilo Windows 98/XP (SVG) |
-| `lib/thumbnails.dart` | Miniaturas de álbuns/artistas (capa ou GIF mais usado) e índice A–Z |
+| `lib/theme.dart`, `lib/xp_icons.dart`, `lib/widgets.dart` | Visual do XP e peças da interface |
 | `lib/screens/` | As telas |
 
 ## Fontes
 - `fonts/tahoma.ttf`, `fonts/tahomabd.ttf`: "Wine Tahoma" do projeto Wine (LGPL 2.1), parecida com a Tahoma do XP.
 - `fonts/VT323-Regular.ttf`: VT323 (SIL Open Font License, ver `fonts/VT323-OFL.txt`), usada no visor LCD.
-
-## Próximos passos
-- Receber GIFs pelo "Compartilhar" do Android (ex.: direto do Pinterest).
-- Temas de moldura iPod e Walkman.

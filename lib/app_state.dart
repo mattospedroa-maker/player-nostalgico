@@ -919,7 +919,8 @@ class AppState extends ChangeNotifier {
   Map<String, String> _artistGenres() {
     try {
       return (jsonDecode(prefs.getString('artistGenres') ?? '{}') as Map).map((k, v) => MapEntry('$k', '$v'));
-    } catch (_) {
+    } catch (e) {
+      errorLog.info('Biblioteca', 'Gêneros guardados por artista ilegíveis; vão ser buscados de novo', e);
       return {};
     }
   }
