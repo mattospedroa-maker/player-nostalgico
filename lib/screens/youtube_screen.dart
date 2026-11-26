@@ -15,7 +15,10 @@ import '../xp_icons.dart';
 class YoutubeScreen extends StatefulWidget {
   /// Link que veio do menu "Compartilhar": já entra no campo certo (vídeo ou playlist) e busca.
   final String? sharedLink;
-  const YoutubeScreen({super.key, this.sharedLink});
+
+  /// Busca por nome ("Artista Título"): procura o primeiro vídeo no YouTube e mostra para baixar.
+  final String? search;
+  const YoutubeScreen({super.key, this.sharedLink, this.search});
 
   @override
   State<YoutubeScreen> createState() => _YoutubeScreenState();
@@ -41,6 +44,14 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
     context.read<DownloadService>().warmUp();
     final shared = widget.sharedLink;
     if (shared != null) WidgetsBinding.instance.addPostFrameCallback((_) => _openShared(shared));
+    final search = widget.search;
+    if (search != null && search.trim().isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _videoLink.text = 'ytsearch1:${search.trim()}';
+        _search(playlist: false);
+      });
+    }
   }
 
   /// Playlist vai para o campo Playlist; vídeo (ou vídeo aberto dentro de uma playlist) vai para o campo Vídeo,
