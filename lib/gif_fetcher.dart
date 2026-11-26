@@ -392,6 +392,20 @@ class GifFetcher {
 
   /// Cenas tiradas da letra (LRCLIB, senão lyrics.ovh), com cache em `GIFs/.lyrics.json`.
   /// A letra não é mostrada nem gravada: só as cenas. Falhou sem internet = não tenta por 10 min. Nunca lança erro.
+  /// Cenas da letra já guardadas (sem internet e sem esperar). null = nunca procurou.
+  List<LyricScene>? cachedLyricScenes(Track t) {
+    final mem = lyricScenes[t.id];
+    if (mem != null) return mem;
+    final root = gifs.gifRoot;
+    if (root == null) return null;
+    if (_lyricsRoot != root) {
+      _lyricsCache = LyricsCache(File(p.join(root, '.lyrics.json')));
+      _lyricsRoot = root;
+    }
+    final (title, artist) = namesFor(t);
+    return _lyricsCache?.get(artist, title);
+  }
+
   /// [online] false: só o que já está no cache.
   Future<List<LyricScene>> lyricScenesFor(Track t, {bool online = true}) async {
     if (!useLyrics) return const [];

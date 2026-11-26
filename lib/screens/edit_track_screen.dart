@@ -13,6 +13,7 @@ import '../organizer.dart';
 import '../style_learning.dart';
 import '../styles.dart';
 import '../theme.dart';
+import '../track_sheet.dart';
 import '../widgets.dart';
 import '../xp_icons.dart';
 import 'now_playing_screen.dart' show showGifManager;
@@ -191,14 +192,15 @@ class _EditTrackScreenState extends State<EditTrackScreen> {
         child: SafeArea(
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             XpTitleBar(title: 'Propriedades de $name', icon: XpIcons.doc, actions: [XpTitleButton(icon: Icons.close, tooltip: 'Fechar', onTap: () => Navigator.pop(context))]),
-            XpTabs(labels: const ['Geral', 'Estilo', 'Arquivo', 'GIFs'], current: _tab, onTap: (i) => setState(() => _tab = i)),
+            XpTabs(labels: const ['Geral', 'Estilo', 'Momentos', 'Arquivo', 'GIFs'], current: _tab, onTap: (i) => setState(() => _tab = i)),
             Expanded(
               child: XpTabPage(
                 padding: EdgeInsets.zero,
                 child: ListView(padding: const EdgeInsets.all(10), children: switch (_tab) {
                   0 => _general(name, rel),
                   1 => _styleTab(),
-                  2 => _file(name, rel),
+                  2 => _momentsTab(),
+                  3 => _file(name, rel),
                   _ => _gifTab(),
                 }),
               ),
@@ -490,6 +492,107 @@ class _EditTrackScreenState extends State<EditTrackScreen> {
                 style: TextStyle(fontSize: 12.5, color: Color(0xFF666666))),
         ]),
       ),
+    ];
+  }
+
+  // ---------- aba "Momentos" (a ficha da música) ----------
+
+  Future<void> _editScenes(Track t, {String? add, String? remove}) async {
+    final app = context.read<AppState>();
+    final e = app.trackFacts.edits(t);
+    final added = {...e.added}, removed = {...e.removed};
+    if (add != null) {
+      added.add(add);
+      removed.remove(add);
+    }
+    if (remove != null) {
+      if (!added.remove(remove)) removed.add(remove);
+    }
+    await app.setSceneEdits(t, StyleEdits(added, removed));
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _pickScene(Track t, Set<String> have) async {
+    final chosen = await showDialog<String>(
+      context: context,
+      builder: (ctx) => XpAlertDialog(
+        icon: XpIcons.note,
+        title: const Text('Adicionar cena'),
+        content: SizedBox(
+          width: 300,
+          height: 360,
+          child: ListView(children: [
+            for (final s in sceneCatalog)
+              if (!have.contains(s.key))
+                ListTile(dense: true, title: Text('${s.emoji} ${s.label}', style: const TextStyle(fontSize: 14)), onTap: () => Navigator.pop(ctx, s.key)),
+          ]),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar'))],
+      ),
+    );
+    if (chosen != null && mounted) await _editScenes(t, add: chosen);
+  }
+
+  bool _askingAi = false;
+
+  Widget _group(String title, String source, List<String> items, {String empty = 'Ainda nada.'}) => XpGroupBox(
+        title: title,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          if (items.isEmpty)
+            Text(empty, style: const TextStyle(fontSize: 12.5, color: Color(0xFF666666)))
+          else
+            Wrap(children: [for (final i in items) _chip(i)]),
+          Text(source, style: const TextStyle(fontSize: 11, color: Color(0xFF888888))),
+        ]),
+      );
+
+  List<Widget> _momentsTab() {
+    final app = context.watch<AppState>();
+    final t = app.byId(widget.track.id) ?? widget.track;
+    final sheet = TrackSheet.of(t);
+    final have = sheet.sceneKeys.toSet();
+    final aiMissing = !sheet.aiRead;
+    return [
+      XpGroupBox(
+        title: 'Cenas que combinam',
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Wrap(children: [
+            for (final (s, _) in sheet.scenes) _chip('${s.emoji} ${s.label}', onRemove: () => _editScenes(t, remove: s.key)),
+            if (sheet.scenes.length < TrackSheet.maxScenes) _chip('＋ cena', dashed: true, onTap: () => _pickScene(t, have)),
+          ]),
+          Text(
+            sheet.scenes.isEmpty
+                ? 'Ainda sem cenas: chegam sozinhas com as tags, a letra e a IA. Você também pode pôr à mão.'
+                : 'Automáticas pelos estilos, réguas, tags, letra${sheet.aiRead ? ' e IA' : ''}. As que você tira não voltam.',
+            style: const TextStyle(fontSize: 11.5, color: Color(0xFF666666)),
+          ),
+        ]),
+      ),
+      _group('Do que a letra fala', sheet.aiRead ? 'pela IA' : 'pela letra (cenas usadas nos GIFs)', sheet.topics),
+      _group('Som marcante', 'pela IA', sheet.sound, empty: aiMissing ? 'Chega quando a IA ler esta música.' : 'A IA não destacou nada.'),
+      _group('Parece trilha de', 'pela IA', sheet.like, empty: aiMissing ? 'Chega quando a IA ler esta música.' : 'A IA não lembrou de nada.'),
+      _group('Quando você costuma ouvir', 'aprendido com o que você ouve até o fim', sheet.habits,
+          empty: 'Ainda pouco ouvida para saber (precisa de umas 3 vezes).'),
+      _group('Época e origem', sheet.aiRead ? 'ano do arquivo + IA' : 'ano do arquivo', sheet.origin),
+      if (aiMissing && app.geminiKey.isNotEmpty)
+        Align(
+          alignment: Alignment.centerLeft,
+          child: XpButton(
+            label: _askingAi || app.fillingFacts ? 'A IA está lendo…' : 'Pedir à IA agora',
+            xpIcon: XpIcons.find,
+            onTap: _askingAi || app.fillingFacts
+                ? null
+                : () async {
+                    setState(() => _askingAi = true);
+                    final n = await app.fillTrackFacts(only: [t]);
+                    if (!mounted) return;
+                    setState(() => _askingAi = false);
+                    if (n == 0) {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('A IA não respondeu agora. Veja a internet e tente mais tarde.')));
+                    }
+                  },
+          ),
+        ),
     ];
   }
 

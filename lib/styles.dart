@@ -1,5 +1,6 @@
 import 'lastfm.dart' show MusicTag;
 import 'models.dart';
+import 'track_sheet.dart' show TrackSheet;
 
 /// Um estilo da lista fixa do app: nome bonito, como ele aparece nas tags, família, vizinhos
 /// e onde ele costuma ficar nas réguas de energia (calma 0 → agitada 100) e humor (sombrio 0 → alegre 100).
@@ -216,6 +217,7 @@ class Styles {
     _cache = Expando();
     _vibeCache = Expando();
     _soundCache = Expando();
+    TrackSheet.invalidate(); // a ficha (cenas) usa estilos, réguas e tags
   }
 
   /// Tags que não dizem nada do som (gosto pessoal, ocasião), ignoradas na comparação.
