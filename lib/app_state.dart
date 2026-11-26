@@ -39,6 +39,7 @@ import 'organizer.dart';
 import 'play_stats.dart';
 import 'player_service.dart';
 import 'audiobooks.dart';
+import 'author_photos.dart';
 import 'book_service.dart';
 import 'podcast_info.dart';
 import 'podcasts.dart';
@@ -136,6 +137,10 @@ class AppState extends ChangeNotifier {
     allowAi: () => net.allows(NetFeature.ai),
     fetchInfo: (url) => downloads.ytdlp.info(url, playlist: false),
   );
+
+  /// Foto de cada autor de audiolivro (Wikipedia, guardada em Audiolivros/.autores/).
+  late final AuthorPhotoService authorPhotos =
+      AuthorPhotoService(client: gifFetcher.client, root: () => sourceRoot, allowNet: () => net.allows(NetFeature.photos));
 
   /// Livro mudou de lugar: informações, texto, ilustrações e o id do YouTube vão junto.
   void _bookMoved(String from, String to) {
