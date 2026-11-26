@@ -401,6 +401,42 @@ void main() {
       expect(pageForFraction(pages, ch.length, .5), inInclusiveRange(1, pages.length - 2));
     });
 
+    test('letra do Android maior: mede com ela e cada página cabe inteira', () {
+      final ch = BookChapter('Introdução', [for (var i = 0; i < 6; i++) 'Parágrafo $i ${'palavra ' * 40}'.trim()]);
+      PageSpec spec(double scale) => PageSpec(
+            size: const Size(320, 300),
+            body: const TextStyle(fontSize: 14, height: 1.4),
+            title: const TextStyle(fontSize: 12),
+            padding: const EdgeInsets.all(10),
+            artHeight: 100,
+            scaler: TextScaler.linear(scale),
+          );
+      final normal = paginate(0, ch, spec(1), hasArt: true);
+      final big = paginate(0, ch, spec(1.4), hasArt: true);
+      expect(big.length, greaterThan(normal.length));
+      // altura de cada página medida como a tela desenha (com a escala) nunca passa do espaço
+      final sp = spec(1.4);
+      for (final pg in big) {
+        var used = pg.first ? 100 + sp.gap + 30 : 0.0;
+        for (final sg in pg.segs) {
+          final tp = TextPainter(
+              text: TextSpan(text: (sg.start == 0 ? '  ' : '') + ch.paragraphs[sg.para].substring(sg.start, sg.end), style: sp.body),
+              textDirection: TextDirection.ltr,
+              textAlign: TextAlign.justify,
+              textScaler: sp.scaler)
+            ..layout(maxWidth: sp.width);
+          used += tp.height + sp.gap;
+          tp.dispose();
+        }
+        expect(used - sp.gap, lessThanOrEqualTo(sp.height + 30));
+      }
+      // ilustração enorme que não deixa nem uma linha: o texto vai para a página seguinte, não é despejado inteiro
+      final full = PageSpec(size: const Size(320, 300), body: const TextStyle(fontSize: 14), title: const TextStyle(fontSize: 12), padding: const EdgeInsets.all(10), artHeight: 250);
+      final pages = paginate(0, ch, full, hasArt: true);
+      expect(pages.first.segs, isEmpty);
+      expect(pages.length, greaterThan(2));
+    });
+
     test('tempo digitado no ajuste do capítulo', () {
       expect(parseClock('1:02:10'), const Duration(hours: 1, minutes: 2, seconds: 10));
       expect(parseClock('12:05'), const Duration(minutes: 12, seconds: 5));

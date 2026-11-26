@@ -148,18 +148,29 @@ class PageSpec {
 
   /// Espaço da ilustração no topo da 1ª página do capítulo (0 = sem).
   final double artHeight;
-  const PageSpec({required this.size, required this.body, required this.title, required this.padding, this.artHeight = 0});
+
+  /// Tamanho de letra do Android (Configurações > Tela > Tamanho da fonte). As páginas são medidas com ele,
+  /// igual ao texto desenhado; sem isso, com a letra do celular maior, o texto passava do fim da página.
+  final TextScaler scaler;
+  const PageSpec({required this.size, required this.body, required this.title, required this.padding, this.artHeight = 0, this.scaler = TextScaler.noScaling});
 
   double get width => size.width - padding.horizontal;
-  double get height => size.height - padding.vertical - footer;
+  // 2 px de folga para arredondamentos entre a medida e o desenho
+  double get height => size.height - padding.vertical - footer - 2;
   double get footer => (body.fontSize ?? 14) * 1.4;
   double get gap => (body.fontSize ?? 14) * .45;
 
   @override
   bool operator ==(Object other) =>
-      other is PageSpec && other.size == size && other.body == body && other.title == title && other.padding == padding && other.artHeight == artHeight;
+      other is PageSpec &&
+      other.size == size &&
+      other.body == body &&
+      other.title == title &&
+      other.padding == padding &&
+      other.artHeight == artHeight &&
+      other.scaler == scaler;
   @override
-  int get hashCode => Object.hash(size, body, title, padding, artHeight);
+  int get hashCode => Object.hash(size, body, title, padding, artHeight, scaler);
 }
 
 const _indent = '  ';
@@ -174,7 +185,8 @@ List<BookPage> paginate(int chapterIndex, BookChapter ch, PageSpec spec, {bool h
   var chars = 0, pageStart = 0;
   // cabeçalho da 1ª página: título do capítulo e ilustração
   if (ch.title.isNotEmpty) {
-    final tp = TextPainter(text: TextSpan(text: ch.title, style: spec.title), textDirection: TextDirection.ltr, textAlign: TextAlign.center)..layout(maxWidth: w);
+    final tp = TextPainter(text: TextSpan(text: ch.title, style: spec.title), textDirection: TextDirection.ltr, textAlign: TextAlign.center, textScaler: spec.scaler)
+      ..layout(maxWidth: w);
     used += tp.height + spec.gap * 2;
     tp.dispose();
   }
@@ -191,7 +203,8 @@ List<BookPage> paginate(int chapterIndex, BookChapter ch, PageSpec spec, {bool h
     var start = 0;
     while (start < text.length) {
       final piece = (start == 0 ? _indent : '') + text.substring(start);
-      final tp = TextPainter(text: TextSpan(text: piece, style: spec.body), textDirection: TextDirection.ltr, textAlign: TextAlign.justify)..layout(maxWidth: w);
+      final tp = TextPainter(text: TextSpan(text: piece, style: spec.body), textDirection: TextDirection.ltr, textAlign: TextAlign.justify, textScaler: spec.scaler)
+        ..layout(maxWidth: w);
       final room = h - used;
       if (tp.height <= room) {
         segs.add(PageSeg(i, start, text.length));
@@ -211,6 +224,11 @@ List<BookPage> paginate(int chapterIndex, BookChapter ch, PageSpec spec, {bool h
       }
       if (fit == 0) {
         tp.dispose();
+        if (segs.isEmpty && used > 0) {
+          // título e ilustração encheram a 1ª página: o texto começa na próxima (nunca some do fim da página)
+          newPage();
+          continue;
+        }
         if (segs.isEmpty) {
           // nem uma linha cabe numa página vazia (tela minúscula): põe assim mesmo para não travar
           segs.add(PageSeg(i, start, text.length));
@@ -222,7 +240,9 @@ List<BookPage> paginate(int chapterIndex, BookChapter ch, PageSpec spec, {bool h
         continue;
       }
       final lastLine = lines[fit - 1];
-      final pos = tp.getPositionForOffset(Offset(w - 1, lastLine.baseline - lastLine.ascent / 2 + (y - lastLine.height)));
+      // baseline já é contada do topo do parágrafo (somar a altura das linhas de cima pulava para uma linha
+      // mais embaixo, e o fim da página saía cortado)
+      final pos = tp.getPositionForOffset(Offset(w - 1, lastLine.baseline - lastLine.ascent / 2));
       final endInPiece = tp.getLineBoundary(pos).end;
       tp.dispose();
       final prefix = start == 0 ? _indent.length : 0;
@@ -272,7 +292,7 @@ class PageView extends StatelessWidget {
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               if (page.first && chapter.title.isNotEmpty) ...[
                 SizedBox(height: spec.gap),
-                Text(chapter.title, textAlign: TextAlign.center, style: spec.title),
+                Text(chapter.title, textAlign: TextAlign.center, style: spec.title, textScaler: spec.scaler),
                 SizedBox(height: spec.gap),
               ],
               if (page.first && art != null) ...[
@@ -288,6 +308,7 @@ class PageView extends StatelessWidget {
                   (s.start == 0 ? _indent : '') + chapter.paragraphs[s.para].substring(s.start, s.end),
                   textAlign: TextAlign.justify,
                   style: spec.body,
+                  textScaler: spec.scaler,
                 ),
                 SizedBox(height: spec.gap),
               ],
@@ -756,6 +777,7 @@ class _BookReaderState extends State<BookReader> {
             title: TextStyle(fontSize: fs * .85, letterSpacing: 1.2, color: look.faint, fontFamily: look.family, fontWeight: FontWeight.w600, decoration: TextDecoration.none),
             padding: compact ? const EdgeInsets.fromLTRB(14, 8, 14, 2) : const EdgeInsets.fromLTRB(22, 14, 22, 4),
             artHeight: box.biggest.height * (compact ? .34 : .36),
+            scaler: MediaQuery.textScalerOf(context),
           );
           if (spec != _spec) {
             final hadSpec = _spec != null;
