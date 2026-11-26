@@ -2,12 +2,18 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'artist_names.dart';
+<<<<<<< HEAD
 import 'experience_ai.dart';
+=======
+>>>>>>> 6975244986c5c8a7b6324eb77efc31f8f10b277e
 import 'models.dart';
 import 'play_stats.dart';
 import 'styles.dart';
 import 'track_sheet.dart';
+<<<<<<< HEAD
 import 'visual_tags.dart' show VisualTagMapper;
+=======
+>>>>>>> 6975244986c5c8a7b6324eb77efc31f8f10b277e
 
 /// Receita de uma playlist do momento: nome, ícone e as cenas que ela procura (com peso).
 class ExperienceRecipe {
@@ -15,6 +21,7 @@ class ExperienceRecipe {
   final String title;
   final String emoji;
   final Map<String, double> scenes;
+<<<<<<< HEAD
 
   /// Palavras procuradas no título, álbum, artista, tags e na ficha da IA (temas da IA e "Inventar").
   final List<String> words;
@@ -22,6 +29,9 @@ class ExperienceRecipe {
   /// Artistas que combinam com o tema (temas da IA).
   final List<String> artists;
   const ExperienceRecipe(this.id, this.title, this.emoji, this.scenes, {this.words = const [], this.artists = const []});
+=======
+  const ExperienceRecipe(this.id, this.title, this.emoji, this.scenes);
+>>>>>>> 6975244986c5c8a7b6324eb77efc31f8f10b277e
 }
 
 /// Cardápio fixo (off-line). Novas ideias entram aqui; a IA e as surpresas completam.
@@ -80,9 +90,12 @@ class Experience {
 
   /// Uma frase sobre de onde ela veio.
   final String why;
+<<<<<<< HEAD
 
   /// "Para completar": músicas que combinam com o tema e você ainda não tem ("Artista — Título").
   final List<String> missing;
+=======
+>>>>>>> 6975244986c5c8a7b6324eb77efc31f8f10b277e
   final int createdAt;
   final int expiresAt;
 
@@ -94,7 +107,10 @@ class Experience {
     required this.trackIds,
     this.reasons = const {},
     this.why = '',
+<<<<<<< HEAD
     this.missing = const [],
+=======
+>>>>>>> 6975244986c5c8a7b6324eb77efc31f8f10b277e
     required this.createdAt,
     required this.expiresAt,
   });
@@ -109,7 +125,10 @@ class Experience {
         'tracks': trackIds,
         'reasons': {for (final e in reasons.entries) '${e.key}': e.value},
         'why': why,
+<<<<<<< HEAD
         if (missing.isNotEmpty) 'missing': missing,
+=======
+>>>>>>> 6975244986c5c8a7b6324eb77efc31f8f10b277e
         'created': createdAt,
         'expires': expiresAt,
       };
@@ -128,7 +147,10 @@ class Experience {
             if (int.tryParse('${e.key}') != null) int.parse('${e.key}'): '${e.value}'
         },
         why: '${j['why'] ?? ''}',
+<<<<<<< HEAD
         missing: [for (final m in (j['missing'] as List? ?? const [])) '$m'],
+=======
+>>>>>>> 6975244986c5c8a7b6324eb77efc31f8f10b277e
         createdAt: (j['created'] as num).toInt(),
         expiresAt: (j['expires'] as num).toInt(),
       );
@@ -186,6 +208,7 @@ class ExperienceEngine {
   static const recentMemory = 24;
   static const minHours = 40, maxHours = 70;
 
+<<<<<<< HEAD
   /// Temas da IA no ar ao mesmo tempo.
   static const maxAi = 2;
 
@@ -220,16 +243,24 @@ class ExperienceEngine {
         expiresAt: now + (minHours + random.nextInt(maxHours - minHours + 1)) * _hour);
   }
 
+=======
+>>>>>>> 6975244986c5c8a7b6324eb77efc31f8f10b277e
   static const _hour = 3600000;
 
   /// Músicas para uma receita, com a etiqueta do porquê. Vazio se não tiver músicas suficientes.
   static List<(Track, String)> pick(ExperienceRecipe r, List<Track> library,
+<<<<<<< HEAD
       {PlayStats stats = PlayStats.empty, Random? rnd, Sheet Function(Track)? sheetOf, AiFacts? Function(Track)? aiOf, int min = minTracks}) {
     final random = rnd ?? Random();
     final sheet = sheetOf ?? TrackSheet.of;
     final ai = aiOf ?? TrackSheet.aiOf;
     final wordRe = wordsRegex(r.words);
     final artists = {for (final a in r.artists) _norm(a)};
+=======
+      {PlayStats stats = PlayStats.empty, Random? rnd, Sheet Function(Track)? sheetOf}) {
+    final random = rnd ?? Random();
+    final sheet = sheetOf ?? TrackSheet.of;
+>>>>>>> 6975244986c5c8a7b6324eb77efc31f8f10b277e
     final scored = <(Track, double, String)>[];
     for (final t in library) {
       if (t.id == null) continue;
@@ -245,6 +276,7 @@ class ExperienceEngine {
           label = '${s.emoji} ${s.label}';
         }
       }
+<<<<<<< HEAD
       if (artists.isNotEmpty && artists.contains(_norm(ArtistNames.current.main(t.artist)))) {
         score += 1.5;
         if (best < 1.5) {
@@ -265,6 +297,8 @@ class ExperienceEngine {
           }
         }
       }
+=======
+>>>>>>> 6975244986c5c8a7b6324eb77efc31f8f10b277e
       if (score < TrackSheet.minScore) continue;
       // muito pulada pesa menos
       final plays = stats.count(t.id), skips = stats.skipCount(t.id);
@@ -272,7 +306,11 @@ class ExperienceEngine {
       score *= .85 + random.nextDouble() * .3; // um pouco de sorte: cada vez sai uma lista diferente
       scored.add((t, score, label));
     }
+<<<<<<< HEAD
     if (scored.length < min) return const [];
+=======
+    if (scored.length < minTracks) return const [];
+>>>>>>> 6975244986c5c8a7b6324eb77efc31f8f10b277e
     scored.sort((a, b) => b.$2.compareTo(a.$2));
     final perArtist = <String, int>{};
     final names = ArtistNames.current;
@@ -284,6 +322,7 @@ class ExperienceEngine {
       out.add((t, label));
       if (out.length >= maxTracks) break;
     }
+<<<<<<< HEAD
     return out.length < min ? const [] : out;
   }
 
@@ -294,6 +333,9 @@ class ExperienceEngine {
     final ws = [for (final w in words) if (_norm(w).trim().length >= 3) RegExp.escape(_norm(w).trim())];
     if (ws.isEmpty) return null;
     return RegExp('(^|[^a-z0-9])(${ws.join('|')})(\$|[^a-z0-9])');
+=======
+    return out.length < minTracks ? const [] : out;
+>>>>>>> 6975244986c5c8a7b6324eb77efc31f8f10b277e
   }
 
   /// Surpresas tiradas da sua biblioteca: um artista esquecido, uma década, um estilo raro, um ano.
@@ -360,12 +402,16 @@ class ExperienceEngine {
   /// Tira as vencidas (e as que perderam músicas demais) e cria novas até ter [target] no ar.
   /// [libraryIds]: ids que ainda existem. Devolve o estado novo (o mesmo objeto se nada mudou).
   static ExperienceState refresh(ExperienceState state, List<Track> library,
+<<<<<<< HEAD
       {PlayStats stats = PlayStats.empty,
       int? nowMs,
       Random? rnd,
       Sheet Function(Track)? sheetOf,
       AiFacts? Function(Track)? aiOf,
       List<AiTheme> aiThemes = const []}) {
+=======
+      {PlayStats stats = PlayStats.empty, int? nowMs, Random? rnd, Sheet Function(Track)? sheetOf}) {
+>>>>>>> 6975244986c5c8a7b6324eb77efc31f8f10b277e
     final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
     final random = rnd ?? Random();
     final ids = {for (final t in library) t.id};
@@ -385,7 +431,11 @@ class ExperienceEngine {
         changed = true;
         active.add(Experience(
             id: e.id, title: e.title, emoji: e.emoji, kind: e.kind, trackIds: kept, reasons: e.reasons, why: e.why,
+<<<<<<< HEAD
             missing: e.missing, createdAt: e.createdAt, expiresAt: e.expiresAt));
+=======
+            createdAt: e.createdAt, expiresAt: e.expiresAt));
+>>>>>>> 6975244986c5c8a7b6324eb77efc31f8f10b277e
       } else {
         active.add(e);
       }
@@ -413,6 +463,7 @@ class ExperienceEngine {
         changed = true;
       }
     }
+<<<<<<< HEAD
     // temas da IA da semana (no máximo [maxAi] no ar, cada um uma vez só)
     var aiOn = active.where((e) => e.kind == 'ia').length;
     for (final th in aiThemes) {
@@ -430,6 +481,8 @@ class ExperienceEngine {
           missing: missingFrom(th.missing, library), createdAt: now, expiresAt: expiry()));
       aiOn++;
     }
+=======
+>>>>>>> 6975244986c5c8a7b6324eb77efc31f8f10b277e
     // cardápio, em ordem sorteada, pulando as usadas há pouco; se faltar, a 2ª volta aceita as recentes
     final menu = [...experienceMenu]..shuffle(random);
     final tried = <String>{};
@@ -442,7 +495,11 @@ class ExperienceEngine {
       }
       if (second && !recent.contains(r.id)) continue; // já tentada e sem músicas suficientes
       tried.add(r.id);
+<<<<<<< HEAD
       final tracks = pick(r, library, stats: stats, rnd: random, sheetOf: sheetOf, aiOf: aiOf);
+=======
+      final tracks = pick(r, library, stats: stats, rnd: random, sheetOf: sheetOf);
+>>>>>>> 6975244986c5c8a7b6324eb77efc31f8f10b277e
       if (tracks.isEmpty) continue;
       final top = r.scenes.keys.map((k) => TrackSheet.sceneByKey[k]?.label).whereType<String>().take(2).join(' e ');
       active.add(Experience(
