@@ -1,11 +1,13 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show setEquals;
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
 import '../app_version.dart';
 import '../crossfade.dart';
+import '../net_policy.dart';
 import '../player_service.dart';
 import '../storage_service.dart';
 import '../theme.dart';
@@ -16,7 +18,10 @@ import '../xp_icons.dart';
 class OptionsScreen extends StatefulWidget {
   /// Só para testes; no app vem o PlayerService.
   final CrossfadeSettings? settings;
-  const OptionsScreen({super.key, this.settings});
+
+  /// Aba que abre primeiro (0 Reprodução, 1 Armazenamento, 2 Internet).
+  final int initialTab;
+  const OptionsScreen({super.key, this.settings, this.initialTab = 0});
 
   @override
   State<OptionsScreen> createState() => _OptionsScreenState();
@@ -27,10 +32,14 @@ class _OptionsScreenState extends State<OptionsScreen> {
   late bool _on;
   late int _out;
   late int _in;
-  int _tab = 0;
+  late int _tab = widget.initialTab;
 
   /// Teto escolhido na aba Armazenamento (null = não mexeu).
   int? _cap;
+
+  /// Escolhas da aba Internet (null = não mexeu).
+  NetMode? _netMode;
+  Set<NetFeature>? _netOff;
 
   @override
   void initState() {
@@ -54,12 +63,23 @@ class _OptionsScreenState extends State<OptionsScreen> {
 
   bool get _capChanged => _cap != null && _cap != context.read<AppState>().storageCapMb;
 
-  bool get _changed => _on != _ps.crossfade || _out != _ps.fadeOut.inSeconds || _in != _ps.fadeIn.inSeconds || _capChanged;
+  bool get _netChanged {
+    if (_netMode == null && _netOff == null) return false;
+    final net = context.read<AppState>().net;
+    return (_netMode ?? net.mode) != net.mode || !setEquals(_netOff ?? net.disabled, net.disabled);
+  }
+
+  bool get _changed =>
+      _on != _ps.crossfade || _out != _ps.fadeOut.inSeconds || _in != _ps.fadeIn.inSeconds || _capChanged || _netChanged;
 
   void _apply() {
     _ps.setCrossfadeTimes(Duration(seconds: _out), Duration(seconds: _in));
     _ps.setCrossfade(_on);
     if (_capChanged) context.read<AppState>().setStorageCapMb(_cap!);
+    if (_netChanged) {
+      final net = context.read<AppState>().net;
+      net.set(_netMode ?? net.mode, _netOff ?? net.disabled);
+    }
     setState(() {});
   }
 
@@ -81,12 +101,21 @@ class _OptionsScreenState extends State<OptionsScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      XpTabs(labels: const ['Reprodução', 'Armazenamento'], current: _tab, onTap: (i) => setState(() => _tab = i)),
+                      XpTabs(labels: const ['Reprodução', 'Armazenamento', 'Internet'], current: _tab, onTap: (i) => setState(() => _tab = i)),
                       Expanded(
                         child: XpTabPage(
-                          child: _tab == 0
-                              ? ListView(padding: EdgeInsets.zero, children: [_fadeGroup(), _previewGroup()])
-                              : StorageTab(cap: _cap, onCap: (mb) => setState(() => _cap = mb)),
+                          child: switch (_tab) {
+                            0 => ListView(padding: EdgeInsets.zero, children: [_fadeGroup(), _previewGroup()]),
+                            1 => StorageTab(cap: _cap, onCap: (mb) => setState(() => _cap = mb)),
+                            _ => InternetTab(
+                                mode: _netMode,
+                                off: _netOff,
+                                onChanged: (m, off) => setState(() {
+                                  _netMode = m;
+                                  _netOff = off;
+                                }),
+                              ),
+                          },
                         ),
                       ),
                       Padding(
@@ -113,7 +142,7 @@ class _OptionsScreenState extends State<OptionsScreen> {
                   ),
                 ),
               ),
-              const XpStatusBar(['Nostalgic MPlayer', 'Versão $appVersion']),
+              const XpStatusBar(['Nostalgic MPlayer', 'Versão $appVersion'], showNet: false),
             ],
           ),
         ),
@@ -591,4 +620,64 @@ class DiskPiePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(DiskPiePainter old) => old.values.join() != values.join();
+}
+
+/// Aba "Internet": trabalhar off-line, só no Wi-Fi e o que o app pode buscar sozinho.
+class InternetTab extends StatelessWidget {
+  /// Escolhas ainda não aplicadas (null = as salvas).
+  final NetMode? mode;
+  final Set<NetFeature>? off;
+  final void Function(NetMode mode, Set<NetFeature> off) onChanged;
+
+  /// Só para testes; no app vem do AppState.
+  final NetPolicy? policy;
+  const InternetTab({super.key, this.mode, this.off, required this.onChanged, this.policy});
+
+  @override
+  Widget build(BuildContext context) {
+    final net = policy ?? context.watch<AppState>().net;
+    final m = mode ?? net.mode;
+    final disabled = off ?? net.disabled;
+    const small = TextStyle(fontSize: 12, color: Color(0xFF555555));
+    Widget box(Key key, String label, bool value, ValueChanged<bool> change, {bool enabled = true}) => CheckboxListTile(
+          key: key,
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          visualDensity: VisualDensity.compact,
+          controlAffinity: ListTileControlAffinity.leading,
+          value: value,
+          onChanged: enabled ? (v) => change(v ?? false) : null,
+          title: Text(label, style: TextStyle(fontSize: 14, color: enabled ? Colors.black : const Color(0xFF999999))),
+        );
+    final offline = m == NetMode.offline;
+    return ListView(padding: EdgeInsets.zero, children: [
+      XpGroupBox(
+        title: 'Conexão',
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          box(const Key('net-offline'), 'Trabalhar off-line (nada usa a internet)', offline,
+              (v) => onChanged(v ? NetMode.offline : NetMode.online, disabled)),
+          box(const Key('net-wifi'), 'Só usar a internet no Wi-Fi', m == NetMode.wifiOnly,
+              (v) => onChanged(v ? NetMode.wifiOnly : NetMode.online, disabled), enabled: !offline),
+          if (m == NetMode.wifiOnly)
+            Padding(
+              padding: const EdgeInsets.only(left: 4, top: 2),
+              child: Text(net.onWifi ? 'Agora: no Wi-Fi, a internet está liberada.' : 'Agora: nos dados móveis, o app espera o Wi-Fi.', style: small),
+            ),
+        ]),
+      ),
+      XpGroupBox(
+        title: 'O que pode buscar sozinho',
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          for (final f in NetFeature.values)
+            box(Key('net-${f.name}'), f.label, !disabled.contains(f), (v) => onChanged(m, v ? ({...disabled}..remove(f)) : {...disabled, f}),
+                enabled: !offline),
+          const SizedBox(height: 4),
+          const Text(
+            'O que você pede na hora sempre funciona: baixar do YouTube, "Preencher pelo MusicBrainz" no Editar e o botão Resumo dos podcasts.',
+            style: small,
+          ),
+        ]),
+      ),
+    ]);
+  }
 }

@@ -64,6 +64,9 @@ class GifFetcher {
   /// Ler a letra para tirar as cenas (desligável nos testes).
   bool useLyrics = true;
 
+  /// A aba Internet deixa buscar letras agora? (sem: só as que já estão no cache)
+  bool Function()? allowLyrics;
+
   /// Últimas cenas da letra por música (a letra mesmo nunca é guardada).
   final Map<int?, List<LyricScene>> lyricScenes = {};
   LyricsCache? _lyricsCache;
@@ -400,7 +403,7 @@ class GifFetcher {
     }
     final cached = _lyricsCache?.get(artist, title);
     if (cached != null) return lyricScenes[t.id] = cached;
-    if (!online) return const [];
+    if (!online || allowLyrics?.call() == false) return const [];
     final key = LyricsCache.keyFor(artist, title);
     final failed = _lyricsFailedAt[key];
     if (failed != null && DateTime.now().difference(failed) < const Duration(minutes: 10)) return const [];
