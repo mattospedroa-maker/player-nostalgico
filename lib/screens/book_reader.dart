@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import '../app_state.dart';
 import '../audiobooks.dart';
 import '../models.dart';
+import '../book_service.dart';
 import '../book_text.dart';
 import '../player_service.dart';
 import '../podcasts.dart' show formatClock;
@@ -594,10 +595,31 @@ class _BookReaderState extends State<BookReader> {
   BookInfo? _matchedFor;
   DateTime _lastFollow = DateTime(2000);
 
+  late final BookService _books = context.read<AppState>().bookService;
+
   @override
   void initState() {
     super.initState();
+    _books.addListener(_onBooks);
     _load();
+  }
+
+  /// O texto mudou (a transcrição ganhou mais um pedaço arrumado pelo Gemini): troca sem perder o lugar.
+  void _onBooks() {
+    if (!mounted || _loading) return;
+    final t = _books.textIfLoaded(widget.track.path);
+    if (t == null || identical(t, _text)) return;
+    setState(() {
+      _text = t;
+      _pages.clear();
+      _matchedFor = null;
+      if (_chapter >= t.chapters.length) {
+        _chapter = 0;
+        _page = 0;
+      }
+      if (_spec != null) _page = _page.clamp(0, math.max(0, _pagesOf(_chapter).length - 1));
+    });
+    if (_following) _follow(context.read<PlayerService>().player.position, jump: true);
   }
 
   Future<void> _load() async {
@@ -626,6 +648,7 @@ class _BookReaderState extends State<BookReader> {
 
   @override
   void dispose() {
+    _books.removeListener(_onBooks);
     _sub?.cancel();
     super.dispose();
   }

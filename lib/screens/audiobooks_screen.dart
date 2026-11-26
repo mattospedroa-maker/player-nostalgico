@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../app_state.dart';
 import '../audiobooks.dart';
+import '../book_service.dart' show BookService;
 import '../book_text.dart' show EpubException;
 import '../library_search.dart' show normalizeText;
 import '../main.dart' show HomeShell;
@@ -161,7 +162,7 @@ class BookScreen extends StatelessWidget {
     final pos = playingThis ? ps.player.position : (at ?? Duration.zero);
     final curIndex = info.chapters.isEmpty ? -1 : info.chapterIndexAt(pos);
     final textLine = switch (info.textStatus) {
-      TextStatus.ok => '📄 Texto da obra: ${info.textSource}',
+      TextStatus.ok => '📄 Texto da obra: ${info.textSource}${_polishLine(app, t)}',
       TextStatus.none => '📄 Texto da obra: ainda não procurado',
       final s => '📄 ${s.label}',
     };
@@ -347,15 +348,23 @@ Duration? parseClock(String s) {
   return Duration(seconds: secs);
 }
 
+/// " · arrumando 3/20" enquanto o Gemini pontua a transcrição.
+String _polishLine(AppState app, Track t) {
+  final pr = app.bookService.polishProgress(t.path);
+  return pr == null || pr.$1 >= pr.$2 ? '' : ' · arrumando ${pr.$1}/${pr.$2}';
+}
+
 /// Menu do texto da obra: procurar de novo, anexar EPUB, tirar o texto.
 Future<void> showBookTextMenu(BuildContext context, Track t, {Offset? at}) {
   final app = context.read<AppState>();
   final info = app.bookInfoOf(t);
   return showXpContextMenu(context, header: 'Texto da obra', at: at, items: [
-    XpMenuEntry('Procurar no Gutenberg / Wikisource', () async {
+    XpMenuEntry('Procurar texto (livre ou transcrição do vídeo)', () async {
       _say('Procurando "${info.title}"…');
       final r = await app.bookService.fetchText(t.path, manual: true);
+      final fromVideo = app.bookInfoOf(t).textSource == BookService.transcriptSource;
       _say(switch (r) {
+        TextStatus.ok when fromVideo => 'Usei a transcrição do vídeo. O Gemini vai arrumando a pontuação aos poucos.',
         TextStatus.ok => 'Texto da obra baixado.',
         TextStatus.notFound => 'Não achei esse livro em domínio público. Dá para anexar um EPUB.',
         _ => 'Não deu para baixar o texto agora. Tente mais tarde.',

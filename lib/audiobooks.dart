@@ -35,6 +35,9 @@ String bookInfoPath(String audioPath) => '${p.withoutExtension(audioPath)}.livro
 /// Texto da obra já lido do EPUB: "Livro.m4a" -> "Livro.texto.json".
 String bookTextPath(String audioPath) => '${p.withoutExtension(audioPath)}.texto.json';
 
+/// Legenda do vídeo guardada para o texto feito pela transcrição: "Livro.m4a" -> "Livro.transcricao.json".
+String transcriptPath(String audioPath) => '${p.withoutExtension(audioPath)}.transcricao.json';
+
 /// Pasta das ilustrações do livro: "Livro.m4a" -> ".Livro.ilustracoes/" (escondida, ao lado do áudio).
 String bookArtDir(String audioPath) => p.join(p.dirname(audioPath), '.${p.basenameWithoutExtension(audioPath)}.ilustracoes');
 
@@ -358,6 +361,12 @@ class BookInfo {
   /// As ilustrações já foram procuradas (para não repetir o pedido à IA toda vez).
   final bool artDone;
 
+  /// Língua da narração (do YouTube: "pt", "en"...). O texto livre só vale direto se for nessa língua.
+  final String language;
+
+  /// Versão da busca do texto que já rodou (busca nova → tenta de novo os livros sem texto ou com texto em outra língua).
+  final int searchVersion;
+
   const BookInfo({
     this.videoId = '',
     this.url = '',
@@ -370,6 +379,8 @@ class BookInfo {
     this.art = const {},
     this.artCredit = const {},
     this.artDone = false,
+    this.language = '',
+    this.searchVersion = 0,
   });
 
   /// Índice do capítulo tocando em [pos] (-1 = sem capítulos).
@@ -398,6 +409,8 @@ class BookInfo {
     Map<int, String>? art,
     Map<int, String>? artCredit,
     bool? artDone,
+    String? language,
+    int? searchVersion,
   }) =>
       BookInfo(
         videoId: videoId,
@@ -411,6 +424,8 @@ class BookInfo {
         art: art ?? this.art,
         artCredit: artCredit ?? this.artCredit,
         artDone: artDone ?? this.artDone,
+        language: language ?? this.language,
+        searchVersion: searchVersion ?? this.searchVersion,
       );
 
   Map<String, Object?> toJson() => {
@@ -426,6 +441,8 @@ class BookInfo {
         'ilustracoes': {for (final e in art.entries) '${e.key}': e.value},
         'creditos': {for (final e in artCredit.entries) '${e.key}': e.value},
         'ilustracoesFeitas': artDone,
+        'lingua': language,
+        'busca': searchVersion,
       };
 
   static BookInfo fromJson(Map<String, dynamic> m) {
@@ -445,6 +462,8 @@ class BookInfo {
       art: ints(m['ilustracoes']),
       artCredit: ints(m['creditos']),
       artDone: m['ilustracoesFeitas'] == true,
+      language: '${m['lingua'] ?? ''}',
+      searchVersion: (m['busca'] as num?)?.toInt() ?? 0,
     );
   }
 

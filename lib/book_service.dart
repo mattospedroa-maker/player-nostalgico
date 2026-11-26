@@ -11,7 +11,7 @@ import 'audiobooks.dart';
 import 'book_text.dart';
 import 'error_log.dart';
 import 'library_search.dart' show normalizeText;
-import 'podcast_info.dart' show Chapter, GeminiClient, captionUrl;
+import 'podcast_info.dart' show Chapter, GeminiClient, GeminiException, captionUrl;
 
 /// Cuida das partes dos audiolivros que vêm da internet: capítulos (na hora do download), o texto da obra
 /// (Projeto Gutenberg → Wikisource, ou um EPUB que você anexa) e uma ilustração antiga por capítulo.
@@ -26,9 +26,25 @@ class BookService extends ChangeNotifier {
   /// Pode usar a IA agora?
   bool Function() allowAi;
 
-  BookService({required this.client, required this.geminiKey, bool Function()? allowNet, bool Function()? allowAi})
+  /// Informações completas do vídeo (yt-dlp -J), para pegar a legenda de um livro baixado antes.
+  Future<Map<String, dynamic>> Function(String url)? fetchInfo;
+
+  BookService({required this.client, required this.geminiKey, bool Function()? allowNet, bool Function()? allowAi, this.fetchInfo})
       : allowNet = allowNet ?? (() => true),
         allowAi = allowAi ?? (() => true);
+
+  /// Busca do texto atual: livros procurados por uma busca mais velha (sem texto, ou com texto em outra
+  /// língua) tentam de novo sozinhos. 2 = transcrição do vídeo.
+  static const searchVersion = 2;
+
+  /// Legenda lida na hora do download (por id do vídeo), para o texto pela transcrição não baixar de novo.
+  final Map<String, List<(int, String)>> _captionCache = {};
+  final Map<String, Uri> _captionUrlCache = {};
+  final Set<String> _polishing = {};
+
+  /// Pedaços da transcrição já arrumados / total (para mostrar o andamento).
+  final Map<String, (int, int)> _progress = {};
+  (int, int)? polishProgress(String path) => _progress[path];
 
   static const _ua = {'User-Agent': 'NostalgicMPlayer/1.0 (app pessoal de audiolivros offline)'};
 
@@ -76,7 +92,7 @@ class BookService extends ChangeNotifier {
 
   /// O livro mudou de lugar: informações, texto e ilustrações vão junto.
   void moved(String from, String to) {
-    for (final (a, b) in [(bookInfoPath(from), bookInfoPath(to)), (bookTextPath(from), bookTextPath(to))]) {
+    for (final (a, b) in [(bookInfoPath(from), bookInfoPath(to)), (bookTextPath(from), bookTextPath(to)), (transcriptPath(from), transcriptPath(to))]) {
       try {
         if (File(a).existsSync()) File(a).renameSync(b);
       } catch (e) {
@@ -103,7 +119,9 @@ class BookService extends ChangeNotifier {
     final c = list[index];
     list[index] = Chapter(startMs: start?.inMilliseconds ?? c.startMs, title: title ?? c.title, summary: c.summary, visual: c.visual);
     list.sort((a, b) => a.startMs.compareTo(b.startMs));
-    await save(path, info.copyWith(chapters: list, chapterSource: ChapterSource.manual));
+    final fixed = info.copyWith(chapters: list, chapterSource: ChapterSource.manual);
+    await save(path, fixed);
+    await _rebuildFromTranscript(path, fixed); // texto da transcrição: capítulos do texto seguem os do áudio
   }
 
   // ---------------------------------------------------------------------------
@@ -118,7 +136,10 @@ class BookService extends ChangeNotifier {
       url: '${yt['webpage_url'] ?? (id.isEmpty ? '' : 'https://www.youtube.com/watch?v=$id')}',
       title: title,
       author: author,
+      language: '${yt['language'] ?? ''}'.split('-').first.toLowerCase(),
     );
+    final capUrl = captionUrl(yt);
+    if (capUrl != null && id.isNotEmpty) _captionUrlCache[id] = capUrl;
     var (chapters, source) = detectChapters(yt);
     if (chapters.isNotEmpty) return info.copyWith(chapters: chapters, chapterSource: source);
     // legenda automática: procura "capítulo N" falado
@@ -132,6 +153,7 @@ class BookService extends ChangeNotifier {
     } catch (e) {
       errorLog.info('Audiolivros', 'Não deu para ler a legenda do livro "$title"', e);
     }
+    if (captions.isNotEmpty && id.isNotEmpty) _captionCache[id] = captions;
     (chapters, source) = detectChapters(yt, captions: captions);
     if (chapters.isNotEmpty) return info.copyWith(chapters: chapters, chapterSource: source);
     // por último, o Gemini lê a transcrição
@@ -151,24 +173,33 @@ class BookService extends ChangeNotifier {
   // ---------------------------------------------------------------------------
   // Texto da obra
 
-  /// Procura e baixa o texto da obra (sozinho, depois do download, ou pelo botão "Procurar texto").
+  /// Procura o texto da obra (sozinho, depois do download, ou pelo botão "Procurar texto"), nesta ordem:
+  /// 1. texto livre na língua da narração (Gutenberg/Wikisource);
+  /// 2. a transcrição do próprio vídeo (legenda automática; o Gemini arruma a pontuação aos poucos);
+  /// 3. texto livre em outra língua (inglês, quase sempre).
   /// [manual]: pedido por você (vale mesmo com a busca automática desligada na aba Internet).
   Future<TextStatus> fetchText(String path, {bool manual = false}) async {
     final info = infoFor(path) ?? const BookInfo();
-    if (!manual && (!allowNet() || info.textStatus == TextStatus.notFound)) return info.textStatus;
+    if (!manual && (!allowNet() || (info.textStatus == TextStatus.notFound && info.searchVersion >= searchVersion))) return info.textStatus;
     if (!_working.add(path)) return TextStatus.searching;
     await save(path, info.copyWith(textStatus: TextStatus.searching));
     try {
       final title = info.title, author = info.author;
-      final found = await _findEpub(title, author);
+      final lang = info.language.isEmpty ? 'pt' : info.language;
+      var found = title.trim().isEmpty ? null : await _findEpub(title, author, lang: lang);
       if (found == null) {
-        await save(path, info.copyWith(textStatus: TextStatus.notFound));
+        if (await _fromTranscript(path, info)) return TextStatus.ok;
+        found = title.trim().isEmpty ? null : await _findEpub(title, author);
+      }
+      if (found == null) {
+        await save(path, info.copyWith(textStatus: TextStatus.notFound, searchVersion: searchVersion));
         return TextStatus.notFound;
       }
-      final text = await Isolate.run(() => parseEpub(found.$1));
+      final text = await Isolate.run(() => parseEpub(found!.$1));
       await text.save(path);
       _text[path] = text;
-      await save(path, info.copyWith(textStatus: TextStatus.ok, textSource: found.$2));
+      _deleteTranscript(path);
+      await save(path, info.copyWith(textStatus: TextStatus.ok, textSource: found.$2, searchVersion: searchVersion));
       unawaited(fetchArt(path));
       return TextStatus.ok;
     } catch (e) {
@@ -181,12 +212,149 @@ class BookService extends ChangeNotifier {
     }
   }
 
+  /// Vale procurar o texto de novo sozinho? (busca nunca feita, falhou, ou feita por uma versão mais velha
+  /// que não achou nada ou só achou em outra língua)
+  bool shouldSearchText(BookInfo info) =>
+      info.textStatus == TextStatus.none ||
+      info.textStatus == TextStatus.failed ||
+      info.textStatus == TextStatus.searching ||
+      (info.searchVersion < searchVersion &&
+          (info.textStatus == TextStatus.notFound || (info.textStatus == TextStatus.ok && info.textSource.contains('(em '))));
+
+  // ---------------------------------------------------------------------------
+  // Texto pela transcrição do vídeo
+
+  static const transcriptSource = 'Transcrição do vídeo (legenda automática)';
+
+  /// Monta o texto pela legenda do vídeo. Falso se o vídeo não tem legenda que dê para ler.
+  Future<bool> _fromTranscript(String path, BookInfo info) async {
+    final segs = await _captions(info);
+    if (segs.length < 30) return false;
+    final tr = Transcript(segs);
+    await tr.save(path);
+    _progress[path] = (0, tr.chunks);
+    final fresh = (infoFor(path) ?? info).copyWith(textStatus: TextStatus.ok, textSource: transcriptSource, searchVersion: searchVersion);
+    final text = tr.toBook(title: fresh.title, author: fresh.author, audio: fresh.chapters);
+    await text.save(path);
+    _text[path] = text;
+    await save(path, fresh);
+    unawaited(polish(path));
+    unawaited(fetchArt(path));
+    return true;
+  }
+
+  /// Legenda do vídeo: a lida no download, ou pede de novo ao YouTube (o endereço da legenda vence em horas).
+  Future<List<(int, String)>> _captions(BookInfo info) async {
+    final cached = _captionCache.remove(info.videoId);
+    if (cached != null && cached.isNotEmpty) return cached;
+    final fetch = fetchInfo;
+    final url = info.url.isNotEmpty ? info.url : (info.videoId.isEmpty ? '' : 'https://www.youtube.com/watch?v=${info.videoId}');
+    try {
+      // endereço guardado no download (vale por algumas horas); senão pergunta de novo ao YouTube
+      final capUrl = _captionUrlCache.remove(info.videoId) ?? (fetch == null || url.isEmpty ? null : captionUrl(await fetch(url)));
+      if (capUrl == null) return const [];
+      final r = await client.get(capUrl, headers: _ua).timeout(const Duration(seconds: 60));
+      if (r.statusCode != 200) return const [];
+      return parseCaptions(utf8.decode(r.bodyBytes, allowMalformed: true));
+    } catch (e) {
+      errorLog.info('Audiolivros', 'Não deu para ler a legenda do vídeo de "${info.title}"', e);
+      return const [];
+    }
+  }
+
+  /// Ainda tem pedaço da transcrição para o Gemini arrumar?
+  bool needsPolish(String path) {
+    final info = infoFor(path);
+    if (info == null || info.textSource != transcriptSource) return false;
+    final tr = Transcript.read(path);
+    if (tr != null) _progress[path] = (tr.done, tr.chunks);
+    return tr != null && !tr.finished;
+  }
+
+  /// O Gemini arruma a transcrição pedaço por pedaço (~12 min de leitura cada), mantendo os tempos.
+  /// Cada pedaço pronto já aparece no leitor. Parou (sem internet, limite do dia)? Continua na próxima vez.
+  Future<void> polish(String path) async {
+    final key = geminiKey().trim();
+    if (key.isEmpty || !allowAi() || !_polishing.add(path)) return;
+    try {
+      var tr = await Isolate.run(() => Transcript.read(path));
+      while (tr != null && !tr.finished) {
+        final info = infoFor(path);
+        if (info == null || info.textSource != transcriptSource || !allowAi()) return;
+        final from = tr.done * Transcript.chunk;
+        final segs = tr.segs.sublist(from, (from + Transcript.chunk).clamp(0, tr.segs.length));
+        List<(int, String)>? pars;
+        for (var attempt = 0; attempt < 2 && pars == null; attempt++) {
+          try {
+            final ai = await GeminiClient(client, key).generateJson(polishPrompt(title: info.title, author: info.author, segs: segs, firstIndex: from));
+            pars = polishedFromAi(ai, segs, from);
+          } on GeminiException catch (e) {
+            // limite, sem internet ou demora: para e continua depois. Recusa/resposta vazia (o Gemini às vezes
+            // recusa repetir texto de livro): conta como resposta ruim desse pedaço.
+            if (e.quota || e.message.contains('conexão') || e.message.contains('demorou') || e.message.contains('inválida') || e.message.contains('respondeu 5')) rethrow;
+          }
+        }
+        // duas respostas ruins: esse pedaço fica como estava (pelas pausas) e segue para o próximo
+        pars ??= roughParagraphs(segs);
+        tr = Transcript(tr.segs, polished: [...tr.polished, ...pars], done: tr.done + 1);
+        await tr.save(path);
+        _progress[path] = (tr.done, tr.chunks);
+        final text = tr.toBook(title: info.title, author: info.author, audio: info.chapters);
+        await text.save(path);
+        _text[path] = text;
+        notifyListeners();
+        if (!tr.finished) await Future<void>.delayed(const Duration(seconds: 4)); // sem estourar o limite por minuto
+      }
+    } on GeminiException catch (e) {
+      errorLog.info('Audiolivros', e.quota ? 'Limite do Gemini: a arrumação do texto continua depois' : 'O Gemini não arrumou o texto agora', e);
+    } catch (e) {
+      errorLog.info('Audiolivros', 'A arrumação do texto parou (continua depois)', e);
+    } finally {
+      _polishing.remove(path);
+    }
+  }
+
+  Future<void> _rebuildFromTranscript(String path, BookInfo info) async {
+    if (info.textSource != transcriptSource) return;
+    final tr = Transcript.read(path);
+    if (tr == null) return;
+    final text = tr.toBook(title: info.title, author: info.author, audio: info.chapters);
+    await text.save(path);
+    _text[path] = text;
+    notifyListeners();
+  }
+
+  /// O livro foi apagado: leva junto informações, texto, transcrição e ilustrações.
+  void deleteFiles(String path) {
+    for (final f in [bookInfoPath(path), bookTextPath(path), transcriptPath(path)]) {
+      try {
+        if (File(f).existsSync()) File(f).deleteSync();
+      } catch (_) {}
+    }
+    try {
+      final d = Directory(bookArtDir(path));
+      if (d.existsSync()) d.deleteSync(recursive: true);
+    } catch (_) {}
+    _info.remove(path);
+    _text.remove(path);
+    _progress.remove(path);
+  }
+
+  void _deleteTranscript(String path) {
+    _progress.remove(path);
+    try {
+      final f = File(transcriptPath(path));
+      if (f.existsSync()) f.deleteSync();
+    } catch (_) {}
+  }
+
   /// Usa um EPUB escolhido no celular.
   Future<void> attachEpub(String path, String epubPath) async {
     final bytes = await File(epubPath).readAsBytes();
     final text = await Isolate.run(() => parseEpub(bytes));
     await text.save(path);
     _text[path] = text;
+    _deleteTranscript(path);
     final info = infoFor(path) ?? const BookInfo();
     await save(path, info.copyWith(textStatus: TextStatus.ok, textSource: 'EPUB anexado (${p.basename(epubPath)})', artDone: false));
     unawaited(fetchArt(path));
@@ -198,28 +366,26 @@ class BookService extends ChangeNotifier {
       final f = File(bookTextPath(path));
       if (f.existsSync()) f.deleteSync();
     } catch (_) {}
+    _deleteTranscript(path);
     _text[path] = null;
     final info = infoFor(path) ?? const BookInfo();
     await save(path, info.copyWith(textStatus: TextStatus.none, textSource: ''));
   }
 
   /// Gutenberg (EPUB pronto, sem imagens) → Wikisource (EPUB gerado pelo ws-export). (bytes, de onde veio)
-  /// Não achou com o nome em português? O Gemini diz o nome da obra em inglês (e o autor na grafia do Gutenberg)
-  /// e tenta de novo: traduções em português de obras russas/alemãs quase sempre ainda têm direitos autorais,
-  /// então o texto livre costuma estar em inglês.
-  Future<(Uint8List, String)?> _findEpub(String title, String author) async {
-    if (title.trim().isEmpty) return null;
+  /// [lang]: só texto nessa língua. Sem [lang]: qualquer língua; se não achar pelo nome em português, o Gemini diz
+  /// o nome da obra em inglês (e o autor na grafia do Gutenberg) e tenta de novo.
+  Future<(Uint8List, String)?> _findEpub(String title, String author, {String? lang}) async {
+    if (lang != null) {
+      return await _gutenberg(title, author, lang: lang) ?? await _wikisource(title, author, lang);
+    }
     final g = await _gutenberg(title, author);
     if (g != null) return g;
-    for (final lang in ['pt', 'en']) {
-      final w = await _wikisource(title, author, lang);
-      if (w != null) return w;
-    }
+    final w = await _wikisource(title, author, 'en');
+    if (w != null) return w;
     final other = await _identify(title, author);
     if (other == null) return null;
-    final g2 = await _gutenberg(other.title, other.author);
-    if (g2 != null) return g2;
-    return _wikisource(other.title, other.author, 'en');
+    return await _gutenberg(other.title, other.author) ?? await _wikisource(other.title, other.author, 'en');
   }
 
   /// Nome da obra e do autor em inglês, pelo Gemini (uma pergunta curta, só quando a busca normal falhou).
@@ -249,14 +415,14 @@ Responda só com JSON: {"titulo_en": "White Nights", "autor_en": "Fyodor Dostoye
     return t.isEmpty ? null : (title: t, author: a);
   }
 
-  Future<(Uint8List, String)?> _gutenberg(String title, String author) async {
+  Future<(Uint8List, String)?> _gutenberg(String title, String author, {String? lang}) async {
     try {
       // o autor em várias grafias ("Dostoiévski" → dostoyevsky, dostoevsky) e, por último, só o título
       final queries = <String>{for (final v in surnameVariants(author).take(3)) '$title $v', title};
       for (final q in queries) {
         final r = await client.get(Uri.https('gutendex.com', '/books', {'search': q.trim()}), headers: _ua).timeout(const Duration(seconds: 30));
         if (r.statusCode != 200) continue;
-        final best = pickGutenberg(jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>, title, author);
+        final best = pickGutenberg(jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>, title, author, lang: lang);
         if (best == null) continue;
         final epub =
             await client.get(Uri.parse('https://www.gutenberg.org/ebooks/${best.id}.epub.noimages'), headers: _ua).timeout(const Duration(minutes: 2));
@@ -315,7 +481,7 @@ Responda só com JSON: {"titulo_en": "White Nights", "autor_en": "Fyodor Dostoye
   /// Escolhe o livro certo na resposta do Gutendex: título parecido (e autor, quando conhecido, em qualquer grafia);
   /// prefere português.
   @visibleForTesting
-  static ({int id, String lang})? pickGutenberg(Map<String, dynamic> json, String title, String author) {
+  static ({int id, String lang})? pickGutenberg(Map<String, dynamic> json, String title, String author, {String? lang}) {
     ({int id, String lang})? best;
     var bestScore = 0.0;
     final names = author == unknownAuthor ? const <String>[] : surnameVariants(author);
@@ -330,6 +496,7 @@ Responda só com JSON: {"titulo_en": "White Nights", "autor_en": "Fyodor Dostoye
       if (score < .6) continue;
       if (names.isNotEmpty) score += names.any(authors.contains) ? .3 : -.4;
       final langs = [for (final l in (b['languages'] as List?) ?? const []) '$l'];
+      if (lang != null && !langs.contains(lang)) continue;
       if (langs.contains('pt')) score += .1;
       if (score > bestScore) {
         bestScore = score;

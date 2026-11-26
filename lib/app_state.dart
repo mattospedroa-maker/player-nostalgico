@@ -134,6 +134,7 @@ class AppState extends ChangeNotifier {
     geminiKey: () => geminiKey,
     allowNet: () => net.allows(NetFeature.books),
     allowAi: () => net.allows(NetFeature.ai),
+    fetchInfo: (url) => downloads.ytdlp.info(url, playlist: false),
   );
 
   /// Livro mudou de lugar: informações, texto, ilustrações e o id do YouTube vão junto.
@@ -160,11 +161,12 @@ class AppState extends ChangeNotifier {
         await bookService.save(t.path, info);
       }
       if (!net.allows(NetFeature.books)) return;
-      if (info.textStatus == TextStatus.none || info.textStatus == TextStatus.failed || info.textStatus == TextStatus.searching) {
+      if (bookService.shouldSearchText(info)) {
         await bookService.fetchText(t.path);
-      } else if (!info.artDone) {
-        await bookService.fetchArt(t.path);
+        return;
       }
+      if (bookService.needsPolish(t.path)) unawaited(bookService.polish(t.path));
+      if (!info.artDone) await bookService.fetchArt(t.path);
     }());
   }
 
@@ -1307,6 +1309,7 @@ class AppState extends ChangeNotifier {
       return false;
     }
     await db.deleteTrack(t.id!);
+    if (isAudiobook(t)) bookService.deleteFiles(t.path);
     final root = sourceRoot;
     if (root != null) removeEmptyParents(root, [t.path]);
     await reload();

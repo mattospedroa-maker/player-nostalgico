@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:flutter/painting.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
 import 'package:player_nostalgico/audiobooks.dart';
 import 'package:player_nostalgico/book_service.dart';
 import 'package:player_nostalgico/book_text.dart';
@@ -405,4 +406,125 @@ void main() {
       expect(parseClock('abc'), isNull);
     });
   });
+
+  group('texto pela transcrição do vídeo', () {
+    // legenda de audiolivro: um trecho a cada ~3 s, sem pontuação
+    List<(int, String)> segs(int n, {int every = 3000, int startMs = 0}) =>
+        [for (var i = 0; i < n; i++) (startMs + i * every, 'palavra um dois três quatro cinco seis sete oito número $i')];
+
+    test('parágrafos pelas pausas, com maiúscula, ponto e tempo de início', () {
+      final s = [
+        (0, 'era uma vez'),
+        (2000, 'um sonhador em são petersburgo'),
+        (4000, '[Música]'),
+        (60000, 'outra noite chegou'), // pausa longa só conta com parágrafo comprido; aqui segue junto
+      ];
+      final p = roughParagraphs(s);
+      expect(p.length, 1);
+      expect(p.first.$1, 0);
+      expect(p.first.$2, startsWith('Era uma vez um sonhador'));
+      expect(p.first.$2, isNot(contains('Música')));
+      expect(p.first.$2, endsWith('.'));
+      final long = roughParagraphs(segs(40)); // ~400 palavras: corta a cada ~120
+      expect(long.length, greaterThanOrEqualTo(3));
+      expect(long[1].$1, greaterThan(0));
+    });
+
+    test('divide pelos capítulos do áudio; sem capítulos, partes de 30 min', () {
+      final pars = [(0, 'A.'), (65000, 'B.'), (130000, 'C.')];
+      final c = splitByTime(pars, const [Chapter(startMs: 0, title: 'Primeira noite'), Chapter(startMs: 120000, title: 'Segunda noite')]);
+      expect(c.map((x) => x.title), ['Primeira noite', 'Segunda noite']);
+      expect(c[0].paragraphs, ['A.', 'B.']);
+      expect(c[1].times, [130000]);
+      final parts = splitByTime([(0, 'A.'), (2000000, 'B.')], const []);
+      expect(parts.map((x) => x.title), ['Parte 1', 'Parte 2']);
+      // capítulo do áudio começando depois do 1º parágrafo: o começo fica no 1º capítulo
+      expect(splitByTime([(0, 'Intro.'), (5000, 'X.')], const [Chapter(startMs: 3000, title: 'I')]).first.paragraphs, ['Intro.', 'X.']);
+    });
+
+    test('posição exata pelo tempo de cada parágrafo', () {
+      final text = BookText(chapters: [
+        BookChapter('I', const ['aaaa', 'bbbb'], const [0, 10000]),
+        BookChapter('II', const ['cccc'], const [20000]),
+      ]);
+      expect(text.timed, isTrue);
+      var at = textPosition(text: text, audio: const [], match: const [], pos: const Duration(seconds: 15), total: const Duration(seconds: 30));
+      expect(at.chapter, 0);
+      expect(at.fraction, closeTo((5 + 2) / 10, .01)); // 2º parágrafo, metade dele
+      at = textPosition(text: text, audio: const [], match: const [], pos: const Duration(seconds: 25), total: const Duration(seconds: 30));
+      expect(at.chapter, 1);
+      expect(at.fraction, closeTo(.4, .01));
+      // ida e volta no JSON mantém os tempos; EPUB (sem tempos) não grava nada a mais
+      final back = BookText.fromJson(jsonDecode(jsonEncode(text.toJson())) as Map<String, dynamic>);
+      expect(back.chapters[0].times, [0, 10000]);
+      expect(const BookChapter('x', ['y']).toJson().containsKey('ms'), isFalse);
+    });
+
+    test('resposta do Gemini: aceita pontuada, recusa resumo, ordem errada ou número fora do pedaço', () {
+      final s = [(1000, 'era uma vez um sonhador'), (4000, 'que morava sozinho'), (7000, 'em são petersburgo')];
+      final ok = polishedFromAi({
+        'p': [
+          {'i': 10, 't': 'Era uma vez um sonhador que morava sozinho'},
+          {'i': 12, 't': 'em São Petersburgo.'},
+        ],
+      }, s, 10)!;
+      expect(ok, [(1000, 'Era uma vez um sonhador que morava sozinho'), (7000, 'em São Petersburgo.')]);
+      expect(polishedFromAi({'p': [{'i': 10, 't': 'Um sonhador.'}]}, s, 10), isNull); // resumiu
+      expect(
+          polishedFromAi({
+            'p': [
+              {'i': 12, 't': 'em São Petersburgo era uma vez'},
+              {'i': 10, 't': 'um sonhador que morava sozinho.'},
+            ],
+          }, s, 10),
+          isNull);
+      expect(polishedFromAi({'p': [{'i': 99, 't': 'era uma vez um sonhador que morava sozinho em são petersburgo'}]}, s, 10), isNull);
+      expect(polishedFromAi('lixo', s, 10), isNull);
+      expect(polishPrompt(title: 'Noites Brancas', author: 'Dostoiévski', segs: s, firstIndex: 10), contains('[12] em são petersburgo'));
+    });
+
+    test('transcrição guardada: pedaços arrumados + resto pelas pausas', () {
+      final all = segs(Transcript.chunk + 20);
+      var tr = Transcript(all);
+      expect(tr.chunks, 2);
+      expect(tr.finished, isFalse);
+      tr = Transcript(all, polished: const [(0, 'Primeiro pedaço arrumado.')], done: 1);
+      final pars = tr.paragraphs();
+      expect(pars.first, (0, 'Primeiro pedaço arrumado.'));
+      expect(pars[1].$1, all[Transcript.chunk].$1); // o resto começa no 1º trecho do pedaço seguinte
+      final back = Transcript.fromJson(jsonDecode(jsonEncode(tr.toJson())) as Map<String, dynamic>);
+      expect(back.done, 1);
+      expect(back.segs.length, all.length);
+      final book = back.toBook(title: 'T', author: 'A', audio: const []);
+      expect(book.timed, isTrue);
+    });
+
+    test('ordem da busca: texto livre só na língua da narração primeiro; busca nova tenta de novo', () {
+      final json = {
+        'results': [
+          {
+            'id': 7,
+            'title': 'Noites Brancas',
+            'authors': [{'name': 'Dostoyevsky, Fyodor'}],
+            'languages': ['en'],
+            'formats': {'application/epub+zip': 'x'},
+          },
+        ],
+      };
+      expect(BookService.pickGutenberg(json, 'Noites Brancas', 'Dostoiévski', lang: 'pt'), isNull);
+      expect(BookService.pickGutenberg(json, 'Noites Brancas', 'Dostoiévski')?.id, 7);
+      final s = BookService(client: _NoNet(), geminiKey: () => '');
+      expect(s.shouldSearchText(const BookInfo(textStatus: TextStatus.notFound)), isTrue);
+      expect(s.shouldSearchText(const BookInfo(textStatus: TextStatus.notFound, searchVersion: BookService.searchVersion)), isFalse);
+      expect(s.shouldSearchText(const BookInfo(textStatus: TextStatus.ok, textSource: 'Projeto Gutenberg #1 (em inglês)')), isTrue);
+      expect(s.shouldSearchText(const BookInfo(textStatus: TextStatus.ok, textSource: 'Projeto Gutenberg #1')), isFalse);
+      final info = BookInfo.fromJson(jsonDecode(jsonEncode(const BookInfo(language: 'pt', searchVersion: 2).toJson())) as Map<String, dynamic>);
+      expect((info.language, info.searchVersion), ('pt', 2));
+    });
+  });
+}
+
+class _NoNet extends http.BaseClient {
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) => throw UnimplementedError();
 }
