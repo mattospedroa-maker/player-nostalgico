@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
+import '../experiences.dart';
 import '../list_search.dart';
 import '../main.dart';
 import '../models.dart';
@@ -20,10 +21,22 @@ class PlaylistsScreen extends StatefulWidget {
 }
 
 class _PlaylistsScreenState extends State<PlaylistsScreen> with InListSearch {
+  static const _grid = SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: .95);
+
+  @override
+  void initState() {
+    super.initState();
+    // tira as vencidas e põe novas no lugar (conta rápida, sem internet)
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) context.read<AppState>().refreshExperiences();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
     final shown = searching ? [for (final pl in app.playlists) if (textMatches(searchQuery, [pl.name])) pl] : app.playlists;
+    final exps = searching ? [for (final e in app.experiences) if (textMatches(searchQuery, [e.title])) e] : app.experiences;
     return Column(children: [
       XpTitleBar(title: 'Playlists', icon: XpIcons.list, actions: [searchButton()]),
       XpAddressBar(searchPath('Playlists')),
@@ -40,19 +53,223 @@ class _PlaylistsScreenState extends State<PlaylistsScreen> with InListSearch {
         ),
       ),
       Expanded(
-        child: app.playlists.isEmpty
+        child: app.playlists.isEmpty && exps.isEmpty
             ? const EmptyHint(Icons.queue_music, 'Nenhuma playlist ainda.\nSegure uma música para adicionar a uma playlist.')
-            : shown.isEmpty
+            : shown.isEmpty && exps.isEmpty
                 ? noMatches()
-                : GridView.builder(
-                    padding: const EdgeInsets.fromLTRB(10, 4, 10, 10),
-                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: .95),
-                    itemCount: shown.length,
-                    itemBuilder: (_, i) => _PlaylistCard(shown[i], highlight: searching ? searchQuery : null),
-                  ),
+                : CustomScrollView(slivers: [
+                    if (shown.isNotEmpty)
+                      SliverPadding(
+                        padding: const EdgeInsets.fromLTRB(10, 4, 10, 10),
+                        sliver: SliverGrid.builder(
+                          gridDelegate: _grid,
+                          itemCount: shown.length,
+                          itemBuilder: (_, i) => _PlaylistCard(shown[i], highlight: searching ? searchQuery : null),
+                        ),
+                      ),
+                    if (exps.isNotEmpty) ...[
+                      const SliverToBoxAdapter(child: _MomentBar()),
+                      SliverPadding(
+                        padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+                        sliver: SliverGrid.builder(
+                          gridDelegate: _grid,
+                          itemCount: exps.length,
+                          itemBuilder: (_, i) => _ExperienceCard(exps[i], highlight: searching ? searchQuery : null),
+                        ),
+                      ),
+                    ],
+                  ]),
       ),
-      XpStatusBar([searching ? '${shown.length} de ${app.playlists.length} playlists' : '${app.playlists.length} playlists']),
+      XpStatusBar([
+        searching
+            ? '${shown.length} de ${app.playlists.length} playlists'
+            : '${app.playlists.length} playlists${exps.isEmpty ? '' : ' · ${exps.length} do momento'}',
+      ]),
     ]);
+  }
+}
+
+/// Barra que separa as suas playlists das playlists do momento (igual à "Combina com esta playlist").
+class _MomentBar extends StatelessWidget {
+  const _MomentBar();
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0xFFDBE6FB), Color(0xFFC4D5F5)]),
+          border: Border(top: BorderSide(color: Color(0xFF6F95DD), width: 2)),
+        ),
+        child: const Row(children: [
+          Text('✨ Playlists do momento', style: TextStyle(color: Color(0xFF0B2F80), fontWeight: FontWeight.bold, fontSize: 13)),
+          Spacer(),
+          Text('trocam sozinhas', style: TextStyle(color: Color(0xFF334455), fontSize: 11)),
+        ]),
+      );
+}
+
+/// Selo escuro no canto da capa (⏳ tempo que falta) ou colorido (SURPRESA, IA).
+Widget _badge(String text, Color bg, Color fg) => Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(3)),
+      child: Text(text, style: TextStyle(color: fg, fontSize: 10.5, fontWeight: FontWeight.bold)),
+    );
+
+/// Mosaico de até 4 capas de álbuns diferentes (repete se tiver menos).
+Widget _mosaic(List<Track> ts, String seed) {
+  final seen = <String>{};
+  final covers = [for (final t in ts) if (seen.add('${t.artist}|${t.album}')) t].take(4).toList();
+  return GridView.count(
+    crossAxisCount: 2,
+    physics: const NeverScrollableScrollPhysics(),
+    padding: EdgeInsets.zero,
+    children: [
+      for (var i = 0; i < 4; i++)
+        covers.isEmpty ? Container(color: colorFor('$seed$i')) : LayoutBuilder(builder: (_, c) => CoverSquare(covers[i % covers.length], size: c.maxWidth)),
+    ],
+  );
+}
+
+class _ExperienceCard extends StatelessWidget {
+  final Experience e;
+  final String? highlight;
+  const _ExperienceCard(this.e, {this.highlight});
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.read<AppState>();
+    final ts = [for (final id in e.trackIds) ?app.byId(id)];
+    final left = e.expiresAt - DateTime.now().millisecondsSinceEpoch;
+    return InkWell(
+      onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => ExperienceScreen(id: e.id))),
+      child: Container(
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(color: Colors.white, border: Border.all(color: const Color(0xFFB8C4D8)), boxShadow: const [BoxShadow(color: Color(0xFFD6DBE5), offset: Offset(1, 1))]),
+        clipBehavior: Clip.antiAlias,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Expanded(
+            child: Stack(fit: StackFit.expand, children: [
+              _mosaic(ts, e.title),
+              Positioned(left: 4, top: 4, child: _badge('⏳ ${Experience.timeLeft(left)}', const Color(0xD906163F), const Color(0xFFFFD75A))),
+              if (e.kind == 'surpresa') Positioned(right: 4, top: 4, child: _badge('SURPRESA', Xp.gold, Colors.black)),
+              if (e.kind == 'ia') Positioned(right: 4, top: 4, child: _badge('IA', const Color(0xFF7B3FD1), Colors.white)),
+            ]),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 6, 8, 0),
+            child: Text.rich(
+              highlightSpan('${e.emoji} ${e.title}', highlight, const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+            child: Text('${ts.length} faixas · ${fmtTotal(ts)}', style: const TextStyle(fontSize: 11, color: Xp.blueMuted)),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+/// Dentro de uma playlist do momento: quanto falta para sumir, Tocar, Salvar e o porquê de cada música.
+class ExperienceScreen extends StatelessWidget {
+  final String id;
+  const ExperienceScreen({super.key, required this.id});
+
+  static String _when(int ms) {
+    final d = DateTime.fromMillisecondsSinceEpoch(ms);
+    const days = ['segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado', 'domingo'];
+    return '${days[d.weekday - 1]}, ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
+    final ps = context.read<PlayerService>();
+    final e = app.experienceById(id);
+    if (e == null) {
+      return Scaffold(
+        body: XpBackground(
+          child: SafeArea(
+            child: Column(children: [
+              XpTitleBar(title: 'Playlist do momento', icon: XpIcons.cassette, actions: [XpTitleButton(icon: Icons.close, tooltip: 'Fechar', onTap: () => Navigator.pop(context))]),
+              const Expanded(child: EmptyHint(Icons.hourglass_empty, 'Esta playlist do momento já saiu do ar.\nOutras entraram no lugar.')),
+            ]),
+          ),
+        ),
+      );
+    }
+    final ts = [for (final tid in e.trackIds) ?app.byId(tid)];
+    final left = e.expiresAt - DateTime.now().millisecondsSinceEpoch;
+    void play(int i) {
+      ps.playQueue(ts, start: i);
+      HomeShell.goTo(context, 0);
+    }
+
+    return Scaffold(
+      body: XpBackground(
+        child: SafeArea(
+          child: Column(children: [
+            XpTitleBar(title: '${e.emoji} ${e.title}', icon: XpIcons.cassette, actions: [XpTitleButton(icon: Icons.close, tooltip: 'Fechar', onTap: () => Navigator.pop(context))]),
+            XpAddressBar('Playlists\\Do momento\\${e.title}'),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+              decoration: const BoxDecoration(color: Color(0xFFFFF8DC), border: Border(bottom: BorderSide(color: Color(0xFFE0C070)))),
+              child: Text.rich(TextSpan(style: const TextStyle(fontSize: 12.5, color: Color(0xFF5A4400)), children: [
+                TextSpan(text: '⏳ Some em ${Experience.timeLeft(left)}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                TextSpan(text: ' (${_when(e.expiresAt)}). ${e.why}'),
+              ])),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(8),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                XpButton(label: 'Tocar playlist', xpIcon: XpIcons.play, primary: true, onTap: ts.isEmpty ? null : () => play(0)),
+                const SizedBox(height: 5),
+                XpButton(
+                  label: '💾 Salvar nas minhas playlists',
+                  onTap: () async {
+                    final nav = Navigator.of(context);
+                    final msg = ScaffoldMessenger.of(context);
+                    await app.saveExperience(e);
+                    nav.pop();
+                    msg.showSnackBar(SnackBar(content: Text('"${e.title}" agora é uma playlist sua e não some mais.')));
+                  },
+                ),
+                const SizedBox(height: 5),
+                QueueButtons(ts),
+              ]),
+            ),
+            Expanded(
+              child: ColoredBox(
+                color: Colors.white,
+                child: ListView.builder(
+                  itemCount: ts.length,
+                  itemBuilder: (_, i) => TrackTile(
+                    track: ts[i],
+                    subtitle: '${ts[i].artist} · ${fmtDuration(Duration(milliseconds: ts[i].durationMs))}',
+                    onTap: () => play(i),
+                    below: e.reasons[ts[i].id] == null
+                        ? null
+                        : Wrap(children: [
+                            Container(
+                              margin: const EdgeInsets.only(right: 4, top: 2),
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                              decoration: BoxDecoration(color: const Color(0xFFFFF4D6), borderRadius: BorderRadius.circular(8), border: Border.all(color: const Color(0xFFE8D29A))),
+                              child: Text(e.reasons[ts[i].id]!, style: const TextStyle(color: Color(0xFF7A5300), fontSize: 10.5)),
+                            ),
+                          ]),
+                  ),
+                ),
+              ),
+            ),
+            XpStatusBar(['${ts.length} faixas', fmtTotal(ts)]),
+          ]),
+        ),
+      ),
+    );
   }
 }
 
