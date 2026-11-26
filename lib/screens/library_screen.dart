@@ -17,6 +17,7 @@ import '../theme.dart';
 import '../xp_icons.dart';
 import '../widgets.dart';
 import '../duplicates.dart';
+import 'audiobooks_screen.dart';
 import 'duplicates_screen.dart';
 import 'organizer_screen.dart';
 import 'podcasts_screen.dart';
@@ -93,7 +94,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
     final app = context.watch<AppState>();
     final root = app.sourceRoot;
     final pods = app.libraryMedia == MediaKind.podcasts;
-    if (_searching && !pods) _updateResults(app);
+    final books = app.libraryMedia == MediaKind.audiobooks;
+    if (_searching && !pods && !books) _updateResults(app);
     return Column(
       children: [
         XpTitleBar(
@@ -118,10 +120,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
         ]),
         Builder(
           builder: (anchor) => XpAddressBar(
-            pods
+            books
+                ? (_query.isEmpty ? 'Audiolivros' : 'Audiolivros\\Busca: "$_query"')
+                : pods
                 ? (_query.isEmpty ? 'Podcasts' : 'Podcasts\\Busca: "$_query"')
                 : (_query.isEmpty ? (_searching ? 'Música\\Filtrar' : 'Música') : 'Música\\Busca: "$_query"'),
-            icon: pods ? XpIcons.mic : XpIcons.note,
+            icon: books ? XpIcons.book : (pods ? XpIcons.mic : XpIcons.note),
             onDrop: () => showMediaPicker(anchor),
           ),
         ),
@@ -132,7 +136,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
         XpStatusBar([
           app.scanning
               ? 'Lendo a pasta…'
-              : pods
+              : books
+                  ? '${app.audiobooks.length} ${app.audiobooks.length == 1 ? 'livro' : 'livros'}'
+                  : pods
                   ? '${app.podcasts.length} ${app.podcasts.length == 1 ? 'episódio' : 'episódios'}'
                   : (_searching ? '${_results.length} de ${app.tracks.length} músicas' : '${app.tracks.length} músicas'),
           if (root != null) p.basename(root),
@@ -169,10 +175,15 @@ class _LibraryScreenState extends State<LibraryScreen> {
   /// campo fora e criava outro: o foco se perdia e o teclado fechava.
   Widget _library(AppState app, String root) {
     final pods = app.libraryMedia == MediaKind.podcasts;
+    final books = app.libraryMedia == MediaKind.audiobooks;
     return Column(
       children: [
-        _searchField(pods),
-        Expanded(child: pods ? PodcastsHome(query: _query) : (_searching ? _resultsView(app) : _home(app, root))),
+        _searchField(pods || books),
+        Expanded(
+          child: books
+              ? AudiobooksHome(query: _query)
+              : (pods ? PodcastsHome(query: _query) : (_searching ? _resultsView(app) : _home(app, root))),
+        ),
       ],
     );
   }
@@ -283,7 +294,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
           prefixIcon: const Padding(padding: EdgeInsets.all(8), child: XpIcon(XpIcons.find, size: 18)),
           prefixIconConstraints: const BoxConstraints(minWidth: 34, minHeight: 34),
           suffixIcon: _searching || (pods && _query.isNotEmpty) ? IconButton(icon: const Icon(Icons.close, size: 18), tooltip: 'Limpar busca', onPressed: _clearAll) : null,
-          hintText: pods ? 'Buscar episódio ou programa…' : 'Buscar música, artista, álbum, gênero, clima…',
+          hintText: pods ? (context.read<AppState>().libraryMedia == MediaKind.audiobooks ? 'Buscar livro ou autor…' : 'Buscar episódio ou programa…') : 'Buscar música, artista, álbum, gênero, clima…',
           contentPadding: const EdgeInsets.symmetric(vertical: 10),
         ),
       ),

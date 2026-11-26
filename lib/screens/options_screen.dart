@@ -443,9 +443,10 @@ class _StorageTabState extends State<StorageTab> {
   bool _cleaning = false;
   String? _done;
 
-  // as cores da pizza do disco no XP: usado azul, livre magenta
-  static const usedColor = Color(0xFF2E4FE6);
-  static const freeColor = Color(0xFFE23DE2);
+  // uma cor por mídia: músicas no azul do disco do XP, podcasts laranja, audiolivros magenta
+  static const musicColor = Color(0xFF2E4FE6);
+  static const podcastColor = Color(0xFFF29A1F);
+  static const bookColor = Color(0xFFE23DE2);
 
   @override
   void initState() {
@@ -485,14 +486,13 @@ class _StorageTabState extends State<StorageTab> {
     const small = TextStyle(fontSize: 12, color: Color(0xFF555555));
     const body = TextStyle(fontSize: 13.5);
     const bold = TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold);
-    // sem limite: a pizza separa os GIFs das fotos
-    final slices = cap == 0
-        ? [(r?.gifs ?? 0) + (r?.orphans ?? 0), r?.photos ?? 0]
-        : [used, free];
-    final labels = cap == 0 ? const ['GIFs', 'Fotos dos artistas'] : const ['Usado', 'Livre no teto'];
+    // a pizza mostra para que mídia foi cada espaço
+    final slices = [r?.total ?? 0, r?.podcasts ?? 0, r?.audiobooks ?? 0];
+    const labels = ['GIFs e imagens das músicas', 'Podcasts', 'Audiolivros'];
+    const colors = [musicColor, podcastColor, bookColor];
     return ListView(padding: EdgeInsets.zero, children: [
       XpGroupBox(
-        title: 'GIFs e imagens',
+        title: 'Espaço por mídia',
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           if (r == null)
             const Padding(padding: EdgeInsets.all(8), child: Text('Medindo...', style: small))
@@ -501,20 +501,32 @@ class _StorageTabState extends State<StorageTab> {
               child: SizedBox(
                 width: 170,
                 height: 104,
-                child: CustomPaint(key: const Key('storage-pie'), painter: DiskPiePainter(slices.map((v) => v.toDouble()).toList(), const [usedColor, freeColor])),
+                child: CustomPaint(key: const Key('storage-pie'), painter: DiskPiePainter(slices.map((v) => v.toDouble()).toList(), colors)),
               ),
             ),
             const SizedBox(height: 10),
-            for (var i = 0; i < 2; i++)
+            for (var i = 0; i < 3; i++)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 2),
                 child: Row(children: [
-                  Container(width: 12, height: 12, decoration: BoxDecoration(color: i == 0 ? usedColor : freeColor, border: Border.all(color: const Color(0xFF555555)))),
+                  Container(width: 12, height: 12, decoration: BoxDecoration(color: colors[i], border: Border.all(color: const Color(0xFF555555)))),
                   const SizedBox(width: 8),
                   Expanded(child: Text(labels[i], style: body)),
                   Text(formatBytes(slices[i]), style: bold),
                 ]),
               ),
+          ],
+          const SizedBox(height: 4),
+          const Text('Podcasts e audiolivros contam o áudio inteiro. O teto abaixo vale só para os GIFs e as fotos.', style: small),
+        ]),
+      ),
+      XpGroupBox(
+        title: 'Teto dos GIFs',
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Row(children: [const Expanded(child: Text('Usado (GIFs e fotos)', style: body)), Text(formatBytes(used), style: bold)]),
+          if (cap != 0) ...[
+            const SizedBox(height: 4),
+            Row(children: [const Expanded(child: Text('Livre no teto', style: body)), Text(formatBytes(free), style: bold)]),
           ],
           const SizedBox(height: 8),
           Row(children: [

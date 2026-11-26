@@ -32,12 +32,12 @@ String? programFromPath(String root, String path) {
 String podcastTargetPath(String root, String program, String fileName) =>
     p.join(root, podcastsFolder, safeFolderName(program.trim().isEmpty ? unknownProgram : program), fileName);
 
-/// Tipos de mídia do seletor da Biblioteca. Audiolivros fica "em espera" (aparece cinza, ainda não existe).
+/// Tipos de mídia do seletor da Biblioteca.
 enum MediaKind { music, podcasts, audiobooks }
 
 extension MediaKindInfo on MediaKind {
   String get label => switch (this) { MediaKind.music => 'Música', MediaKind.podcasts => 'Podcasts', MediaKind.audiobooks => 'Audiolivros' };
-  bool get available => this != MediaKind.audiobooks;
+  bool get available => true;
 }
 
 // ---------------------------------------------------------------------------

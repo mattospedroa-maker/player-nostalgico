@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:path/path.dart' as p;
 
+import 'audiobooks.dart';
 import 'db.dart';
 import 'error_log.dart';
 import 'filename_parser.dart';
@@ -100,6 +101,27 @@ class LibraryScanner {
             title: title,
             artist: program,
             album: program,
+            year: tags?.year,
+            durationMs: tags?.duration?.inMilliseconds ?? 0,
+            addedAt: now,
+            modifiedAt: mtime,
+          ));
+          changed++;
+          continue;
+        }
+        if (isAudiobookPath(root, f.path)) {
+          // audiolivro: autor = a pasta Audiolivros/<Autor>/ (ou a tag), título inteiro (é o nome do livro)
+          final parts = p.split(p.relative(f.path, from: root));
+          final author = parts.length >= 3 ? parts[1] : ((tags?.artist.trim().isNotEmpty ?? false) ? tags!.artist.trim() : unknownAuthor);
+          final book = (tags?.album.trim().isNotEmpty ?? false)
+              ? tags!.album.trim()
+              : ((tags?.title.trim().isNotEmpty ?? false) ? tags!.title.trim() : p.basenameWithoutExtension(f.path));
+          pending.add(Track(
+            path: f.path,
+            title: book,
+            artist: author,
+            album: book,
+            genre: 'Audiolivro',
             year: tags?.year,
             durationMs: tags?.duration?.inMilliseconds ?? 0,
             addedAt: now,

@@ -24,6 +24,7 @@ enum NetFeature {
   covers('Capas dos álbuns e dos programas'),
   lyrics('Letras (para escolher os GIFs)'),
   info('Gênero, artista e álbum'),
+  books('Texto e ilustrações dos audiolivros'),
   ai('IA: resumo dos podcasts e ficha das músicas');
 
   final String label;

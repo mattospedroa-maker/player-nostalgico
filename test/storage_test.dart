@@ -123,12 +123,12 @@ void main() {
     expect(formatBytes(1536 * 1024 * 1024), '1,5 GB');
   });
 
-  testWidgets('aba Armazenamento: pizza com usado e livre, troca o teto e limpa', (t) async {
+  testWidgets('aba Armazenamento: pizza por mídia (músicas, podcasts, audiolivros), teto e limpeza', (t) async {
     t.view.physicalSize = const Size(400, 760);
     t.view.devicePixelRatio = 1;
     addTearDown(t.view.reset);
     const mb = 1024 * 1024;
-    var report = const StorageReport(gifs: 681 * mb, photos: 84 * mb, covers: 52 * mb, orphans: 61 * mb, cache: 38 * mb);
+    var report = const StorageReport(gifs: 681 * mb, photos: 84 * mb, covers: 52 * mb, orphans: 61 * mb, cache: 38 * mb, podcasts: 3000 * mb, audiobooks: 400 * mb);
     int? picked;
     var cleaned = 0;
     await t.pumpWidget(MaterialApp(
@@ -141,7 +141,7 @@ void main() {
             measure: () async => report,
             clean: () async {
               cleaned++;
-              report = const StorageReport(gifs: 681 * mb, photos: 84 * mb, covers: 52 * mb);
+              report = const StorageReport(gifs: 681 * mb, photos: 84 * mb, covers: 52 * mb, podcasts: 3000 * mb, audiobooks: 400 * mb);
               return const CleanResult(99 * mb, 12, 0);
             },
           ),
@@ -150,7 +150,10 @@ void main() {
     ));
     await t.pumpAndSettle();
     expect(find.byKey(const Key('storage-pie')), findsOneWidget);
-    expect(find.text('826 MB'), findsOneWidget); // usado: GIFs + órfãos + fotos
+    expect(find.text('916 MB'), findsOneWidget); // fatia das músicas: GIFs + órfãos + fotos + capas + cache
+    expect(find.text('2,9 GB'), findsOneWidget); // fatia dos podcasts
+    expect(find.text('400 MB'), findsOneWidget); // fatia dos audiolivros
+    expect(find.text('826 MB'), findsOneWidget); // usado no teto: GIFs + órfãos + fotos
     expect(find.text('198 MB'), findsOneWidget); // livre no teto de 1 GB
     expect(find.text('61 MB'), findsOneWidget);
     expect(find.text('38 MB'), findsOneWidget);

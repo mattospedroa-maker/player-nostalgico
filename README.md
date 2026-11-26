@@ -34,6 +34,7 @@ Para marcar outra versão como estável: *Actions → Marcar versão estável �
 ### Downloads e podcasts
 - **Baixar do YouTube** (também pelo *Compartilhar* do Android, "Baixar MP3"): baixa o áudio em M4A sem converter, com capa, em segundo plano e com fila que continua depois.
 - **Podcasts**: episódios agrupados por programa e por tema, imagem por programa, e resumo do episódio por IA (botão *Resumo*).
+- **Audiolivros**: terceira opção no download (o app reconhece sozinho), um arquivo só com os capítulos marcados (descrição → legenda → Gemini), texto da obra de domínio público (Projeto Gutenberg / Wikisource ou EPUB anexado) num leitor com a folha dobrando, e uma ilustração antiga por capítulo (Wikimedia Commons, até 30 por livro).
 
 ### Opções
 - **Armazenamento**: pizza "deitada" estilo Propriedades do disco do XP com o espaço de GIFs, fotos e capas. Tem um teto (padrão 1 GB) e **Limpar agora**. A limpeza automática apaga GIFs que nenhuma música usa e, passando do teto, os GIFs automáticos das músicas ouvidas há mais tempo. Nunca apaga favoritas, a que está tocando ou GIFs escolhidos por você.
@@ -41,7 +42,7 @@ Para marcar outra versão como estável: *Actions → Marcar versão estável �
 - **Reprodução**: tempo da transição entre músicas e outras preferências de tocar.
 
 ## Serviços on-line usados
-MusicBrainz e Cover Art Archive (artista, álbum, capas), Last.fm (tags e gênero), Deezer (fotos de artista), LRCLIB (letras), nekos.best, GIPHY, Openverse e Wikimedia (GIFs), YouTube via yt-dlp (downloads) e Gemini/Mistral (resumo e temas de podcast). Todos podem ser desligados na aba Internet, menos o YouTube.
+MusicBrainz e Cover Art Archive (artista, álbum, capas), Last.fm (tags e gênero), Deezer (fotos de artista), LRCLIB (letras), nekos.best, GIPHY, Openverse e Wikimedia (GIFs), YouTube via yt-dlp (downloads), Gemini/Mistral (resumo e temas de podcast, capítulos e cenas dos audiolivros), Projeto Gutenberg/Gutendex e Wikisource (texto dos audiolivros). Todos podem ser desligados na aba Internet, menos o YouTube.
 
 As chaves `LASTFM_KEY`, `GIPHY_KEY`, `GEMINI_KEY` e `MISTRAL_KEY` ficam nos *secrets* do GitHub e entram no APK na hora do build.
 
@@ -66,6 +67,7 @@ Cada push na `main` gera um APK novo em *Releases* (`.github/workflows/apk.yml`)
 | `lib/net_policy.dart` | Modo off-line, Só Wi-Fi e serviços ligados |
 | `lib/download_service.dart`, `lib/ytdlp.dart` | Download do YouTube em segundo plano |
 | `lib/podcasts.dart`, `lib/podcast_info.dart` | Podcasts, temas e resumo |
+| `lib/audiobooks.dart`, `lib/book_text.dart`, `lib/book_service.dart`, `lib/screens/book_reader.dart` | Audiolivros: capítulos, texto da obra (EPUB), ilustrações e o leitor |
 | `lib/db.dart` | Banco SQLite: faixas, playlists, histórico, GIFs fixados |
 | `lib/theme.dart`, `lib/xp_icons.dart`, `lib/widgets.dart` | Visual do XP e peças da interface |
 | `lib/screens/` | As telas |
