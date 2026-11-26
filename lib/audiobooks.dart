@@ -75,26 +75,71 @@ bool looksLikeAudiobookVideo(Map<String, dynamic> info, {String? playlistTitle})
 /// Completo"). Sem autor no título, fica o canal.
 ({String title, String author}) guessBookNames(String videoTitle, {String channel = ''}) {
   var t = videoTitle
+      .replaceAll(RegExp(r'[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}\u{20E3}]', unicode: true), ' ') // 📕 🎧
       .replaceAll(RegExp(r'[\[\(【][^\]\)】]*[\]\)】]'), ' ') // (Audiolivro), [Completo]
+      .replaceAll(RegExp(r'\b(livro|parte|cap[íi]tulo|tomo)\s+([ivxlc]+|\d+)\b', caseSensitive: false), ' ') // Livro I
       .replaceAll(_bookWords, ' ')
-      .replaceAll(RegExp(r'\b(completo|completa|parte\s*\d+|vol(ume)?\.?\s*\d+|narrado\s+por\s+.+$|voz\s+humana|pt-?br)\b', caseSensitive: false), ' ')
+      .replaceAll(
+          RegExp(r'\b(com\s+)?(voz\s+humana|narra[çc][ãa]o(\s+humana|\s+completa)?|legendas?)\b|\b(narrado|lido|na\s+voz\s+de)\s+(por\s+)?[^|\-–—]+', caseSensitive: false), ' ')
+      .replaceAll(RegExp(r'\b(completo|completa|integral|parte\s*\d+|vol(ume)?\.?\s*\d+|pt-?br)\b', caseSensitive: false), ' ')
       .replaceAll(RegExp(r'\s+'), ' ')
       .replaceAll(RegExp(r'^[\s\-–—|:]+|[\s\-–—|:]+$'), '')
       .trim();
   final parts = [
-    for (final x in t.split(RegExp(r'\s+[-–—|:]\s+|\s*\|\s*'))) if (x.replaceAll(RegExp(r'[^\p{L}\p{N}]', unicode: true), '').isNotEmpty) x.trim(),
+    for (final x in t.split(RegExp(r'\s+[-–—|:]\s+|\s*\|\s*')))
+      if (x.replaceAll(RegExp(r'[^\p{L}\p{N}]', unicode: true), '').isNotEmpty && !_isFiller(x)) x.replaceAll(RegExp(r'\s+'), ' ').trim(),
   ];
   // "de Machado de Assis" / "por Machado de Assis" no fim do título
   if (parts.length == 1) {
     final m = RegExp(r'^(.+?),?\s+(?:de|por|by)\s+([A-ZÀ-Ú][\p{L}.]+(?:\s+(?:de|da|do|dos|das|e|[A-ZÀ-Ú][\p{L}.]+))*)$', unicode: true).firstMatch(parts.first);
-    if (m != null && m.group(2)!.split(' ').length >= 2) return (title: m.group(1)!.trim(), author: m.group(2)!.trim());
+    if (m != null && (m.group(2)!.split(' ').length >= 2 || isKnownAuthor(m.group(2)!))) return (title: m.group(1)!.trim(), author: m.group(2)!.trim());
   }
   final ch = channel.trim().isEmpty ? unknownAuthor : channel.trim();
   if (parts.isEmpty) return (title: videoTitle.trim().isEmpty ? 'Sem título' : videoTitle.trim(), author: ch);
   if (parts.length == 1) return (title: parts.first, author: ch);
-  // o pedaço com mais cara de nome de pessoa é o autor ("Machado de Assis" x "Dom Casmurro")
+  // autor conhecido em qualquer pedaço ("Noites Brancas | Dostoiévski")
+  final known = parts.indexWhere(isKnownAuthor);
+  if (known >= 0) return (title: parts[known == 0 ? 1 : 0], author: parts[known]);
+  // senão: título primeiro, autor depois, a menos que o primeiro tenha bem mais cara de nome de pessoa
+  // ("Machado de Assis | Dom Casmurro")
   final a = parts[0], b = parts[1];
-  return personScore(b) > personScore(a) ? (title: a, author: b) : (title: b, author: a);
+  final sa = personScore(a);
+  return sa >= 1 && sa > personScore(b) ? (title: b, author: a) : (title: a, author: b);
+}
+
+const _filler = {
+  'com', 'e', 'de', 'em', 'por', 'na', 'no', 'voz', 'humana', 'completo', 'completa', 'audio', 'livro', 'narrado', 'narracao',
+  'integral', 'versao', 'portugues', 'brasil', 'br', 'pt', 'hd', 'full', 'parte', 'legendado', 'legendas',
+};
+
+/// Pedaço do título que é só enfeite ("com", "Versão Integral").
+bool _isFiller(String s) {
+  final w = normalizeText(s).split(RegExp(r'[^a-z0-9]+')).where((x) => x.isNotEmpty).toList();
+  return w.isEmpty || w.every(_filler.contains);
+}
+
+/// Sobrenomes de autores com obras em domínio público que aparecem muito em audiolivros (sem acento).
+const _knownAuthors = {
+  'machado de assis', 'jose de alencar', 'alencar', 'aluisio azevedo', 'eca de queiros', 'eca de queiroz', 'camoes', 'lima barreto',
+  'monteiro lobato', 'euclides da cunha', 'graciliano', 'olavo bilac', 'castro alves', 'alvares de azevedo', 'manuel antonio de almeida',
+  'bernardo guimaraes', 'raul pompeia', 'joaquim manuel de macedo', 'franklin tavora', 'visconde de taunay', 'gil vicente', 'fernando pessoa',
+  'camilo castelo branco', 'julio dinis', 'almeida garrett', 'dostoievski', 'dostoievsky', 'dostoyevsky', 'dostoevsky', 'tolstoi', 'tolstoy',
+  'tchekhov', 'chekhov', 'gogol', 'turgueniev', 'pushkin', 'puchkin', 'kafka', 'shakespeare', 'dickens', 'jane austen', 'austen',
+  'oscar wilde', 'wilde', 'edgar allan poe', 'poe', 'mark twain', 'twain', 'jules verne', 'julio verne', 'victor hugo', 'balzac', 'flaubert',
+  'stendhal', 'dumas', 'cervantes', 'goethe', 'nietzsche', 'homero', 'platao', 'aristoteles', 'maquiavel', 'dante', 'conan doyle',
+  'arthur conan doyle', 'h g wells', 'wells', 'bram stoker', 'stoker', 'mary shelley', 'lewis carroll', 'carroll', 'jack london',
+  'herman melville', 'melville', 'robert louis stevenson', 'stevenson', 'kipling', 'voltaire', 'rousseau', 'zola', 'lovecraft',
+  'george orwell', 'orwell', 'agatha christie', 'fitzgerald', 'sun tzu', 'marco aurelio', 'seneca', 'epicteto', 'joseph conrad', 'virginia woolf', 'woolf', 'charlotte bronte', 'emily bronte',
+};
+
+/// O texto é (ou tem) o nome de um autor conhecido? "Dostoiévski", "Fiódor Dostoiévski", "Machado de Assis".
+bool isKnownAuthor(String s) {
+  final n = normalizeText(s).replaceAll(RegExp(r'[^a-z ]'), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+  if (n.isEmpty || n.split(' ').length > 5) return false;
+  for (final k in _knownAuthors) {
+    if (n == k || n.endsWith(' $k') || (k.contains(' ') && n.contains(k))) return true;
+  }
+  return false;
 }
 
 const _connectors = {'de', 'da', 'do', 'dos', 'das', 'e', 'van', 'von', 'del'};
@@ -434,4 +479,39 @@ List<(String, List<Audiobook>)> groupByAuthor(List<Audiobook> books) {
   final out = [for (final e in by.entries) (e.key, e.value..sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase())))];
   out.sort((a, b) => a.$1.toLowerCase().compareTo(b.$1.toLowerCase()));
   return out;
+}
+
+/// Grafias do sobrenome em outras línguas (o Projeto Gutenberg usa a inglesa: "Dostoyevsky, Fyodor").
+const _surnameSpellings = {
+  'dostoievski': ['dostoyevsky', 'dostoevsky', 'dostoievsky'],
+  'dostoiewski': ['dostoyevsky', 'dostoevsky'],
+  'dostoyevsky': ['dostoevsky', 'dostoievski'],
+  'tolstoi': ['tolstoy'],
+  'tolstoy': ['tolstoi'],
+  'tchekhov': ['chekhov', 'tchekoff'],
+  'tchekov': ['chekhov'],
+  'checov': ['chekhov'],
+  'turgueniev': ['turgenev'],
+  'turgeniev': ['turgenev'],
+  'puchkin': ['pushkin'],
+  'puskin': ['pushkin'],
+  'gorki': ['gorky'],
+  'gogol': ['gogol'],
+  'lermontov': ['lermontov'],
+  'goncharov': ['goncharov'],
+  'kafka': ['kafka'],
+  'dante': ['alighieri'],
+  'alighieri': ['dante'],
+  'homero': ['homer'],
+  'cervantes': ['cervantes saavedra'],
+  'verne': ['verne'],
+  'goethe': ['goethe'],
+};
+
+/// Sobrenome do autor e as outras grafias dele (normalizados, sem acento). "Fiódor Dostoiévski" → [dostoievski, dostoyevsky, ...]
+List<String> surnameVariants(String author) {
+  final w = normalizeText(author).replaceAll(RegExp(r'[^a-z ]'), ' ').split(RegExp(r'\s+')).where((x) => x.isNotEmpty).toList();
+  if (w.isEmpty) return const [];
+  final last = w.last;
+  return {last, ...?_surnameSpellings[last]}.toList();
 }

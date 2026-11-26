@@ -70,6 +70,25 @@ void main() {
       expect(d.author, 'Aluísio Azevedo');
     });
 
+    test('título e autor: autor conhecido depois da barra, enfeites e emojis', () {
+      final a = guessBookNames('Noites Brancas – Audiolivro Completo com Voz Humana | Dostoiévski', channel: 'Canal');
+      expect((a.title, a.author), ('Noites Brancas', 'Dostoiévski'));
+      final b = guessBookNames('📕 1984 – George Orwell | Livro I | Audiolivro');
+      expect((b.title, b.author), ('1984', 'George Orwell'));
+      final c = guessBookNames('A Metamorfose - Franz Kafka - narrado por Fulano de Tal');
+      expect((c.title, c.author), ('A Metamorfose', 'Franz Kafka'));
+      final d = guessBookNames('🎧 Liev Tolstói | A Morte de Ivan Ilitch (Audiobook)');
+      expect((d.title, d.author), ('A Morte de Ivan Ilitch', 'Liev Tolstói'));
+      expect(isKnownAuthor('Fiódor Dostoiévski'), isTrue);
+      expect(isKnownAuthor('Noites Brancas'), isFalse);
+    });
+
+    test('grafias do sobrenome para achar no Gutenberg', () {
+      expect(surnameVariants('Fiódor Dostoiévski'), containsAll(['dostoievski', 'dostoyevsky']));
+      expect(surnameVariants('Liev Tolstói'), containsAll(['tolstoi', 'tolstoy']));
+      expect(surnameVariants('Machado de Assis'), ['assis']);
+    });
+
     test('caminhos da pasta Audiolivros', () {
       expect(isAudiobookPath('/m', '/m/Audiolivros/Machado/Livro.m4a'), isTrue);
       expect(isAudiobookPath('/m', '/m/audiolivros/Livro.m4a'), isTrue);
@@ -258,8 +277,29 @@ void main() {
           },
         ],
       };
-      expect(BookService.pickGutenberg(json, 'Memórias Póstumas de Brás Cubas', 'Machado de Assis'), 54829);
+      expect(BookService.pickGutenberg(json, 'Memórias Póstumas de Brás Cubas', 'Machado de Assis')?.id, 54829);
       expect(BookService.pickGutenberg(json, 'Harry Potter', 'J. K. Rowling'), isNull);
+    });
+
+    test('Gutendex: autor em grafia inglesa e texto em inglês com aviso', () {
+      final json = {
+        'results': [
+          {
+            'id': 36034,
+            'title': 'White Nights and Other Stories',
+            'authors': [{'name': 'Dostoyevsky, Fyodor'}],
+            'languages': ['en'],
+            'formats': {'application/epub+zip': 'x'},
+          },
+        ],
+      };
+      final r = BookService.pickGutenberg(json, 'White Nights', 'Fiódor Dostoiévski')!;
+      expect(r.id, 36034);
+      expect(BookService.langLabel(r.lang), ' (em inglês)');
+      expect(BookService.bookIdentityFromAi({'titulo_en': 'White Nights', 'autor_en': 'Fyodor Dostoyevsky'}),
+          (title: 'White Nights', author: 'Fyodor Dostoyevsky'));
+      expect(BookService.bookIdentityFromAi({'titulo_en': ''}), isNull);
+      expect(BookService.bookIdentityFromAi('lixo'), isNull);
     });
 
     test('Wikisource: página da obra, não capítulo solto', () {
