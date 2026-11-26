@@ -18,8 +18,15 @@ class StorageReport {
 
   /// Imagens da notificação (1º quadro de cada GIF): se refazem sozinhas quando precisam.
   final int cache;
-  const StorageReport({this.gifs = 0, this.orphans = 0, this.photos = 0, this.covers = 0, this.cache = 0});
 
+  /// Pasta Podcasts inteira (episódios, resumos e miniaturas).
+  final int podcasts;
+
+  /// Pasta Audiolivros inteira (livros, texto da obra e ilustrações).
+  final int audiobooks;
+  const StorageReport({this.gifs = 0, this.orphans = 0, this.photos = 0, this.covers = 0, this.cache = 0, this.podcasts = 0, this.audiobooks = 0});
+
+  /// GIFs e imagens das músicas (o que o app guarda além dos arquivos de música).
   int get total => gifs + orphans + photos + covers + cache;
 
   /// O que conta para o teto: GIFs (com os órfãos) e fotos dos artistas.
@@ -63,7 +70,22 @@ class StorageService {
   final AppDb db;
   final String? Function() gifRoot;
   final String dataDir;
-  StorageService({required this.db, required this.gifRoot, required this.dataDir});
+  /// Pasta de músicas (onde ficam Podcasts/ e Audiolivros/).
+  final String? Function() musicRoot;
+  StorageService({required this.db, required this.gifRoot, required this.dataDir, String? Function()? musicRoot}) : musicRoot = musicRoot ?? (() => null);
+
+  /// Tamanho de uma subpasta da pasta de músicas, sem diferenciar maiúsculas ("Podcasts", "podcasts").
+  Future<int> _folderSize(String name) async {
+    final root = musicRoot();
+    if (root == null) return 0;
+    var total = 0;
+    try {
+      await for (final e in Directory(root).list(followLinks: false).handleError((Object _) {})) {
+        if (e is Directory && p.basename(e.path).toLowerCase() == name.toLowerCase()) total += await _dirSize(e.path);
+      }
+    } catch (_) {}
+    return total;
+  }
 
   static final autoName = RegExp(r'^[0-9a-f]{12}\.gif$');
 
@@ -124,6 +146,8 @@ class StorageService {
       photos: await _dirSize(photosDir),
       covers: await _dirSize(coversDir),
       cache: await _dirSize(cacheDir),
+      podcasts: await _folderSize('Podcasts'),
+      audiobooks: await _folderSize('Audiolivros'),
     );
   }
 

@@ -78,7 +78,7 @@ class _MediaRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final selected = app.libraryMedia == kind;
     final enabled = kind.available;
-    final items = switch (kind) { MediaKind.music => app.tracks, MediaKind.podcasts => app.podcasts, MediaKind.audiobooks => const <Track>[] };
+    final items = switch (kind) { MediaKind.music => app.tracks, MediaKind.podcasts => app.podcasts, MediaKind.audiobooks => app.audiobooks };
     final fg = selected ? Colors.white : (enabled ? Colors.black : const Color(0xFF999999));
     final sub = selected ? const Color(0xFFDFE8FF) : (enabled ? const Color(0xFF555555) : const Color(0xFFAAAAAA));
     String count() => switch (kind) {
@@ -87,7 +87,10 @@ class _MediaRow extends StatelessWidget {
               '${items.length} ${items.length == 1 ? 'episódio' : 'episódios'}',
               if (items.isNotEmpty) '${items.where((t) => !app.podcastProgress.listened(t.path)).length} não ouvidos',
             ].join(' · '),
-          MediaKind.audiobooks => 'em espera (ainda não existe)',
+          MediaKind.audiobooks => [
+              '${items.length} ${items.length == 1 ? 'livro' : 'livros'}',
+              if (items.isNotEmpty) '${items.where((t) => !app.podcastProgress.listened(t.path)).length} não terminados',
+            ].join(' · '),
         };
     return InkWell(
       onTap: enabled ? onPick : null,

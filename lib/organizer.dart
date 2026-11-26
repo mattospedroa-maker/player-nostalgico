@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 
+import 'audiobooks.dart';
 import 'error_log.dart';
 import 'filename_parser.dart';
 import 'genre.dart';
@@ -299,6 +300,7 @@ class Organizer {
         .where((f) => !_isInsideGifFolder(f.path))
         // podcasts têm a própria organização (Podcasts/Programa/): o organizador de músicas não mexe
         .where((f) => !isPodcastPath(sourceRoot, f.path))
+        .where((f) => !isAudiobookPath(sourceRoot, f.path))
         .toList()
       ..sort((a, b) => a.path.compareTo(b.path));
   }

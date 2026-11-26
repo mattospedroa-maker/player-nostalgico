@@ -38,6 +38,8 @@ import 'info_retry.dart';
 import 'organizer.dart';
 import 'play_stats.dart';
 import 'player_service.dart';
+import 'audiobooks.dart';
+import 'book_service.dart';
 import 'podcast_info.dart';
 import 'podcasts.dart';
 import 'podcast_themes.dart';
@@ -75,7 +77,7 @@ class AppState extends ChangeNotifier {
   late final NetPolicy net = NetPolicy(prefs);
 
   /// Espaço dos GIFs, fotos, capas e cache (aba Armazenamento das Opções).
-  late final StorageService storage = StorageService(db: db, gifRoot: () => gifs.gifRoot, dataDir: dataDir);
+  late final StorageService storage = StorageService(db: db, gifRoot: () => gifs.gifRoot, dataDir: dataDir, musicRoot: () => sourceRoot);
 
   /// Imagens extras da roda de GIFs (sempre, sozinhas como os GIFs): capa do álbum e fotos do artista
   /// principal (parcerias contam no principal). Os GIFs continuam todos.
@@ -125,6 +127,53 @@ class AppState extends ChangeNotifier {
 
   /// Imagem de cada programa de podcast (ícone do canal do YouTube, guardado na pasta do programa).
   late final ProgramArtService programArt = ProgramArtService(client: gifFetcher.client, prefs: prefs);
+
+  /// Capítulos, texto da obra e ilustrações dos audiolivros (arquivos ao lado de cada livro).
+  late final BookService bookService = BookService(
+    client: gifFetcher.client,
+    geminiKey: () => geminiKey,
+    allowNet: () => net.allows(NetFeature.books),
+    allowAi: () => net.allows(NetFeature.ai),
+  );
+
+  /// Livro mudou de lugar: informações, texto, ilustrações e o id do YouTube vão junto.
+  void _bookMoved(String from, String to) {
+    bookService.moved(from, to);
+    programArt.episodeMoved(from, to);
+    unawaited(downloads.moved(from, to));
+  }
+
+  /// Informações do livro; arquivo posto à mão na pasta Audiolivros ganha título/autor pelas tags.
+  BookInfo bookInfoOf(Track t) =>
+      bookService.infoFor(t.path) ??
+      BookInfo(title: Audiobook(t, null).title, author: Audiobook(t, null).author);
+
+  final Set<String> _bookChecked = {};
+
+  /// Abriu/tocou um livro: procura o texto da obra e as ilustrações que faltam (uma vez por abertura do app).
+  void ensureBook(Track t) {
+    if (!isAudiobook(t) || !_bookChecked.add(t.path)) return;
+    unawaited(() async {
+      var info = bookService.infoFor(t.path);
+      if (info == null) {
+        info = bookInfoOf(t);
+        await bookService.save(t.path, info);
+      }
+      if (!net.allows(NetFeature.books)) return;
+      if (info.textStatus == TextStatus.none || info.textStatus == TextStatus.failed || info.textStatus == TextStatus.searching) {
+        await bookService.fetchText(t.path);
+      } else if (!info.artDone) {
+        await bookService.fetchArt(t.path);
+      }
+    }());
+  }
+
+  /// Livros da Biblioteca com o que se sabe de cada um.
+  List<Audiobook> audiobookList() => [for (final t in audiobooks) Audiobook(t, bookService.infoFor(t.path))];
+
+  /// Começo de cada capítulo do livro (ms), para o ⏮/⏭ pularem de capítulo.
+  List<int> chapterStartsOf(Track t) =>
+      isAudiobook(t) ? [for (final c in bookService.infoFor(t.path)?.chapters ?? const []) c.startMs] : const [];
 
   /// Episódios de cada programa separados por tema (Gemini + um GIF por tema).
   late final PodcastThemesService podcastThemes =
@@ -245,7 +294,7 @@ class AppState extends ChangeNotifier {
   static const _visualsMaxAge = Duration(days: 3);
 
   Future<List<VisualResult>> playerVisualsFor(Track t) {
-    if (isPodcast(t)) return Future.value(const []); // GIFs de podcast vêm numa fase própria (estúdio de rádio)
+    if (isSpoken(t)) return Future.value(const []); // GIFs de podcast vêm numa fase própria (estúdio de rádio)
     if (gifSource == GifSource.anime || giphyKey.isEmpty || t.id == null) return Future.value(const []);
     if (!net.allows(NetFeature.gifs)) return Future.value(const []); // GIFs do GIPHY passam pela internet
     // v2: sorteio por música (menos repetição no álbum). O nome entra na chave: corrigiu o artista ou o título,
@@ -420,11 +469,19 @@ class AppState extends ChangeNotifier {
 
   bool isPodcast(Track t) => isPodcastPath(sourceRoot, t.path);
 
+  /// Audiolivros (arquivos dentro de `<pasta>`/Audiolivros/). Um arquivo = um livro inteiro.
+  List<Track> audiobooks = const [];
+
+  bool isAudiobook(Track t) => isAudiobookPath(sourceRoot, t.path);
+
+  /// Podcast ou audiolivro: fala, não música (sem GIFs de música, sem mix, retoma onde parou, velocidade).
+  bool isSpoken(Track t) => isPodcast(t) || isAudiobook(t);
+
   /// Redesenha as telas (ex.: marcou um episódio como ouvido).
   void touch() => notifyListeners();
 
   /// Tipo de mídia escolhido no "Endereço" da Biblioteca.
-  MediaKind get libraryMedia => MediaKind.values.asNameMap()[prefs.getString('libraryMedia')] == MediaKind.podcasts ? MediaKind.podcasts : MediaKind.music;
+  MediaKind get libraryMedia => MediaKind.values.asNameMap()[prefs.getString('libraryMedia')] ?? MediaKind.music;
   Future<void> setLibraryMedia(MediaKind m) async {
     if (!m.available || m == libraryMedia) return;
     await prefs.setString('libraryMedia', m.name);
@@ -527,7 +584,8 @@ class AppState extends ChangeNotifier {
     s.player.addListener(s._onPlayerChanged);
     s.player
       ..library = (() => s.tracks)
-      ..isPodcast = s.isPodcast
+      ..isPodcast = s.isSpoken
+      ..chapterStarts = s.chapterStartsOf
       ..podcastProgress = s.podcastProgress
       ..podcastSpeed = prefs.getDouble('podcastSpeed') ?? 1.0
       ..onPodcastSpeedChanged = ((v) => prefs.setDouble('podcastSpeed', v))
@@ -607,8 +665,9 @@ class AppState extends ChangeNotifier {
   Future<void> reload({bool rereadGifs = false}) async {
     final all = await db.allTracks();
     final root = sourceRoot;
-    tracks = [for (final t in all) if (!isPodcastPath(root, t.path)) t];
+    tracks = [for (final t in all) if (!isPodcastPath(root, t.path) && !isAudiobookPath(root, t.path)) t];
     podcasts = [for (final t in all) if (isPodcastPath(root, t.path)) t];
+    audiobooks = [for (final t in all) if (isAudiobookPath(root, t.path)) t];
     ArtistNames.current = ArtistNames.fromTracks(tracks);
     MoodClues.tagsOf = gifFetcher.cachedTags;
     MoodClues.learnFrom(tracks);
@@ -1173,7 +1232,9 @@ class AppState extends ChangeNotifier {
       // episódio continua em Podcasts/<Programa>/ (nunca vai para Artista/Álbum)
       final target = isPodcastPath(root, path)
           ? podcastTargetPath(root, artist, '${safeFolderName(title)}${p.extension(path).toLowerCase()}')
-          : targetPathFor(root, path, artist, album, title: title);
+          : isAudiobookPath(root, path)
+              ? audiobookTargetPath(root, artist, '${safeFolderName(album.isEmpty ? title : album)}${p.extension(path).toLowerCase()}')
+              : targetPathFor(root, path, artist, album, title: title);
       if (!p.equals(target, path)) {
         if (File(target).existsSync()) {
           warning = 'Já existe um arquivo com esse nome em ${p.relative(p.dirname(target), from: root)}. Não movi.';
@@ -1182,7 +1243,11 @@ class AppState extends ChangeNotifier {
           await Organizer.moveFile(File(path), target);
           await db.moveTrack(path, target);
           podcastProgress.moved(path, target);
-          _podcastMoved(path, target);
+          if (isAudiobookPath(root, path)) {
+            _bookMoved(path, target);
+          } else {
+            _podcastMoved(path, target);
+          }
           removeEmptyParents(root, [path]);
           path = target;
         }
@@ -1208,7 +1273,7 @@ class AppState extends ChangeNotifier {
   /// letra, clima e pesquisas eram de outra música). Refaz os GIFs salvos (os escolhidos à mão ficam),
   /// a roda do GIPHY e as fotos do artista com o nome certo.
   void _visualsAfterRename(Track before, Track after) {
-    if (isPodcast(after)) return;
+    if (isSpoken(after)) return;
     final (oldTitle, oldArtist) = GifFetcher.namesFor(before);
     final (newTitle, newArtist) = GifFetcher.namesFor(after);
     if (oldTitle.toLowerCase() == newTitle.toLowerCase() && oldArtist.toLowerCase() == newArtist.toLowerCase()) return;
@@ -1313,6 +1378,10 @@ class AppState extends ChangeNotifier {
       errorLog.info('Notificação', 'Não deu para trocar a imagem da notificação', e); // arte é secundária: nunca derruba o player
     });
     // podcast: sem busca de GIFs/fotos de artista de música (o "artista" é o programa); resumo se faltar
+    if (isAudiobook(fresh)) {
+      ensureBook(fresh);
+      return;
+    }
     if (isPodcast(fresh)) {
       _ensureSummary(fresh);
       return;
@@ -1367,7 +1436,7 @@ class AppState extends ChangeNotifier {
   /// arquivo como pista). Se achar, grava como o Editar faz: tags, pasta Artista/Álbum e GIFs refeitos.
   /// Devolve true se o artista ou o título mudou (aí os GIFs já foram refeitos). Sem internet não conta como tentativa (tenta na próxima vez que tocar).
   Future<bool> retryInfo(Track t) async {
-    if (_retryingInfo || isPodcast(t) || !net.allows(NetFeature.info)) return false;
+    if (_retryingInfo || isSpoken(t) || !net.allows(NetFeature.info)) return false;
     _retryingInfo = true;
     try {
       final hints = InfoRetry.hints(t, root: sourceRoot);
@@ -1402,7 +1471,7 @@ class AppState extends ChangeNotifier {
     var done = 0;
     for (final t in List.of(tracks)) {
       if (done >= max) break;
-      if (isPodcast(t) || !InfoRetry.missing(t) || !_infoDue(t)) continue;
+      if (isSpoken(t) || !InfoRetry.missing(t) || !_infoDue(t)) continue;
       if (InfoRetry.hints(t, root: sourceRoot).isEmpty) continue; // sem pista nenhuma: só tentaria adivinhar
       done++;
       await retryInfo(t);
@@ -1497,16 +1566,18 @@ class AppState extends ChangeNotifier {
   /// (as telas chamam isto para cada linha; a busca linear deixava listas grandes lentas).
   Track? byId(int? id) {
     if (id == null) return null;
-    if (!identical(_indexed, tracks) || !identical(_indexedPods, podcasts)) {
+    if (!identical(_indexed, tracks) || !identical(_indexedPods, podcasts) || !identical(_indexedBooks, audiobooks)) {
       _indexed = tracks;
       _indexedPods = podcasts;
-      _byId = {for (final t in [...tracks, ...podcasts]) if (t.id != null) t.id!: t};
+      _indexedBooks = audiobooks;
+      _byId = {for (final t in [...tracks, ...podcasts, ...audiobooks]) if (t.id != null) t.id!: t};
     }
     return _byId[id];
   }
 
   List<Track>? _indexed;
   List<Track>? _indexedPods;
+  List<Track>? _indexedBooks;
   Map<int, Track> _byId = const {};
 
   Future<Recommender> recommender() async => Recommender(tracks, await db.plays());

@@ -7,6 +7,7 @@ import '../app_state.dart';
 import '../copy_animation.dart';
 import '../download_service.dart';
 import '../podcast_info.dart';
+import '../podcasts.dart' show MediaKind;
 import '../theme.dart';
 import '../xp_icons.dart';
 
@@ -237,7 +238,7 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
       final e = ds.single!;
       buttons = [
         XpButton(
-          label: e.existingPath != null ? 'Baixar mesmo assim' : (e.podcast ? 'Baixar episódio' : 'Baixar M4A'),
+          label: e.existingPath != null ? 'Baixar mesmo assim' : (e.podcast ? 'Baixar episódio' : (e.audiobook ? 'Baixar audiolivro' : 'Baixar M4A')),
           icon: Icons.download,
           primary: e.existingPath == null,
           onTap: () async {
@@ -252,14 +253,16 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
         XpButton(
           label: ds.playlistIsPodcast
               ? 'Baixar ${sel.length} ${sel.length == 1 ? 'episódio' : 'episódios'}'
-              : 'Baixar ${sel.length} ${sel.length == 1 ? 'música' : 'músicas'}',
+              : ds.playlistIsBook
+                  ? 'Baixar ${sel.length} ${sel.length == 1 ? 'livro' : 'livros'}'
+                  : 'Baixar ${sel.length} ${sel.length == 1 ? 'música' : 'músicas'}',
           icon: Icons.download,
           primary: true,
           onTap: sel.isEmpty
               ? null
               : () async {
                   if (!await _ready()) return;
-                  ds.enqueue(sel, playlistName: ds.makePlaylist && !ds.playlistIsPodcast ? ds.playlistTitle : null);
+                  ds.enqueue(sel, playlistName: ds.makePlaylist && ds.playlistKind == MediaKind.music ? ds.playlistTitle : null);
                 },
         ),
       ];
@@ -387,8 +390,15 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
         const Spacer(),
         if (e.lookingUp) const Text('procurando álbum…', style: TextStyle(fontSize: 12, color: Xp.blueMuted)),
       ]),
-      _kindSwitch(e.podcast, (v) => ds.setPodcast(e, v)),
-      if (e.podcast) ...[
+      _kindSwitch(e.kind, (k) => ds.setKind(e, k)),
+      if (e.audiobook) ...[
+        _nameField('Autor', _artist, (v) => ds.edit(e, artist: v.trim())),
+        _nameField('Livro', _title, (v) => ds.edit(e, title: v.trim(), album: v.trim())),
+        const SizedBox(height: 8),
+        Text('Vai para: Audiolivros\\${e.names.artist}\\${e.names.title}.m4a', style: const TextStyle(fontSize: 12, color: Xp.blueMuted)),
+        const Text('Um arquivo só, com os capítulos marcados. O texto da obra (domínio público) é procurado depois.',
+            style: TextStyle(fontSize: 11.5, color: Xp.blueMuted)),
+      ] else if (e.podcast) ...[
         _nameField('Programa', _artist, (v) => ds.edit(e, artist: v.trim(), album: v.trim())),
         _nameField('Episódio', _title, (v) => ds.edit(e, title: v.trim())),
         const SizedBox(height: 8),
@@ -405,10 +415,10 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
     ]);
   }
 
-  /// "Salvar como: (•) Música ( ) Podcast", com os botões de opção do XP.
-  Widget _kindSwitch(bool podcast, void Function(bool) onChanged) {
-    Widget opt(String label, bool value) {
-      final on = podcast == value;
+  /// "Salvar como: (•) Música ( ) Podcast ( ) Audiolivro", com os botões de opção do XP.
+  Widget _kindSwitch(MediaKind kind, void Function(MediaKind) onChanged) {
+    Widget opt(String label, MediaKind value) {
+      final on = kind == value;
       return InkWell(
         onTap: () => onChanged(value),
         child: Padding(
@@ -428,12 +438,11 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
       );
     }
 
-    return Row(children: [
+    return Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 4, children: [
       const Text('Salvar como:', style: TextStyle(fontSize: 14)),
-      const SizedBox(width: 6),
-      opt('Música', false),
-      const SizedBox(width: 10),
-      opt('Podcast', true),
+      opt('Música', MediaKind.music),
+      opt('Podcast', MediaKind.podcasts),
+      opt('Audiolivro', MediaKind.audiobooks),
     ]);
   }
 
@@ -486,7 +495,7 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
           style: const TextStyle(fontSize: 12.5, color: Xp.blueText),
         ),
       ),
-      Padding(padding: const EdgeInsets.symmetric(horizontal: 8), child: _kindSwitch(ds.playlistIsPodcast, ds.setPlaylistPodcast)),
+      Padding(padding: const EdgeInsets.symmetric(horizontal: 8), child: _kindSwitch(ds.playlistKind, ds.setPlaylistKind)),
       Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: const BoxDecoration(color: Color(0xFFEBEADB), border: Border(bottom: BorderSide(color: Color(0xFFC7C5B2)))),
@@ -501,7 +510,7 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
       Expanded(
         child: ListView(padding: EdgeInsets.zero, children: [
           for (final e in items) _playlistRow(ds, e),
-          if (!ds.playlistIsPodcast)
+          if (ds.playlistKind == MediaKind.music)
           CheckboxListTile(
             dense: true,
             controlAffinity: ListTileControlAffinity.leading,
@@ -530,7 +539,7 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
               Text(e.unavailable ? e.originalTitle : '${e.names.title} · ${e.names.artist}',
                   maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.5, color: dim ? const Color(0xFF8A93A6) : Colors.black)),
               Text(
-                e.unavailable ? 'Indisponível' : (e.podcast ? 'Podcast · ${e.names.artist}' : (e.lookingUp ? 'procurando álbum…' : e.names.album)),
+                e.unavailable ? 'Indisponível' : (e.podcast ? 'Podcast · ${e.names.artist}' : e.audiobook ? 'Audiolivro · ${e.names.artist}' : (e.lookingUp ? 'procurando álbum…' : e.names.album)),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(fontSize: 11.5, color: Xp.blueMuted),
@@ -567,10 +576,10 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
         content: Column(mainAxisSize: MainAxisSize.min, children: [
           _old(e.originalTitle),
           const SizedBox(height: 8),
-          TextField(controller: a, decoration: InputDecoration(labelText: e.podcast ? 'Programa' : 'Artista')),
+          TextField(controller: a, decoration: InputDecoration(labelText: e.podcast ? 'Programa' : (e.audiobook ? 'Autor' : 'Artista'))),
           const SizedBox(height: 8),
-          TextField(controller: t, decoration: InputDecoration(labelText: e.podcast ? 'Episódio' : 'Título')),
-          if (!e.podcast) ...[
+          TextField(controller: t, decoration: InputDecoration(labelText: e.podcast ? 'Episódio' : (e.audiobook ? 'Livro' : 'Título'))),
+          if (!e.podcast && !e.audiobook) ...[
             const SizedBox(height: 8),
             TextField(controller: al, decoration: const InputDecoration(labelText: 'Álbum')),
           ],
@@ -582,7 +591,7 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
       ),
     );
     if (ok == true) {
-      ds.edit(e, artist: a.text.trim(), title: t.text.trim(), album: e.podcast ? a.text.trim() : al.text.trim());
+      ds.edit(e, artist: a.text.trim(), title: t.text.trim(), album: e.podcast ? a.text.trim() : (e.audiobook ? t.text.trim() : al.text.trim()));
       setState(() {});
     }
     a.dispose();
@@ -721,6 +730,8 @@ class _YoutubeScreenState extends State<YoutubeScreen> {
             Text(e.names.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13.5, color: active ? Colors.white : Colors.black)),
             Text(e.names.artist,
                 maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11.5, color: active ? const Color(0xFFDFE8FF) : const Color(0xFF666666))),
+            if (e.audiobook && e.bookStatus.isNotEmpty)
+              Text('Capítulos: ${e.bookStatus}', style: TextStyle(fontSize: 11.5, color: active ? const Color(0xFFDFE8FF) : const Color(0xFF666666))),
             if (e.podcast && e.summary != SummaryStatus.none)
               Text('Resumo (IA): ${e.summary == SummaryStatus.ok ? 'pronto ✓' : e.summary.label}',
                   style: TextStyle(fontSize: 11.5, color: active ? const Color(0xFFDFE8FF) : (e.summary == SummaryStatus.ok ? const Color(0xFF1D7A2A) : const Color(0xFF666666)))),

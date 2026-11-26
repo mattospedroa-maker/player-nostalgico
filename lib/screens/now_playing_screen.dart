@@ -25,6 +25,8 @@ import '../theme.dart';
 import '../visual_search.dart';
 import '../widgets.dart';
 import '../xp_icons.dart';
+import 'audiobooks_screen.dart' show BookScreen;
+import 'book_reader.dart';
 import 'edit_track_screen.dart';
 import 'episode_summary.dart';
 import 'gif_vibe_screen.dart';
@@ -39,7 +41,16 @@ class NowPlayingScreen extends StatelessWidget {
     final ps = context.watch<PlayerService>();
     final app = context.watch<AppState>();
     final t = ps.current == null ? null : (app.byId(ps.current!.id) ?? ps.current);
-    final pod = t != null && app.isPodcast(t);
+    final book = t != null && app.isAudiobook(t);
+    final pod = t != null && app.isSpoken(t);
+    // livro com o celular deitado: o leitor ocupa a tela toda
+    if (book && MediaQuery.orientationOf(context) == Orientation.landscape) {
+      return Column(children: [
+        XpTitleBar(title: app.bookInfoOf(t).title.isEmpty ? t.title : app.bookInfoOf(t).title, icon: XpIcons.book),
+        Expanded(child: BookReader(key: ValueKey('livro-deitado-${t.id}'), track: t)),
+        XpStatusBar(['${ps.playing ? 'Tocando' : 'Pausado'} · ${t.title}', 'Audiolivro · ${_speed(ps.podcastSpeed)}']),
+      ]);
+    }
     return Column(
       children: [
         const XpTitleBar(title: 'Tocando agora'),
@@ -87,13 +98,19 @@ class NowPlayingScreen extends StatelessWidget {
               : ListView(
                   padding: EdgeInsets.zero,
                   children: [
-                    GifCarousel(key: ValueKey(t.id), track: t),
+                    if (book) _BookPanel(key: ValueKey('livro-${t.id}'), track: t) else GifCarousel(key: ValueKey(t.id), track: t),
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 10),
                       child: StreamBuilder<Duration>(
                         stream: ps.player.positionStream,
                         builder: (context, snap) => LcdPanel(
-                          lines: pod
+                          lines: book
+                              ? [
+                                  ('Livro', app.bookInfoOf(t).title.isEmpty ? t.title : app.bookInfoOf(t).title),
+                                  ('Capítulo', _chapterLabel(app, t, snap.data ?? Duration.zero)),
+                                  ('Autor', '${t.artist} · ${_speed(ps.podcastSpeed)}'),
+                                ]
+                              : pod
                               ? [
                                   ('Programa', t.artist),
                                   ('Episódio', t.title),
@@ -111,7 +128,16 @@ class NowPlayingScreen extends StatelessWidget {
                         ),
                       ),
                     ),
-                    if (pod)
+                    if (book)
+                      ListenableBuilder(
+                        listenable: app.bookService,
+                        builder: (_, _) => SeekBar(
+                          player: ps.player,
+                          onSeek: ps.seek,
+                          marks: [for (final c in app.bookInfoOf(t).chapters) Duration(milliseconds: c.startMs)],
+                        ),
+                      )
+                    else if (pod)
                       ListenableBuilder(
                         listenable: app.podcastInfo,
                         builder: (_, _) => SeekBar(
@@ -157,7 +183,7 @@ class NowPlayingScreen extends StatelessWidget {
                         ],
                       ),
                     ),
-                    if (pod) _PodcastBox(track: t) else ...[_Toolbar(track: t), const _MixBox()],
+                    if (book) _BookBox(track: t) else if (pod) _PodcastBox(track: t) else ...[_Toolbar(track: t), const _MixBox()],
                     const SizedBox(height: 12),
                   ],
                 ),
@@ -170,7 +196,7 @@ class NowPlayingScreen extends StatelessWidget {
             return XpStatusBar([
               outage != null ? '🌐 $outage' : (t == null ? 'Pronto' : '${ps.playing ? 'Tocando' : 'Pausado'} · ${t.title}'),
               if (t != null) p.extension(t.path).replaceFirst('.', '').toUpperCase(),
-              if (pod) 'Podcast · ${_speed(ps.podcastSpeed)}' else ...[
+              if (book) 'Audiolivro · ${_speed(ps.podcastSpeed)}' else if (pod) 'Podcast · ${_speed(ps.podcastSpeed)}' else ...[
                 'Mix: ${ps.mixMode == MixMode.artist ? 'artista' : 'vibe'}',
                 ps.crossfade ? 'Transição: ligada' : 'Transição: desligada',
               ],
@@ -181,9 +207,66 @@ class NowPlayingScreen extends StatelessWidget {
     );
   }
 
+  /// "7 · O delírio" (capítulo tocando agora).
+  static String _chapterLabel(AppState app, Track t, Duration pos) {
+    final info = app.bookInfoOf(t);
+    final i = info.chapterIndexAt(pos);
+    if (i < 0) return 'sem capítulos';
+    final title = info.chapters[i].title;
+    return title.isEmpty ? '${i + 1} de ${info.chapters.length}' : '${i + 1} · $title';
+  }
+
   static String _speed(double v) => '${v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toString().replaceAll('.', ',')}x';
 
   static String _clock(Duration d) => '${d.inMinutes.toString().padLeft(2, '0')}:${(d.inSeconds % 60).toString().padLeft(2, '0')}';
+}
+
+/// Livro no lugar dos GIFs (opção C): a folha do livro, com ⤢ para a tela cheia.
+class _BookPanel extends StatelessWidget {
+  final Track track;
+  const _BookPanel({super.key, required this.track});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        margin: const EdgeInsets.fromLTRB(10, 10, 10, 6),
+        height: 300,
+        decoration: const BoxDecoration(
+          border: Border(
+            top: BorderSide(color: Color(0xFF808080), width: 2),
+            left: BorderSide(color: Color(0xFF808080), width: 2),
+            right: BorderSide(color: Colors.white, width: 2),
+            bottom: BorderSide(color: Colors.white, width: 2),
+          ),
+        ),
+        child: BookReader(track: track, compact: true),
+      );
+}
+
+/// Livro tocando: Livro (tela cheia), Capítulos, Aa e Marcar lido.
+class _BookBox extends StatelessWidget {
+  final Track track;
+  const _BookBox({required this.track});
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.read<AppState>();
+    final done = app.podcastProgress.listened(track.path);
+    Widget item(XpIcons i, String label, VoidCallback onTap, {bool on = false}) => Expanded(
+          child: Padding(padding: const EdgeInsets.symmetric(horizontal: 2), child: BevelButton(icon: i, label: label, onTap: onTap, on: on)),
+        );
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 10, 8, 0),
+      child: Row(children: [
+        item(XpIcons.book, 'Livro', () => openFullReader(context, track), on: true),
+        item(XpIcons.list, 'Capítulos', () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => BookScreen(trackId: track.id!)))),
+        item(XpIcons.edit, 'Aa', () => showReaderLook(context)),
+        item(XpIcons.check, done ? 'Lido' : 'Marcar lido', () {
+          app.podcastProgress.setListened(track.path, !done);
+          app.touch();
+        }, on: done),
+      ]),
+    );
+  }
 }
 
 /// Podcast tocando: botões próprios (fila, ouvido) e o que vem depois (próximo episódio ou a volta das músicas).
@@ -683,7 +766,7 @@ class _GifCarouselState extends State<GifCarousel> with WidgetsBindingObserver {
     final app = context.read<AppState>();
     _lastCount = app.gifs.count;
     // podcast: por enquanto só a capa do episódio (os GIFs de "estúdio de rádio" vêm numa fase própria)
-    final pod = app.isPodcast(widget.track);
+    final pod = app.isSpoken(widget.track);
     final own = pod ? const <String>[] : await app.gifs.gifsFor(widget.track);
     // plano B: serviço de GIFs fora do ar -> completa com GIFs guardados do mesmo clima
     final lend = pod ? const <String>[] : app.gifFetcher.borrowed[widget.track.id] ?? const <String>[];
@@ -801,7 +884,7 @@ class _GifCarouselState extends State<GifCarousel> with WidgetsBindingObserver {
       WidgetsBinding.instance.addPostFrameCallback((_) => mounted ? _load() : null);
     }
     final fetching = app.gifFetcher.isFetching(widget.track);
-    final pod = app.isPodcast(widget.track);
+    final pod = app.isSpoken(widget.track);
     return Column(children: [
       GestureDetector(
         onTap: _gifs.length > 1

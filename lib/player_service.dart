@@ -70,6 +70,12 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
   /// Onde cada episódio parou (o AppState preenche).
   PodcastProgress? podcastProgress;
 
+  /// Começo de cada capítulo (ms) de um audiolivro (um arquivo só). Vazio = não é livro / sem capítulos.
+  List<int> Function(Track) chapterStarts = (_) => const [];
+
+  /// Onde começar a próxima faixa preparada (tocar um capítulo escolhido), no lugar de "onde parou".
+  Duration? _startAt;
+
   /// Velocidade dos podcasts (músicas tocam sempre em 1x).
   double podcastSpeed = 1.0;
   void Function(double)? onPodcastSpeedChanged;
@@ -262,6 +268,38 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
   Future<void> playPodcast(Track episode, {List<Track> following = const []}) =>
       playQueue([episode, ...following.where((t) => t.id != episode.id)], podcast: true);
 
+  /// Toca um audiolivro (fila só dele). [at]: começo do capítulo escolhido; sem ele, continua de onde parou.
+  /// O mesmo livro já tocando só pula para o capítulo.
+  Future<void> playBook(Track book, {Duration? at}) async {
+    if (current?.id == book.id && current != null) {
+      if (at != null) await seek(at);
+      if (!player.playing) unawaited(player.play());
+      return;
+    }
+    _startAt = at;
+    await playQueue([book], podcast: true);
+  }
+
+  /// ⏮/⏭ num audiolivro com capítulos: pula de capítulo dentro do arquivo. Devolve false = não é o caso.
+  Future<bool> _chapterJump({required bool forward}) async {
+    final c = current;
+    if (c == null) return false;
+    final starts = chapterStarts(c);
+    if (starts.length < 2) return false;
+    final pos = player.position.inMilliseconds;
+    int? to;
+    if (forward) {
+      to = starts.where((s) => s > pos + 1000).firstOrNull;
+      if (to == null) return false; // último capítulo: segue a fila (normalmente acaba)
+    } else {
+      final cur = starts.lastWhere((s) => s <= pos + 500, orElse: () => 0);
+      // mais de 5 s dentro do capítulo: volta ao começo dele; senão, ao capítulo anterior
+      to = pos - cur > 5000 ? cur : starts.lastWhere((s) => s < cur, orElse: () => 0);
+    }
+    await seek(Duration(milliseconds: to));
+    return true;
+  }
+
   /// Toca um episódio no meio das músicas: entra logo depois da atual, toca agora, e quando acaba
   /// a fila de músicas continua de onde estava. Sem músicas tocando, vira uma fila de podcast normal.
   Future<void> playPodcastBetweenSongs(Track episode) async {
@@ -302,7 +340,8 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
     _preparedId = now.id;
     if (isPodcast(now)) {
       unawaited(player.setSpeed(podcastSpeed).catchError((Object _) {}));
-      final at = podcastProgress?.resumeAt(now.path);
+      final at = _startAt ?? podcastProgress?.resumeAt(now.path);
+      _startAt = null;
       if (at != null) unawaited(player.seek(at).catchError((Object _) {}));
     } else if (player.speed != 1.0) {
       unawaited(player.setSpeed(1.0).catchError((Object _) {}));
@@ -374,6 +413,7 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
   /// (mix, troca de caminho, reordenar): se ela demorar, o avanço acontece assim mesmo.
   Future<void> next() async {
     crossfader.cancel(); // avanço manual: nunca com transição
+    if (await _chapterJump(forward: true)) return;
     _savePodcastPosition();
     _guard.reset();
     final skipped = current;
@@ -794,6 +834,7 @@ class PlayerService extends ChangeNotifier implements CrossfadeSettings {
 
   Future<void> previous() async {
     crossfader.cancel();
+    if (await _chapterJump(forward: false)) return;
     if (player.position > const Duration(seconds: 3)) return player.seek(Duration.zero);
     final to = previousIndexFor(_index, player.sequence.length, player.loopMode);
     if (to != null) await player.seek(Duration.zero, index: to);

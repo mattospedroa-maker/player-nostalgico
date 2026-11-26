@@ -13,7 +13,9 @@ import 'duplicates.dart';
 import 'error_log.dart';
 import 'metadata.dart';
 import 'models.dart';
+import 'net_policy.dart';
 import 'organizer.dart';
+import 'audiobooks.dart';
 import 'podcast_info.dart';
 import 'podcasts.dart';
 import 'youtube_names.dart';
@@ -49,6 +51,15 @@ class YtEntry {
   /// Salvar como podcast (pasta Podcasts/Programa/) em vez de música. O app adivinha; dá para trocar.
   bool podcast = false;
 
+  /// Salvar como audiolivro (pasta Audiolivros/Autor/Livro.m4a, capítulos marcados). Nunca junto com [podcast].
+  bool audiobook = false;
+
+  /// Música, podcast ou audiolivro.
+  MediaKind get kind => audiobook ? MediaKind.audiobooks : (podcast ? MediaKind.podcasts : MediaKind.music);
+
+  /// Situação dos capítulos do livro ('' = nada ainda).
+  String bookStatus = '';
+
   /// Nome do canal (vira o programa quando é podcast).
   final String channel;
 
@@ -67,6 +78,12 @@ class YtEntry {
   YtNames get podcastNames {
     final program = channel.trim().isEmpty ? unknownProgram : channel.trim();
     return YtNames(artist: program, title: originalTitle.trim().isEmpty ? 'Sem título' : originalTitle.trim(), album: program);
+  }
+
+  /// Nomes de audiolivro: autor e livro adivinhados pelo título do vídeo (autor = artista, livro = título e álbum).
+  YtNames get bookNames {
+    final g = guessBookNames(originalTitle, channel: channel);
+    return YtNames(artist: g.author, title: g.title, album: g.title);
   }
 
   bool get unavailable => originalTitle == '[Private video]' || originalTitle == '[Deleted video]';
@@ -90,7 +107,10 @@ class YtEntry {
     if (e.unavailable) e.selected = false;
     e.musicNames = e.names;
     e.rawInfo = info;
-    if (looksLikePodcastVideo(info)) {
+    if (looksLikeAudiobookVideo(info)) {
+      e.audiobook = true;
+      e.names = e.bookNames;
+    } else if (looksLikePodcastVideo(info)) {
       e.podcast = true;
       e.names = e.podcastNames;
     }
@@ -337,9 +357,13 @@ class DownloadService extends ChangeNotifier {
       if (entries.isEmpty) throw const YtDlpException('Não achei vídeos nesse link. É mesmo uma playlist?');
       playlistTitle = '${info['title'] ?? 'Playlist'}';
       // playlist de podcast (nome ou link do YouTube Music): todos os vídeos viram episódios
-      if (hasPodcastWords(playlistTitle!) || url.contains('/podcast')) {
+      if (hasAudiobookWords(playlistTitle!)) {
         for (final e in entries) {
-          _applyKind(e, true);
+          _applyKind(e, MediaKind.audiobooks);
+        }
+      } else if (hasPodcastWords(playlistTitle!) || url.contains('/podcast')) {
+        for (final e in entries) {
+          _applyKind(e, MediaKind.podcasts);
         }
       }
       playlist = _dropRepeatedInList(entries);
@@ -357,7 +381,7 @@ class DownloadService extends ChangeNotifier {
   /// Procura o álbum (e a grafia certa) no MusicBrainz, como o "Buscar novas músicas".
   Future<void> _lookupAlbums(List<YtEntry> entries) async {
     for (final e in entries) {
-      if (e.podcast) continue; // episódio não tem álbum no MusicBrainz
+      if (e.podcast || e.audiobook) continue; // episódio/livro não tem álbum no MusicBrainz
       if (e.edited || e.unavailable || e.names.album != unknownAlbum) continue;
       e.lookingUp = true;
       notifyListeners();
@@ -369,7 +393,7 @@ class DownloadService extends ChangeNotifier {
         final found = await mb.lookupSmart(n.title, artist: hint, moreHints: [if (channel.isNotEmpty) channel], titleOnlyMinScore: hint == null ? 90 : 101);
         final trusted = found != null &&
             (hint != null ? _sameArtist(found.artist, hint) : (channel.isEmpty ? !MusicBrainzClient.looksLikeCover(found) : found.score > 60));
-        if (found != null && trusted && !e.edited && !e.podcast) {
+        if (found != null && trusted && !e.edited && !e.podcast && !e.audiobook) {
           e.names = YtNames(artist: found.artist, title: found.title, album: found.album);
           markExisting([e], uncheck: !identical(e, single));
         }
@@ -385,32 +409,37 @@ class DownloadService extends ChangeNotifier {
   static String _n(String s) => s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9À-ɏ぀-ヿ一-鿿]+'), '');
   static bool _sameArtist(String a, String b) => _n(a).contains(_n(b)) || _n(b).contains(_n(a));
 
-  /// Troca entre Música e Podcast (um vídeo).
-  void setPodcast(YtEntry e, bool v) {
-    if (e.podcast == v) return;
-    _applyKind(e, v);
+  /// Troca entre Música, Podcast e Audiolivro (um vídeo).
+  void setKind(YtEntry e, MediaKind k) {
+    if (e.kind == k) return;
+    _applyKind(e, k);
     markExisting([e], uncheck: !identical(e, single));
     notifyListeners();
-    if (!v) unawaited(_lookupAlbums([e]));
+    if (k == MediaKind.music) unawaited(_lookupAlbums([e]));
   }
 
-  /// Troca todos os vídeos da playlist entre Música e Podcast.
-  void setPlaylistPodcast(bool v) {
+  /// Troca todos os vídeos da playlist entre Música, Podcast e Audiolivro.
+  void setPlaylistKind(MediaKind k) {
     for (final e in playlist) {
-      _applyKind(e, v);
+      _applyKind(e, k);
     }
     markExisting(playlist, uncheck: true);
     notifyListeners();
-    if (!v) unawaited(_lookupAlbums(playlist));
+    if (k == MediaKind.music) unawaited(_lookupAlbums(playlist));
   }
 
   bool get playlistIsPodcast => playlist.isNotEmpty && playlist.every((e) => e.podcast);
+  bool get playlistIsBook => playlist.isNotEmpty && playlist.every((e) => e.audiobook);
 
-  void _applyKind(YtEntry e, bool podcast) {
-    if (e.podcast == podcast) return;
-    if (!e.podcast) e.musicNames = e.names;
-    e.podcast = podcast;
-    e.names = podcast ? e.podcastNames : e.musicNames;
+  /// O que a playlist inteira é (música quando está misturada).
+  MediaKind get playlistKind => playlistIsBook ? MediaKind.audiobooks : (playlistIsPodcast ? MediaKind.podcasts : MediaKind.music);
+
+  void _applyKind(YtEntry e, MediaKind k) {
+    if (e.kind == k) return;
+    if (e.kind == MediaKind.music) e.musicNames = e.names;
+    e.podcast = k == MediaKind.podcasts;
+    e.audiobook = k == MediaKind.audiobooks;
+    e.names = switch (k) { MediaKind.podcasts => e.podcastNames, MediaKind.audiobooks => e.bookNames, MediaKind.music => e.musicNames };
     e.edited = false;
   }
 
@@ -604,10 +633,12 @@ class DownloadService extends ChangeNotifier {
     final tmp = p.join(tmpBase, e.id.isEmpty ? '${DateTime.now().millisecondsSinceEpoch}' : e.id);
     // podcast: descrição, capítulos, legenda e resumo da IA andam junto com o download do áudio
     final Future<EpisodeInfo>? extra = e.podcast ? _episodeInfo(e) : null;
+    // audiolivro: capítulos (descrição → legenda → Gemini) andam junto com o download
+    final Future<BookInfo>? book = e.audiobook ? _bookInfo(e) : null;
     try {
       // plano B: se o YouTube mudou, atualiza o yt-dlp e tenta esta música de novo.
       // O AAC é copiado como vem; só sem AAC (Opus) converte, e aí o podcast fica em 96k (fala não precisa de 192k).
-      final audio = await withFreshYtDlp(entry: e, () => ytdlp.downloadAudio(e.url, tmp, id: e.id, fallbackBitrate: e.podcast ? '96k' : '192k',
+      final audio = await withFreshYtDlp(entry: e, () => ytdlp.downloadAudio(e.url, tmp, id: e.id, fallbackBitrate: e.podcast || e.audiobook ? '96k' : '192k',
           onProgress: (prog, line) {
         // "convertendo" só quando o FFmpeg converte de verdade (plano B do Opus); a cópia do AAC segue como download
         if (YtDlp.isConvertingLine(line)) {
@@ -622,7 +653,11 @@ class DownloadService extends ChangeNotifier {
           unawaited(ytdlp.notify(notifyTitle, '${e.names.artist} – ${e.names.title}', progress: prog.round()));
         }
       }));
-      e.savedPath = e.podcast ? await _saveEpisode(File(audio), e.names, root) : await _saveToLibrary(File(audio), e.names, root);
+      e.savedPath = e.podcast
+          ? await _saveEpisode(File(audio), e.names, root)
+          : e.audiobook
+              ? await _saveBook(File(audio), e.names, root)
+              : await _saveToLibrary(File(audio), e.names, root);
       e.sizeBytes = File(e.savedPath!).lengthSync();
       await _rememberDownload(e.id, e.savedPath!);
       if (e.podcast) {
@@ -631,9 +666,20 @@ class DownloadService extends ChangeNotifier {
         unawaited(app.programArt.ensureEpisodeThumb(e.savedPath!, e.id));
       }
       // a capa do álbum (Cover Art Archive) entra no arquivo depois, em segundo plano, sem segurar a fila
-      if (!e.podcast) await app.queueCoverEmbed(e.savedPath!);
+      if (e.audiobook) unawaited(app.programArt.ensureEpisodeThumb(e.savedPath!, e.id)); // capa = miniatura do vídeo
+      if (!e.podcast && !e.audiobook) await app.queueCoverEmbed(e.savedPath!);
       e.status = YtStatus.done;
       e.progress = 1;
+      if (book != null) {
+        final path = e.savedPath!;
+        unawaited(book.then((info) async {
+          await app.bookService.save(path, info);
+          e.bookStatus = info.chapters.isEmpty ? 'sem capítulos' : '${info.chapters.length} capítulos (${info.chapterSource.label})';
+          notifyListeners();
+          // texto da obra e ilustrações: depois, sem segurar a fila
+          if (app.net.allows(NetFeature.books)) unawaited(app.bookService.fetchText(path));
+        }));
+      }
       if (extra != null) {
         final path = e.savedPath!;
         unawaited(extra.then((info) async {
@@ -689,6 +735,7 @@ class DownloadService extends ChangeNotifier {
         'title': e.names.title,
         'album': e.names.album,
         'podcast': e.podcast,
+        if (e.audiobook) 'livro': true,
         'channel': e.channel,
         'thumb': ?e.thumbnail,
         'dur': ?e.durationSec,
@@ -707,7 +754,8 @@ class DownloadService extends ChangeNotifier {
       channel: '${j['channel'] ?? ''}',
     )
       ..edited = true // nomes já estavam decididos: a busca de álbum não mexe mais
-      ..podcast = j['podcast'] == true;
+      ..podcast = j['podcast'] == true
+      ..audiobook = j['livro'] == true;
   }
 
   /// Downloads que faltavam quando o app foi fechado (lista vazia = nada).
@@ -758,9 +806,9 @@ class DownloadService extends ChangeNotifier {
   }
 
   /// Grava as tags fora da tela (o arquivo inteiro é relido e regravado; num episódio de 3h isso travaria a interface).
-  Future<void> _tag(File audio, String title, String artist, String album, {required bool podcast}) async {
+  Future<void> _tag(File audio, String title, String artist, String album, {required bool podcast, String? genre}) async {
     try {
-      await _writeTagsInBackground(audio.path, title, artist, album, podcast);
+      await _writeTagsInBackground(audio.path, title, artist, album, podcast, genre);
     } catch (e) {
       // as tags que o yt-dlp gravou (título e canal do vídeo) continuam no arquivo; o nome e as pastas dizem o resto
       errorLog.warn('YouTube', 'Não deu para gravar as tags em "$title"', error: e);
@@ -825,6 +873,31 @@ class DownloadService extends ChangeNotifier {
     if (changed) await app.prefs.setString('ytBaixados', jsonEncode(m));
   }
 
+  /// Audiolivro: tags com autor/livro e vai para Audiolivros/Autor/Livro.m4a.
+  Future<String> _saveBook(File audio, YtNames n, String root) async {
+    await _tag(audio, n.title, n.artist, n.title, podcast: false, genre: 'Audiolivro');
+    final target = _freePath(audiobookTargetPath(root, n.artist, '${safeFolderName(n.title)}${p.extension(audio.path).toLowerCase()}'));
+    await Directory(p.dirname(target)).create(recursive: true);
+    await Organizer.moveFile(audio, target);
+    return target;
+  }
+
+  /// Capítulos do livro: pega o JSON completo do vídeo (descrição, capítulos, legenda) e procura os capítulos.
+  Future<BookInfo> _bookInfo(YtEntry e) async {
+    e.bookStatus = 'procurando capítulos…';
+    notifyListeners();
+    try {
+      var yt = e.rawInfo;
+      if (!yt.containsKey('automatic_captions') && !yt.containsKey('description')) {
+        yt = await ytdlp.info(e.url, playlist: false);
+      }
+      return await app.bookService.build(yt, title: e.names.title, author: e.names.artist);
+    } catch (err) {
+      errorLog.info('Audiolivros', 'Não deu para buscar os capítulos de "${e.names.title}"', err);
+      return BookInfo(videoId: e.id, url: e.url, title: e.names.title, author: e.names.artist);
+    }
+  }
+
   /// Episódio de podcast: tags com programa/título inteiro e vai para Podcasts/Programa/Episódio.m4a.
   Future<String> _saveEpisode(File audio, YtNames n, String root) async {
     await _tag(audio, n.title, n.artist, n.artist, podcast: true);
@@ -843,7 +916,7 @@ class DownloadService extends ChangeNotifier {
     final byName = <String, List<String>>{};
     for (final e in queue.where((e) => e.status == YtStatus.done)) {
       final name = _playlistOf.remove(e);
-      if (e.podcast) continue; // podcast nunca entra em playlist de músicas
+      if (e.podcast || e.audiobook) continue; // podcast/livro nunca entra em playlist de músicas
       if (name != null) byName.putIfAbsent(name, () => []).add(e.savedPath!);
     }
     for (final name in byName.keys.toList()) {
@@ -868,22 +941,22 @@ class DownloadService extends ChangeNotifier {
   }
 }
 
-Future<void> _writeTagsInBackground(String path, String title, String artist, String album, bool podcast) =>
-    Isolate.run(() => writeDownloadTags(path, title: title, artist: artist, album: album, podcast: podcast));
+Future<void> _writeTagsInBackground(String path, String title, String artist, String album, bool podcast, String? genre) =>
+    Isolate.run(() => writeDownloadTags(path, title: title, artist: artist, album: album, podcast: podcast, genre: genre));
 
 /// Grava título, artista, álbum e gênero no arquivo baixado. No .m4a vão nos átomos do MP4 (©nam, ©ART, ©alb, ©gen),
 /// pela escrita MP4 do audio_metadata_reader; no .mp3, em ID3. Música: o gênero "Music" que o yt-dlp põe (categoria do
 /// vídeo) sai, o gênero real vem do MusicBrainz/Last.fm. Podcast: gênero "Podcast".
 /// Lança erro se as tags não ficarem gravadas (conferido relendo o arquivo).
-void writeDownloadTags(String path, {required String title, required String artist, required String album, bool podcast = false}) {
+void writeDownloadTags(String path, {required String title, required String artist, required String album, bool podcast = false, String? genre}) {
   final file = File(path);
   FileMetadataReader.fixMp4Date(path); // a data "20180724" do yt-dlp quebraria a leitura e a gravação
-  final genre = podcast ? 'Podcast' : (FileMetadataReader.readTagsSync(path)?.genre ?? '');
+  final g = genre ?? (podcast ? 'Podcast' : (FileMetadataReader.readTagsSync(path)?.genre ?? ''));
   updateMetadata(file, (m) {
     m.setTitle(title);
     m.setArtist(artist);
     m.setAlbum(album);
-    m.setGenres(genre.isEmpty ? const [] : [genre]);
+    m.setGenres(g.isEmpty ? const [] : [g]);
     // o yt-dlp grava a data de envio (20261121) em ©day; a leitura do pacote vira um ano absurdo e a escrita
     // gravaria lixo ("-198271"). Data de envio não é ano de lançamento: sai.
     if (m is Mp4Metadata) {
