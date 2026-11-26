@@ -20,6 +20,7 @@ import 'cover_service.dart';
 import 'crossfade.dart';
 import 'db.dart';
 import 'download_service.dart';
+import 'experience_ai.dart';
 import 'experiences.dart';
 import 'error_log.dart';
 import 'filename_parser.dart';
@@ -680,7 +681,7 @@ class AppState extends ChangeNotifier {
     experiences; // carrega
     try {
       final stats = await playStats();
-      final next = ExperienceEngine.refresh(_exp, tracks, stats: stats);
+      final next = ExperienceEngine.refresh(_exp, tracks, stats: stats, aiThemes: _aiThemes());
       if (!identical(next, _exp)) {
         _exp = next;
         await prefs.setString(_expKey, _exp.encode());
@@ -689,6 +690,7 @@ class AppState extends ChangeNotifier {
     } catch (e) {
       errorLog.info('Momentos', 'Não deu para renovar as playlists do momento', e);
     }
+    unawaited(_maybeFetchAiThemes());
     // acorda quando a próxima vencer
     _expTimer?.cancel();
     final list = experiences;
@@ -696,6 +698,86 @@ class AppState extends ChangeNotifier {
       final wait = list.first.expiresAt - DateTime.now().millisecondsSinceEpoch;
       _expTimer = Timer(Duration(milliseconds: wait.clamp(60000, 86400000)), () => unawaited(refreshExperiences()));
     }
+  }
+
+  static const _aiThemesKey = 'iaTemas';
+
+  /// Temas que a IA inventou nesta semana (ainda não usados).
+  List<AiTheme> _aiThemes() {
+    try {
+      final raw = prefs.getString(_aiThemesKey);
+      if (raw == null) return const [];
+      final j = jsonDecode(raw) as Map;
+      return [for (final t in (j['themes'] as List? ?? const [])) ?AiTheme.fromJson(t)];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  bool _fetchingThemes = false;
+
+  /// Uma vez por semana (no Wi-Fi, se a aba Internet pedir), a IA inventa 3 temas novos para a sua biblioteca.
+  /// Só depois que a ficha de boa parte das músicas já está pronta, para a IA saber o que você tem.
+  Future<void> _maybeFetchAiThemes() async {
+    if (_fetchingThemes || geminiKey.isEmpty || !net.allows(NetFeature.ai) || tracks.length < 30) return;
+    final last = prefs.getInt('iaTemasEm') ?? 0;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - last < const Duration(days: 7).inMilliseconds) return;
+    final read = tracks.where(trackFacts.hasAi).length;
+    if (read < tracks.length * .5 && read < 300) return; // a IA ainda está lendo as músicas
+    _fetchingThemes = true;
+    try {
+      final avoid = [for (final id in _exp.recent) if (id.startsWith('ia:')) id.substring(3).replaceAll('-', ' ')];
+      final ai = await GeminiClient(gifFetcher.client, geminiKey)
+          .generateJson(ExperienceAi.weeklyPrompt(ExperienceAi.summarize(tracks), avoid: avoid), timeout: const Duration(minutes: 2));
+      final themes = ExperienceAi.parseThemes(ai);
+      await prefs.setInt('iaTemasEm', now);
+      await prefs.setString(_aiThemesKey, jsonEncode({'themes': [for (final t in themes) t.toJson()]}));
+      errorLog.info('Momentos', 'A IA inventou ${themes.length} temas: ${themes.map((t) => t.title).join(', ')}');
+      if (themes.isNotEmpty) {
+        _fetchingThemes = false;
+        await refreshExperiences();
+      }
+    } on GeminiException catch (e) {
+      errorLog.info('Momentos', 'A IA não inventou os temas da semana agora (${e.message})');
+    } catch (e) {
+      errorLog.info('Momentos', 'Não deu para pedir os temas da semana à IA', e);
+    } finally {
+      _fetchingThemes = false;
+    }
+  }
+
+  /// "Inventar uma experiência": com internet a IA transforma o texto num tema; sem, o app casa as palavras.
+  /// Devolve a playlist criada (já no ar) ou uma mensagem dizendo por que não deu.
+  Future<(Experience?, String?)> inventExperience(String text) async {
+    final t = text.trim();
+    if (t.isEmpty) return (null, 'Escreva o momento, por exemplo "cavalgada no deserto ao pôr do sol".');
+    AiTheme? theme;
+    var byAi = false;
+    if (geminiKey.isNotEmpty && net.online) {
+      try {
+        final ai = await GeminiClient(gifFetcher.client, geminiKey)
+            .generateJson(ExperienceAi.inventPrompt(t, ExperienceAi.summarize(tracks)), timeout: const Duration(seconds: 45));
+        theme = ExperienceAi.parseThemes(ai).firstOrNull;
+        byAi = theme != null;
+      } catch (e) {
+        errorLog.info('Momentos', 'A IA não respondeu ao "Inventar"; montei pelas palavras', e);
+      }
+    }
+    theme ??= ExperienceAi.offlineTheme(t);
+    final stats = await playStats();
+    var e = ExperienceEngine.invent(theme.toRecipe(), tracks,
+        stats: stats, why: theme.why.isEmpty ? (byAi ? 'Montada pela IA a partir do que você pediu.' : '') : theme.why, missing: theme.missing);
+    if (e == null && byAi) {
+      // a IA viajou demais: tenta pelas palavras
+      final off = ExperienceAi.offlineTheme(t);
+      e = ExperienceEngine.invent(off.toRecipe(), tracks, stats: stats, why: off.why);
+    }
+    if (e == null) return (null, 'Não achei músicas suficientes para "$t". Tente outras palavras (lugar, clima, atividade).');
+    _exp = ExperienceState([for (final x in _exp.active) if (x.id != e.id) x, e], [..._exp.recent, e.id]);
+    await prefs.setString(_expKey, _exp.encode());
+    notifyListeners();
+    return (e, null);
   }
 
   /// "Salvar nas minhas playlists": vira uma playlist normal (com as músicas na mesma ordem) e sai do momento.

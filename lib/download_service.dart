@@ -264,6 +264,7 @@ class DownloadService extends ChangeNotifier {
 
   static String normalizeUrl(String raw) {
     var s = raw.trim();
+    if (s.startsWith('ytsearch')) return s; // busca por nome ("Para completar" das playlists do momento)
     final m = RegExp(r'https?://\S+').firstMatch(s); // texto compartilhado com o link no meio
     if (m != null) s = m.group(0)!;
     if (!s.startsWith('http') && s.contains('.')) s = 'https://$s';
@@ -301,7 +302,14 @@ class DownloadService extends ChangeNotifier {
     notifyListeners();
     try {
       await _maybeUpdate();
-      final info = await withFreshYtDlp(() => ytdlp.info(url, playlist: false));
+      var info = await withFreshYtDlp(() => ytdlp.info(url, playlist: false));
+      // busca por nome: o yt-dlp devolve uma lista com o primeiro resultado
+      final entries = info['entries'];
+      if (entries is List) {
+        final first = entries.whereType<Map>().firstOrNull;
+        if (first == null) throw const FormatException('Nada encontrado no YouTube com esse nome');
+        info = first.cast<String, dynamic>();
+      }
       single = YtEntry.fromInfo(info);
       markExisting([single!], uncheck: false);
       notifyListeners();

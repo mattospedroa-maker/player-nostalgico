@@ -10,6 +10,7 @@ import '../mood.dart';
 import '../recommender.dart';
 import '../player_service.dart';
 import '../theme.dart';
+import 'youtube_screen.dart';
 import '../widgets.dart';
 import '../xp_icons.dart';
 
@@ -21,6 +22,49 @@ class PlaylistsScreen extends StatefulWidget {
 }
 
 class _PlaylistsScreenState extends State<PlaylistsScreen> with InListSearch {
+  /// Caixa "Inventar uma experiência": a pessoa escreve o momento e a playlist sai na hora.
+  Future<void> _invent(BuildContext context) async {
+    final app = context.read<AppState>();
+    final nav = Navigator.of(context);
+    final msg = ScaffoldMessenger.of(context);
+    final ctrl = TextEditingController();
+    final text = await showDialog<String>(
+      context: context,
+      builder: (ctx) => XpAlertDialog(
+        icon: XpIcons.note,
+        title: const Text('Inventar uma experiência'),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Escreva o momento e eu monto com as suas músicas.', style: TextStyle(fontSize: 13)),
+          const SizedBox(height: 8),
+          TextField(
+            controller: ctrl,
+            autofocus: true,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: const InputDecoration(hintText: 'ex.: cavalgada no deserto ao pôr do sol', isDense: true),
+            onSubmitted: (v) => Navigator.pop(ctx, v),
+          ),
+          const SizedBox(height: 6),
+          Text(app.geminiKey.isNotEmpty && app.net.online ? 'Com internet a IA ajuda; sem, monto pelas palavras.' : 'Sem internet: monto pelas palavras.',
+              style: const TextStyle(fontSize: 11.5, color: Color(0xFF666666))),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text), child: const Text('Montar')),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (text == null || text.trim().isEmpty) return;
+    msg.showSnackBar(const SnackBar(content: Text('Montando a sua experiência…'), duration: Duration(seconds: 2)));
+    final (e, error) = await app.inventExperience(text);
+    msg.hideCurrentSnackBar();
+    if (e == null) {
+      msg.showSnackBar(SnackBar(content: Text(error ?? 'Não deu para montar agora.')));
+      return;
+    }
+    nav.push(MaterialPageRoute(builder: (_) => ExperienceScreen(id: e.id)));
+  }
+
   static const _grid = SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: .95);
 
   @override
@@ -67,8 +111,17 @@ class _PlaylistsScreenState extends State<PlaylistsScreen> with InListSearch {
                           itemBuilder: (_, i) => _PlaylistCard(shown[i], highlight: searching ? searchQuery : null),
                         ),
                       ),
-                    if (exps.isNotEmpty) ...[
+                    if (!searching && app.tracks.isNotEmpty) ...[
                       const SliverToBoxAdapter(child: _MomentBar()),
+                      SliverToBoxAdapter(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),
+                          child: XpButton(label: '✨ Inventar uma experiência', onTap: () => _invent(context)),
+                        ),
+                      ),
+                    ],
+                    if (exps.isNotEmpty) ...[
+                      if (searching) const SliverToBoxAdapter(child: _MomentBar()),
                       SliverPadding(
                         padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
                         sliver: SliverGrid.builder(
@@ -153,6 +206,7 @@ class _ExperienceCard extends StatelessWidget {
               Positioned(left: 4, top: 4, child: _badge('⏳ ${Experience.timeLeft(left)}', const Color(0xD906163F), const Color(0xFFFFD75A))),
               if (e.kind == 'surpresa') Positioned(right: 4, top: 4, child: _badge('SURPRESA', Xp.gold, Colors.black)),
               if (e.kind == 'ia') Positioned(right: 4, top: 4, child: _badge('IA', const Color(0xFF7B3FD1), Colors.white)),
+              if (e.kind == 'inventada') Positioned(right: 4, top: 4, child: _badge('SUA', Xp.blue, Colors.white)),
             ]),
           ),
           Padding(
@@ -171,6 +225,46 @@ class _ExperienceCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// "Para completar": músicas famosas do tema que você ainda não tem, com atalho para baixar do YouTube.
+class _MissingBlock extends StatelessWidget {
+  final List<String> missing;
+  const _MissingBlock(this.missing);
+
+  @override
+  Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0xFFDBE6FB), Color(0xFFC4D5F5)]),
+            border: Border(top: BorderSide(color: Color(0xFF6F95DD), width: 2)),
+          ),
+          child: const Row(children: [
+            Text('🧩 Para completar', style: TextStyle(color: Color(0xFF0B2F80), fontWeight: FontWeight.bold, fontSize: 13)),
+            Spacer(),
+            Text('você ainda não tem', style: TextStyle(color: Color(0xFF334455), fontSize: 11)),
+          ]),
+        ),
+        for (final m in missing)
+          Container(
+            padding: const EdgeInsets.fromLTRB(12, 6, 8, 6),
+            decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: Color(0xFFEEEEEE)))),
+            child: Row(children: [
+              const Text('✖ ', style: TextStyle(color: Color(0xFF999999))),
+              Expanded(child: Text(m, style: const TextStyle(fontSize: 13, fontStyle: FontStyle.italic, color: Color(0xFF555555)))),
+              XpButton(
+                label: 'Baixar',
+                xpIcon: XpIcons.youtube,
+                onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => YoutubeScreen(search: m.replaceAll(RegExp(r'\s+[—–-]\s+'), ' ')))),
+              ),
+            ]),
+          ),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(12, 6, 12, 12),
+          child: Text('Abre o "Baixar do YouTube" com o primeiro resultado. Confira antes de baixar.', style: TextStyle(fontSize: 11, color: Color(0xFF888888))),
+        ),
+      ]);
 }
 
 /// Dentro de uma playlist do momento: quanto falta para sumir, Tocar, Salvar e o porquê de cada música.
@@ -246,8 +340,8 @@ class ExperienceScreen extends StatelessWidget {
               child: ColoredBox(
                 color: Colors.white,
                 child: ListView.builder(
-                  itemCount: ts.length,
-                  itemBuilder: (_, i) => TrackTile(
+                  itemCount: ts.length + (e.missing.isEmpty ? 0 : 1),
+                  itemBuilder: (_, i) => i == ts.length ? _MissingBlock(e.missing) : TrackTile(
                     track: ts[i],
                     subtitle: '${ts[i].artist} · ${fmtDuration(Duration(milliseconds: ts[i].durationMs))}',
                     onTap: () => play(i),

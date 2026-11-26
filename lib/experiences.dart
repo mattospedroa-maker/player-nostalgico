@@ -2,10 +2,12 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'artist_names.dart';
+import 'experience_ai.dart';
 import 'models.dart';
 import 'play_stats.dart';
 import 'styles.dart';
 import 'track_sheet.dart';
+import 'visual_tags.dart' show VisualTagMapper;
 
 /// Receita de uma playlist do momento: nome, ícone e as cenas que ela procura (com peso).
 class ExperienceRecipe {
@@ -13,7 +15,13 @@ class ExperienceRecipe {
   final String title;
   final String emoji;
   final Map<String, double> scenes;
-  const ExperienceRecipe(this.id, this.title, this.emoji, this.scenes);
+
+  /// Palavras procuradas no título, álbum, artista, tags e na ficha da IA (temas da IA e "Inventar").
+  final List<String> words;
+
+  /// Artistas que combinam com o tema (temas da IA).
+  final List<String> artists;
+  const ExperienceRecipe(this.id, this.title, this.emoji, this.scenes, {this.words = const [], this.artists = const []});
 }
 
 /// Cardápio fixo (off-line). Novas ideias entram aqui; a IA e as surpresas completam.
@@ -72,6 +80,9 @@ class Experience {
 
   /// Uma frase sobre de onde ela veio.
   final String why;
+
+  /// "Para completar": músicas que combinam com o tema e você ainda não tem ("Artista — Título").
+  final List<String> missing;
   final int createdAt;
   final int expiresAt;
 
@@ -83,6 +94,7 @@ class Experience {
     required this.trackIds,
     this.reasons = const {},
     this.why = '',
+    this.missing = const [],
     required this.createdAt,
     required this.expiresAt,
   });
@@ -97,6 +109,7 @@ class Experience {
         'tracks': trackIds,
         'reasons': {for (final e in reasons.entries) '${e.key}': e.value},
         'why': why,
+        if (missing.isNotEmpty) 'missing': missing,
         'created': createdAt,
         'expires': expiresAt,
       };
@@ -115,6 +128,7 @@ class Experience {
             if (int.tryParse('${e.key}') != null) int.parse('${e.key}'): '${e.value}'
         },
         why: '${j['why'] ?? ''}',
+        missing: [for (final m in (j['missing'] as List? ?? const [])) '$m'],
         createdAt: (j['created'] as num).toInt(),
         expiresAt: (j['expires'] as num).toInt(),
       );
@@ -172,13 +186,50 @@ class ExperienceEngine {
   static const recentMemory = 24;
   static const minHours = 40, maxHours = 70;
 
+  /// Temas da IA no ar ao mesmo tempo.
+  static const maxAi = 2;
+
+  /// Das músicas sugeridas pela IA ("Artista — Título"), as que você ainda não tem.
+  static List<String> missingFrom(List<String> suggested, List<Track> library) {
+    final have = {for (final t in library) _titleKey(t.title)};
+    final out = <String>[];
+    for (final m in suggested) {
+      final parts = m.split(RegExp(r'\s+[—–-]\s+'));
+      final title = parts.length > 1 ? parts.sublist(1).join(' ') : m;
+      if (title.trim().isEmpty || have.contains(_titleKey(title))) continue;
+      if (!out.contains(m)) out.add(m);
+      if (out.length >= 6) break;
+    }
+    return out;
+  }
+
+  static String _titleKey(String title) =>
+      _norm(title.replaceAll(RegExp(r'\s*[\(\[].*?[\)\]]'), '')).replaceAll(RegExp(r'[^a-z0-9]+'), '');
+
+  /// Monta na hora uma playlist do momento a partir de uma receita (botão "Inventar uma experiência").
+  /// null = poucas músicas combinam.
+  static Experience? invent(ExperienceRecipe r, List<Track> library,
+      {PlayStats stats = PlayStats.empty, int? nowMs, Random? rnd, String why = '', List<String> missing = const []}) {
+    final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
+    final random = rnd ?? Random();
+    final tracks = pick(r, library, stats: stats, rnd: random, min: 5);
+    if (tracks.isEmpty) return null;
+    return Experience(
+        id: r.id, title: r.title, emoji: r.emoji, kind: 'inventada', trackIds: [for (final (t, _) in tracks) t.id!],
+        reasons: {for (final (t, l) in tracks) t.id!: l}, why: why, missing: missingFrom(missing, library), createdAt: now,
+        expiresAt: now + (minHours + random.nextInt(maxHours - minHours + 1)) * _hour);
+  }
+
   static const _hour = 3600000;
 
   /// Músicas para uma receita, com a etiqueta do porquê. Vazio se não tiver músicas suficientes.
   static List<(Track, String)> pick(ExperienceRecipe r, List<Track> library,
-      {PlayStats stats = PlayStats.empty, Random? rnd, Sheet Function(Track)? sheetOf}) {
+      {PlayStats stats = PlayStats.empty, Random? rnd, Sheet Function(Track)? sheetOf, AiFacts? Function(Track)? aiOf, int min = minTracks}) {
     final random = rnd ?? Random();
     final sheet = sheetOf ?? TrackSheet.of;
+    final ai = aiOf ?? TrackSheet.aiOf;
+    final wordRe = wordsRegex(r.words);
+    final artists = {for (final a in r.artists) _norm(a)};
     final scored = <(Track, double, String)>[];
     for (final t in library) {
       if (t.id == null) continue;
@@ -194,6 +245,26 @@ class ExperienceEngine {
           label = '${s.emoji} ${s.label}';
         }
       }
+      if (artists.isNotEmpty && artists.contains(_norm(ArtistNames.current.main(t.artist)))) {
+        score += 1.5;
+        if (best < 1.5) {
+          best = 1.5;
+          label = '🎤 ${ArtistNames.current.main(t.artist)}';
+        }
+      }
+      if (wordRe != null) {
+        final f = ai(t);
+        final text = _norm([t.title, t.album, t.artist, ...Styles.soundTags(t), if (f != null) ...[...f.topics, ...f.sound, ...f.like]].join(' · '));
+        final hits = wordRe.allMatches(text).map((m) => m.group(2)).toSet();
+        if (hits.isNotEmpty) {
+          final v = hits.length >= 2 ? 2.4 : 1.4;
+          score += v;
+          if (v > best) {
+            best = v;
+            label = '🔤 ${hits.first}';
+          }
+        }
+      }
       if (score < TrackSheet.minScore) continue;
       // muito pulada pesa menos
       final plays = stats.count(t.id), skips = stats.skipCount(t.id);
@@ -201,7 +272,7 @@ class ExperienceEngine {
       score *= .85 + random.nextDouble() * .3; // um pouco de sorte: cada vez sai uma lista diferente
       scored.add((t, score, label));
     }
-    if (scored.length < minTracks) return const [];
+    if (scored.length < min) return const [];
     scored.sort((a, b) => b.$2.compareTo(a.$2));
     final perArtist = <String, int>{};
     final names = ArtistNames.current;
@@ -213,7 +284,16 @@ class ExperienceEngine {
       out.add((t, label));
       if (out.length >= maxTracks) break;
     }
-    return out.length < minTracks ? const [] : out;
+    return out.length < min ? const [] : out;
+  }
+
+  static String _norm(String s) => VisualTagMapper.normalize(s);
+
+  /// Regex das palavras (inteiras, sem acento). null = sem palavras.
+  static RegExp? wordsRegex(List<String> words) {
+    final ws = [for (final w in words) if (_norm(w).trim().length >= 3) RegExp.escape(_norm(w).trim())];
+    if (ws.isEmpty) return null;
+    return RegExp('(^|[^a-z0-9])(${ws.join('|')})(\$|[^a-z0-9])');
   }
 
   /// Surpresas tiradas da sua biblioteca: um artista esquecido, uma década, um estilo raro, um ano.
@@ -280,7 +360,12 @@ class ExperienceEngine {
   /// Tira as vencidas (e as que perderam músicas demais) e cria novas até ter [target] no ar.
   /// [libraryIds]: ids que ainda existem. Devolve o estado novo (o mesmo objeto se nada mudou).
   static ExperienceState refresh(ExperienceState state, List<Track> library,
-      {PlayStats stats = PlayStats.empty, int? nowMs, Random? rnd, Sheet Function(Track)? sheetOf}) {
+      {PlayStats stats = PlayStats.empty,
+      int? nowMs,
+      Random? rnd,
+      Sheet Function(Track)? sheetOf,
+      AiFacts? Function(Track)? aiOf,
+      List<AiTheme> aiThemes = const []}) {
     final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
     final random = rnd ?? Random();
     final ids = {for (final t in library) t.id};
@@ -300,7 +385,7 @@ class ExperienceEngine {
         changed = true;
         active.add(Experience(
             id: e.id, title: e.title, emoji: e.emoji, kind: e.kind, trackIds: kept, reasons: e.reasons, why: e.why,
-            createdAt: e.createdAt, expiresAt: e.expiresAt));
+            missing: e.missing, createdAt: e.createdAt, expiresAt: e.expiresAt));
       } else {
         active.add(e);
       }
@@ -328,6 +413,23 @@ class ExperienceEngine {
         changed = true;
       }
     }
+    // temas da IA da semana (no máximo [maxAi] no ar, cada um uma vez só)
+    var aiOn = active.where((e) => e.kind == 'ia').length;
+    for (final th in aiThemes) {
+      if (aiOn >= maxAi || active.length >= target) break;
+      final r = th.toRecipe();
+      if (busy.contains(r.id)) continue;
+      final tracks = pick(r, library, stats: stats, rnd: random, sheetOf: sheetOf, aiOf: aiOf);
+      recent.add(r.id); // mesmo sem músicas: não tenta de novo toda hora
+      busy.add(r.id);
+      changed = true;
+      if (tracks.isEmpty) continue;
+      active.add(Experience(
+          id: r.id, title: r.title, emoji: r.emoji, kind: 'ia', trackIds: [for (final (t, _) in tracks) t.id!],
+          reasons: {for (final (t, l) in tracks) t.id!: l}, why: th.why.isEmpty ? 'Tema inventado pela IA para a sua biblioteca.' : th.why,
+          missing: missingFrom(th.missing, library), createdAt: now, expiresAt: expiry()));
+      aiOn++;
+    }
     // cardápio, em ordem sorteada, pulando as usadas há pouco; se faltar, a 2ª volta aceita as recentes
     final menu = [...experienceMenu]..shuffle(random);
     final tried = <String>{};
@@ -340,7 +442,7 @@ class ExperienceEngine {
       }
       if (second && !recent.contains(r.id)) continue; // já tentada e sem músicas suficientes
       tried.add(r.id);
-      final tracks = pick(r, library, stats: stats, rnd: random, sheetOf: sheetOf);
+      final tracks = pick(r, library, stats: stats, rnd: random, sheetOf: sheetOf, aiOf: aiOf);
       if (tracks.isEmpty) continue;
       final top = r.scenes.keys.map((k) => TrackSheet.sceneByKey[k]?.label).whereType<String>().take(2).join(' e ');
       active.add(Experience(
