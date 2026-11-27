@@ -585,8 +585,88 @@ void main() {
       expect(AuthorPhotoService.pickAuthorPage(wiki([{'title': 'Livros Falados', 'description': 'escritor', 'thumbnail': img}]), 'Canal Audiolivros BR'), isNull);
     });
   });
-}
 
+  group('destaque da frase lida', () {
+    test('legenda json3: tempo de cada palavra', () {
+      final body = jsonEncode({
+        'events': [
+          {
+            'tStartMs': 1000,
+            'segs': [
+              {'utf8': 'era'},
+              {'utf8': ' uma', 'tOffsetMs': 300},
+              {'utf8': ' vez', 'tOffsetMs': 650},
+            ],
+          },
+          {'tStartMs': 2000, 'aAppend': 1, 'segs': [{'utf8': '\n'}]},
+          {
+            'tStartMs': 2500,
+            'segs': [
+              {'utf8': 'um'},
+              {'utf8': ' sonhador', 'tOffsetMs': 200},
+            ],
+          },
+        ],
+      });
+      final r = parseJson3Words(body);
+      expect(r.segs, [(1000, 'era uma vez'), (2500, 'um sonhador')]);
+      expect(r.offsets, [[0, 300, 650], [0, 200]]);
+      final tr = Transcript(r.segs, offsets: r.offsets);
+      expect(tr.hasWordTimes, isTrue);
+      expect(tr.wordStream(), [('era', 1000), ('uma', 1300), ('vez', 1650), ('um', 2500), ('sonhador', 2700)]);
+      final back = Transcript.fromJson(jsonDecode(jsonEncode(tr.toJson())) as Map<String, dynamic>);
+      expect(back.offsets, r.offsets);
+      expect(Transcript(r.segs).hasWordTimes, isFalse);
+    });
+
+    test('frases do texto do Gemini casam com as palavras da legenda, mesmo com palavra trocada', () {
+      final stream = [
+        for (final (i, w) in 'era uma vez um sonhador que morava sozinho em são petersburgo ele andava pelas ruas toda noite'.split(' ').indexed)
+          (wordKey(w), 10000 + i * 400),
+      ];
+      final pars = [(10000, 'Era uma vez um sonhador que morava sozinho em São Petersburgo. Ele caminhava pelas ruas toda noite.')];
+      final f = sentenceTimes(pars, stream).single;
+      expect(f.length, 4); // duas frases: [letra, ms, letra, ms]
+      expect(f[0], 0);
+      expect(f[1], 10000);
+      expect(pars.single.$2.substring(f[2]), startsWith('Ele caminhava'));
+      expect(f[3], 10000 + 11 * 400); // "ele" é a 12ª palavra da legenda
+      // sem legenda com tempos: nada de destaque
+      expect(sentenceTimes(pars, const []).single, isEmpty);
+    });
+
+    test('frase lida pelo tempo e a página onde ela está', () {
+      final text = BookText(chapters: [
+        BookChapter('I', const ['Primeira frase. Segunda frase.', 'Outro parágrafo.'], const [0, 8000], const [
+          [0, 0, 16, 4000],
+          [0, 8000],
+        ]),
+      ]);
+      expect(text.chapters.first.hasSentences, isTrue);
+      expect(sentenceAt(text, 1000), (chapter: 0, para: 0, start: 0, end: 16));
+      expect(sentenceAt(text, 5000), (chapter: 0, para: 0, start: 16, end: 30));
+      expect(sentenceAt(text, 9000), (chapter: 0, para: 1, start: 0, end: 16));
+      expect(sentenceAt(BookText(chapters: [BookChapter('x', const ['y'])]), 1000), isNull); // EPUB: sem tempos
+      final back = BookText.fromJson(jsonDecode(jsonEncode(text.toJson())) as Map<String, dynamic>);
+      expect(back.chapters.first.sentences, text.chapters.first.sentences);
+      const pages = [
+        BookPage(0, 0, [PageSeg(0, 0, 20)], 0),
+        BookPage(0, 1, [PageSeg(0, 21, 30), PageSeg(1, 0, 16)], 20),
+      ];
+      expect(pageForChar(pages, 0, 16), 0);
+      expect(pageForChar(pages, 0, 20), 1); // espaço pulado no corte
+      expect(pageForChar(pages, 1, 0), 1);
+    });
+
+    test('transcrição é o padrão: livro com texto do Gutenberg e vídeo tenta de novo', () {
+      final s = BookService(client: _NoNet(), geminiKey: () => '');
+      expect(s.shouldSearchText(const BookInfo(videoId: 'abc', textStatus: TextStatus.ok, textSource: 'Projeto Gutenberg #1', searchVersion: 2)), isTrue);
+      expect(s.shouldSearchText(const BookInfo(textStatus: TextStatus.ok, textSource: 'Projeto Gutenberg #1', searchVersion: 2)), isFalse); // sem vídeo
+      expect(s.shouldSearchText(const BookInfo(videoId: 'abc', textStatus: TextStatus.ok, textSource: 'EPUB anexado (x.epub)', searchVersion: 2)), isFalse);
+      expect(s.shouldSearchText(const BookInfo(videoId: 'abc', textStatus: TextStatus.ok, textSource: 'Projeto Gutenberg #1', searchVersion: BookService.searchVersion)), isFalse);
+    });
+  });
+}
 
 class _NoNet extends http.BaseClient {
   @override

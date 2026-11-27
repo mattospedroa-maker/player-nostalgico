@@ -18,16 +18,21 @@ class BookChapter {
 
   /// Quando cada parágrafo começa no áudio (ms). Só no texto feito pela transcrição do vídeo; vazio no EPUB.
   final List<int> times;
-  const BookChapter(this.title, this.paragraphs, [this.times = const []]);
+
+  /// Frases de cada parágrafo, para o destaque: [letra onde começa, ms, letra, ms, ...] (vazio = sem destaque).
+  final List<List<int>> sentences;
+  const BookChapter(this.title, this.paragraphs, [this.times = const [], this.sentences = const []]);
 
   bool get timed => times.isNotEmpty && times.length == paragraphs.length;
+  bool get hasSentences => timed && sentences.length == paragraphs.length;
   int get length => paragraphs.fold(0, (s, x) => s + x.length + 1);
 
-  Map<String, Object> toJson() => {'t': title, 'p': paragraphs, if (timed) 'ms': times};
+  Map<String, Object> toJson() => {'t': title, 'p': paragraphs, if (timed) 'ms': times, if (hasSentences) 'f': sentences};
   static BookChapter fromJson(Map<String, dynamic> m) => BookChapter(
         '${m['t'] ?? ''}',
         [for (final x in (m['p'] as List?) ?? const []) '$x'],
         [for (final x in (m['ms'] as List?) ?? const []) (x as num).toInt()],
+        [for (final f in (m['f'] as List?) ?? const []) [for (final x in (f as List)) (x as num).toInt()]],
       );
 }
 
@@ -358,7 +363,34 @@ class Transcript {
   /// Parágrafos arrumados (início em ms, texto) dos primeiros [done] pedaços.
   final List<(int, String)> polished;
   final int done;
-  const Transcript(this.segs, {this.polished = const [], this.done = 0});
+
+  /// Quando cada palavra de cada trecho é dita (ms depois do começo do trecho), da legenda automática.
+  /// Vazio em transcrições guardadas antes do destaque da frase.
+  final List<List<int>> offsets;
+  const Transcript(this.segs, {this.polished = const [], this.done = 0, this.offsets = const []});
+
+  bool get hasWordTimes => offsets.length == segs.length && offsets.any((o) => o.isNotEmpty);
+
+  Transcript copyWith({List<(int, String)>? polished, int? done}) =>
+      Transcript(segs, polished: polished ?? this.polished, done: done ?? this.done, offsets: offsets);
+
+  /// Cada palavra dita (sem acento/pontuação) e quando: base para casar as frases arrumadas com o áudio.
+  List<(String, int)> wordStream() {
+    final out = <(String, int)>[];
+    for (var i = 0; i < segs.length; i++) {
+      final (ms, text) = segs[i];
+      final words = text.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+      final off = i < offsets.length ? offsets[i] : const <int>[];
+      final next = i + 1 < segs.length ? segs[i + 1].$1 : ms + 3000;
+      final span = (next - ms).clamp(0, 6000);
+      for (var k = 0; k < words.length; k++) {
+        final t = off.length == words.length ? ms + off[k] : ms + span * k ~/ words.length;
+        final n = wordKey(words[k]);
+        if (n.isNotEmpty) out.add((n, t));
+      }
+    }
+    return out;
+  }
 
   /// Trechos por pedaço mandado ao Gemini (~12 min de leitura, uns 2 mil palavras).
   static const chunk = 250;
@@ -370,6 +402,7 @@ class Transcript {
         'trechos': [for (final (ms, t) in segs) [ms, t]],
         'arrumados': [for (final (ms, t) in polished) [ms, t]],
         'pedacos': done,
+        if (hasWordTimes) 'tempos': offsets,
       };
 
   static List<(int, String)> _pairs(Object? v) => [
@@ -377,8 +410,12 @@ class Transcript {
           if (x is List && x.length == 2) ((x[0] as num).toInt(), '${x[1]}'),
       ];
 
-  static Transcript fromJson(Map<String, dynamic> m) =>
-      Transcript(_pairs(m['trechos']), polished: _pairs(m['arrumados']), done: (m['pedacos'] as num?)?.toInt() ?? 0);
+  static Transcript fromJson(Map<String, dynamic> m) => Transcript(
+        _pairs(m['trechos']),
+        polished: _pairs(m['arrumados']),
+        done: (m['pedacos'] as num?)?.toInt() ?? 0,
+        offsets: [for (final o in (m['tempos'] as List?) ?? const []) [for (final x in (o as List)) (x as num).toInt()]],
+      );
 
   static Transcript? read(String audioPath) {
     try {
@@ -396,8 +433,10 @@ class Transcript {
   List<(int, String)> paragraphs() => [...polished, ...roughParagraphs(segs.sublist(math.min(done * chunk, segs.length)))];
 
   /// Texto do livro: um capítulo do texto por capítulo do áudio (mesmos títulos); sem capítulos, partes de 30 min.
-  BookText toBook({required String title, required String author, required List<Chapter> audio}) =>
-      BookText(title: title, author: author, chapters: splitByTime(paragraphs(), audio));
+  BookText toBook({required String title, required String author, required List<Chapter> audio}) {
+    final pars = paragraphs();
+    return BookText(title: title, author: author, chapters: splitByTime(pars, audio, sentences: sentenceTimes(pars, wordStream())));
+  }
 }
 
 /// Legenda automática não tem pontuação: um parágrafo novo a cada pausa longa (ou a cada ~120 palavras),
@@ -436,7 +475,7 @@ List<(int, String)> roughParagraphs(List<(int, String)> segs) {
 }
 
 /// Divide os parágrafos pelos capítulos do áudio (pelo tempo em que cada um começa).
-List<BookChapter> splitByTime(List<(int, String)> pars, List<Chapter> audio) {
+List<BookChapter> splitByTime(List<(int, String)> pars, List<Chapter> audio, {List<List<int>>? sentences}) {
   if (pars.isEmpty) return const [];
   final starts = <(int, String)>[
     if (audio.isNotEmpty) ...[for (final c in audio) (c.startMs, c.title)]
@@ -447,8 +486,13 @@ List<BookChapter> splitByTime(List<(int, String)> pars, List<Chapter> audio) {
   for (var i = 0; i < starts.length; i++) {
     final from = i == 0 ? -1 : starts[i].$1;
     final to = i + 1 < starts.length ? starts[i + 1].$1 : 1 << 62;
-    final mine = [for (final x in pars) if (x.$1 >= from && x.$1 < to) x];
-    out.add(BookChapter(starts[i].$2, [for (final x in mine) x.$2], [for (final x in mine) x.$1]));
+    final mine = [for (var k = 0; k < pars.length; k++) if (pars[k].$1 >= from && pars[k].$1 < to) k];
+    out.add(BookChapter(
+      starts[i].$2,
+      [for (final k in mine) pars[k].$2],
+      [for (final k in mine) pars[k].$1],
+      sentences == null || sentences.length != pars.length ? const [] : [for (final k in mine) sentences[k]],
+    ));
   }
   return out;
 }
@@ -492,4 +536,142 @@ List<(int, String)>? polishedFromAi(Object? ai, List<(int, String)> segs, int fi
   if (before == 0) return null;
   final r = after / before;
   return r >= .8 && r <= 1.25 ? out : null;
+}
+
+// ---------------------------------------------------------------------------
+// Destaque da frase: tempos das palavras da legenda
+
+/// Palavra comparável: sem acento, pontuação ou maiúscula ("Petersburgo," → "petersburgo").
+String wordKey(String w) => normalizeText(w).replaceAll(RegExp(r'[^a-z0-9]'), '');
+
+/// Legenda json3 com o tempo de cada palavra (a legenda automática do YouTube marca cada palavra com tOffsetMs).
+({List<(int, String)> segs, List<List<int>> offsets}) parseJson3Words(String body) {
+  final segs = <(int, String)>[];
+  final offsets = <List<int>>[];
+  final Object? m;
+  try {
+    m = jsonDecode(body);
+  } on FormatException {
+    return (segs: segs, offsets: offsets);
+  }
+  if (m is! Map) return (segs: segs, offsets: offsets);
+  for (final e in (m['events'] as List?) ?? const []) {
+    if (e is! Map || e['segs'] is! List) continue;
+    final words = <String>[];
+    final offs = <int>[];
+    for (final sg in e['segs'] as List) {
+      if (sg is! Map) continue;
+      final off = (sg['tOffsetMs'] as num?)?.toInt() ?? 0;
+      for (final w in '${sg['utf8'] ?? ''}'.split(RegExp(r'\s+'))) {
+        if (w.isEmpty) continue;
+        words.add(w);
+        offs.add(off);
+      }
+    }
+    if (words.isEmpty) continue;
+    segs.add(((e['tStartMs'] as num?)?.toInt() ?? 0, words.join(' ')));
+    offsets.add(offs);
+  }
+  return (segs: segs, offsets: offsets);
+}
+
+final _sentenceEnd = RegExp(r'[.!?…]+["”»’)]*\s+');
+final _wordRe = RegExp(r'\S+');
+
+/// Quando começa cada frase de cada parágrafo: casa as palavras do texto (pontuado pelo Gemini, que pode trocar uma
+/// ou outra palavra) com as palavras da legenda, em ordem. Feito no celular, sem pedir nada à internet.
+/// Para cada parágrafo: [letra, ms, letra, ms, ...].
+List<List<int>> sentenceTimes(List<(int, String)> pars, List<(String, int)> stream) {
+  final out = <List<int>>[];
+  if (stream.isEmpty) return [for (final _ in pars) const <int>[]];
+  var p = 0;
+  int firstAtOrAfter(int ms) {
+    var lo = 0, hi = stream.length;
+    while (lo < hi) {
+      final mid = (lo + hi) >> 1;
+      if (stream[mid].$2 < ms) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    return lo;
+  }
+
+  for (final (pms, text) in pars) {
+    // começa a procurar perto de onde o parágrafo começa (e nunca muito longe dele)
+    final near = firstAtOrAfter(pms - 1500);
+    if (p < near || (p < stream.length && stream[p].$2 > pms + 20000)) p = near;
+    // tempo de cada palavra do parágrafo (null = não achou na legenda)
+    final words = _wordRe.allMatches(text).toList();
+    final times = List<int?>.filled(words.length, null);
+    var misses = 0;
+    for (var k = 0; k < words.length; k++) {
+      final key = wordKey(words[k].group(0)!);
+      if (key.isEmpty) continue;
+      var found = -1;
+      for (var j = p; j < stream.length && j < p + 8; j++) {
+        if (stream[j].$1 == key) {
+          found = j;
+          break;
+        }
+      }
+      if (found >= 0) {
+        times[k] = stream[found].$2;
+        p = found + 1;
+        misses = 0;
+      } else if (++misses >= 3 && p < stream.length) {
+        p++; // palavra trocada pelo Gemini: anda junto com a legenda
+      }
+    }
+    // frases: começam no início do parágrafo e depois de . ! ? …
+    final starts = <int>[0, for (final m in _sentenceEnd.allMatches(text)) if (m.end < text.length) m.end];
+    final flat = <int>[];
+    var prev = pms;
+    for (var si = 0; si < starts.length; si++) {
+      final from = starts[si], to = si + 1 < starts.length ? starts[si + 1] : text.length;
+      int? t;
+      for (var k = 0; k < words.length; k++) {
+        if (words[k].start >= from && words[k].start < to && times[k] != null) {
+          t = times[k];
+          break;
+        }
+      }
+      final ms = si == 0 ? pms : math.max(prev, t ?? prev);
+      flat
+        ..add(from)
+        ..add(ms);
+      prev = ms;
+    }
+    out.add(flat);
+  }
+  return out;
+}
+
+/// A frase que está sendo lida em [ms]: capítulo, parágrafo e letras [start, end). Null = texto sem tempos.
+({int chapter, int para, int start, int end})? sentenceAt(BookText text, int ms) {
+  if (!text.timed) return null;
+  var c = -1, k = -1;
+  for (var i = 0; i < text.chapters.length; i++) {
+    final t = text.chapters[i].times;
+    if (t.isEmpty) continue;
+    if (t.first > ms && c >= 0) break;
+    for (var j = 0; j < t.length; j++) {
+      if (t[j] <= ms || c < 0) {
+        c = i;
+        k = j;
+      }
+    }
+  }
+  if (c < 0 || k < 0) return null;
+  final ch = text.chapters[c];
+  if (!ch.hasSentences) return null;
+  final f = ch.sentences[k];
+  if (f.length < 2) return (chapter: c, para: k, start: 0, end: ch.paragraphs[k].length);
+  var si = 0;
+  for (var j = 0; j + 1 < f.length; j += 2) {
+    if (f[j + 1] <= ms) si = j;
+  }
+  final end = si + 2 < f.length ? f[si + 2] : ch.paragraphs[k].length;
+  return (chapter: c, para: k, start: f[si], end: end);
 }

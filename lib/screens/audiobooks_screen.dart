@@ -570,13 +570,22 @@ Future<void> showBookTextMenu(BuildContext context, Track t, {Offset? at}) {
   final app = context.read<AppState>();
   final info = app.bookInfoOf(t);
   return showXpContextMenu(context, header: 'Texto da obra', at: at, items: [
-    XpMenuEntry('Procurar texto (livre ou transcrição do vídeo)', () async {
-      _say('Procurando "${info.title}"…');
+    XpMenuEntry('Usar a transcrição do vídeo (segue a narração)', () async {
+      _say('Lendo a legenda do vídeo de "${info.title}"…');
       final r = await app.bookService.fetchText(t.path, manual: true);
       final fromVideo = app.bookInfoOf(t).textSource == BookService.transcriptSource;
       _say(switch (r) {
         TextStatus.ok when fromVideo => 'Usei a transcrição do vídeo. O Gemini vai arrumando a pontuação aos poucos.',
-        TextStatus.ok => 'Texto da obra baixado.',
+        TextStatus.ok => 'O vídeo não tem legenda: usei o texto do livro.',
+        TextStatus.notFound => 'O vídeo não tem legenda e não achei o livro em domínio público. Dá para anexar um EPUB.',
+        _ => 'Não deu para buscar agora. Tente mais tarde.',
+      });
+    }, icon: XpIcons.youtube),
+    XpMenuEntry('Usar o texto do livro (domínio público)', () async {
+      _say('Procurando "${info.title}" no Gutenberg / Wikisource…');
+      final r = await app.bookService.fetchText(t.path, manual: true, book: true);
+      _say(switch (r) {
+        TextStatus.ok => 'Texto do livro baixado (sem o destaque da frase, que vem da transcrição).',
         TextStatus.notFound => 'Não achei esse livro em domínio público. Dá para anexar um EPUB.',
         _ => 'Não deu para baixar o texto agora. Tente mais tarde.',
       });
