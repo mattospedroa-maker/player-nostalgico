@@ -364,6 +364,12 @@ class BookInfo {
   /// Língua da narração (do YouTube: "pt", "en"...). O texto livre só vale direto se for nessa língua.
   final String language;
 
+  /// Pranchas das cenas fortes (chave da ilustração -> quando a cena acontece e o nome dela). Chaves >= 1000.
+  final Map<int, (int, String)> scenes;
+
+  /// Versão das ilustrações já buscadas (2 = pinturas + pranchas das cenas).
+  final int artVersion;
+
   /// Versão da busca do texto que já rodou (busca nova → tenta de novo os livros sem texto ou com texto em outra língua).
   final int searchVersion;
 
@@ -381,6 +387,8 @@ class BookInfo {
     this.artDone = false,
     this.language = '',
     this.searchVersion = 0,
+    this.scenes = const {},
+    this.artVersion = 0,
   });
 
   /// Índice do capítulo tocando em [pos] (-1 = sem capítulos).
@@ -411,6 +419,8 @@ class BookInfo {
     bool? artDone,
     String? language,
     int? searchVersion,
+    Map<int, (int, String)>? scenes,
+    int? artVersion,
   }) =>
       BookInfo(
         videoId: videoId,
@@ -426,6 +436,8 @@ class BookInfo {
         artDone: artDone ?? this.artDone,
         language: language ?? this.language,
         searchVersion: searchVersion ?? this.searchVersion,
+        scenes: scenes ?? this.scenes,
+        artVersion: artVersion ?? this.artVersion,
       );
 
   Map<String, Object?> toJson() => {
@@ -443,6 +455,8 @@ class BookInfo {
         'ilustracoesFeitas': artDone,
         'lingua': language,
         'busca': searchVersion,
+        'cenas': {for (final e in scenes.entries) '${e.key}': [e.value.$1, e.value.$2]},
+        'ilustracoesV': artVersion,
       };
 
   static BookInfo fromJson(Map<String, dynamic> m) {
@@ -464,6 +478,12 @@ class BookInfo {
       artDone: m['ilustracoesFeitas'] == true,
       language: '${m['lingua'] ?? ''}',
       searchVersion: (m['busca'] as num?)?.toInt() ?? 0,
+      scenes: {
+        for (final e in ((m['cenas'] as Map?) ?? const {}).entries)
+          if (int.tryParse('${e.key}') != null && e.value is List && (e.value as List).length == 2)
+            int.parse('${e.key}'): (((e.value as List)[0] as num).toInt(), '${(e.value as List)[1]}'),
+      },
+      artVersion: (m['ilustracoesV'] as num?)?.toInt() ?? 0,
     );
   }
 

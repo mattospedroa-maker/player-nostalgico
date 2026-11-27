@@ -666,6 +666,39 @@ void main() {
       expect(s.shouldSearchText(const BookInfo(videoId: 'abc', textStatus: TextStatus.ok, textSource: 'Projeto Gutenberg #1', searchVersion: BookService.searchVersion)), isFalse);
     });
   });
+
+  group('pinturas e pranchas das cenas', () {
+    test('uma prancha a cada ~10 min, com o que sobra do teto', () {
+      final t = BookService.sceneTimes(totalMs: 150 * 60000, chapterArt: 5);
+      expect(t.length, 15);
+      expect(t.first, greaterThan(0));
+      expect(t.last, lessThan(150 * 60000));
+      expect(BookService.sceneTimes(totalMs: 600 * 60000, chapterArt: 5).length, BookService.maxArt - 5); // teto
+      expect(BookService.sceneTimes(totalMs: 5 * 60000, chapterArt: 2), isEmpty); // livro curto
+      expect(BookService.sceneTimes(totalMs: 150 * 60000, chapterArt: BookService.maxArt), isEmpty);
+      const info = BookInfo(scenes: {1000: (60000, 'O encontro na ponte')}, artVersion: 2);
+      final back = BookInfo.fromJson(jsonDecode(jsonEncode(info.toJson())) as Map<String, dynamic>);
+      expect(back.scenes, {1000: (60000, 'O encontro na ponte')});
+      expect(back.artVersion, 2);
+    });
+
+    test('prancha vira uma página inteira antes do parágrafo, sem perder texto', () {
+      final ch = BookChapter('I', [for (var i = 0; i < 6; i++) 'Parágrafo $i ${'palavra ' * 30}'.trim()]);
+      const spec = PageSpec(size: Size(320, 400), body: TextStyle(fontSize: 14, height: 1.4), title: TextStyle(fontSize: 12), padding: EdgeInsets.all(10));
+      final plain = paginate(0, ch, spec);
+      final withPlate = paginate(0, ch, spec, plates: const [(3, 1000)]);
+      final plates = withPlate.where((p) => p.plate != null).toList();
+      expect(plates.length, 1);
+      expect(plates.single.plate, 1000);
+      expect(plates.single.segs, isEmpty);
+      final i = withPlate.indexOf(plates.single);
+      expect(withPlate[i + 1].segs.first.para, 3); // o texto segue do parágrafo da cena
+      expect(withPlate[i - 1].segs.last.para, 2);
+      int letters(List<BookPage> ps) => ps.fold(0, (a, p) => a + p.segs.fold(0, (b, s) => b + s.end - s.start));
+      expect(letters(withPlate), letters(plain));
+      expect(paginate(0, ch, spec, plates: const [(0, 1000)]).any((p) => p.plate != null), isFalse); // nunca antes do 1º
+    });
+  });
 }
 
 class _NoNet extends http.BaseClient {
