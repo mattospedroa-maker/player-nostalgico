@@ -738,6 +738,20 @@ void main() {
       }
     });
 
+    test('busca de pintura vai simplificando até achar; livro sem nenhuma imagem tenta de novo', () {
+      final q = BookService.artQueries('20th century English painting London street rain');
+      expect(q.first, '20th century English painting London street rain');
+      expect(q, contains('20th century English painting'));
+      expect(q, contains('London street painting'));
+      expect(q.last, 'rain painting');
+      expect(BookService.artQueries('Big Brother poster'), ['Big Brother poster', 'Big Brother painting', 'poster painting', 'Big Brother poster painting']);
+      expect(BookService.artQueries('  '), isEmpty);
+      expect(BookService.needsArt(const BookInfo()), isTrue);
+      expect(BookService.needsArt(const BookInfo(artDone: true, artVersion: 2)), isTrue); // v2 sem nenhuma imagem
+      expect(BookService.needsArt(const BookInfo(artDone: true, artVersion: 2, art: {0: 'cap_0.jpg'})), isFalse);
+      expect(BookService.needsArt(const BookInfo(artDone: true, artVersion: BookService.artVersion)), isFalse); // não insiste
+    });
+
     test('prancha vira uma página inteira antes do parágrafo, sem perder texto', () {
       final ch = BookChapter('I', [for (var i = 0; i < 6; i++) 'Parágrafo $i ${'palavra ' * 30}'.trim()]);
       const spec = PageSpec(size: Size(320, 400), body: TextStyle(fontSize: 14, height: 1.4), title: TextStyle(fontSize: 12), padding: EdgeInsets.all(10));
