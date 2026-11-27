@@ -174,7 +174,10 @@ class BookPage {
 
   /// Prancha (página inteira com a pintura de uma cena): a chave da ilustração. Null = página de texto.
   final int? plate;
-  const BookPage(this.chapter, this.index, this.segs, this.charStart, {this.plate});
+
+  /// Página da pintura (começo do capítulo ou prancha) com uma frase só: a pintura ocupa o resto da página.
+  final bool spotlight;
+  const BookPage(this.chapter, this.index, this.segs, this.charStart, {this.plate, this.spotlight = false});
   bool get first => index == 0;
 }
 
@@ -243,7 +246,7 @@ List<BookPage> paginate(int chapterIndex, BookChapter ch, PageSpec spec, {bool h
     used += tp.height + spec.gap * 2;
     tp.dispose();
   }
-  if (hasArt) used += spec.artHeight + spec.gap;
+  final header = used;
   void newPage() {
     pages.add(BookPage(chapterIndex, pages.length, segs, pageStart));
     segs = <PageSeg>[];
@@ -251,17 +254,64 @@ List<BookPage> paginate(int chapterIndex, BookChapter ch, PageSpec spec, {bool h
     pageStart = chars;
   }
 
+  // fim da 1ª frase do parágrafo (até a vírgula ou o ponto) e a altura dela
+  int firstPieceEnd(int i) {
+    final text = ch.paragraphs[i];
+    final starts = ch.hasSentences && ch.sentences[i].length >= 4 ? [for (var j = 0; j < ch.sentences[i].length; j += 2) ch.sentences[i][j]] : pieceStarts(text);
+    return starts.length > 1 ? starts[1] : text.length;
+  }
+
+  double heightOf(int i, int end) {
+    final tp = TextPainter(
+        text: TextSpan(text: _indent + ch.paragraphs[i].substring(0, end), style: spec.body),
+        textDirection: TextDirection.ltr,
+        textAlign: TextAlign.justify,
+        textScaler: spec.scaler)
+      ..layout(maxWidth: w);
+    final out = tp.height;
+    tp.dispose();
+    return out;
+  }
+
+  // pintura do começo do capítulo com uma frase só (a pintura fica grande); frase longa demais: pintura menor
+  // e o texto segue na mesma página, como antes
+  var firstStart = 0;
+  if (hasArt && ch.paragraphs.isNotEmpty) {
+    final end = firstPieceEnd(0);
+    if (heightOf(0, end) <= (h - header) * .4) {
+      segs.add(PageSeg(0, 0, end));
+      chars += end;
+      pages.add(BookPage(chapterIndex, 0, segs, 0, spotlight: true));
+      segs = <PageSeg>[];
+      used = 0;
+      pageStart = chars;
+      firstStart = end;
+    } else {
+      used += spec.artHeight + spec.gap;
+    }
+  }
+
   for (var i = 0; i < ch.paragraphs.length; i++) {
-    // prancha da cena antes deste parágrafo: página inteira, e o texto continua na página seguinte
+    final text = ch.paragraphs[i];
+    var start = i == 0 ? firstStart : 0;
+    // prancha da cena antes deste parágrafo: página com a pintura e a 1ª frase do parágrafo; o resto segue na
+    // página seguinte
     for (final (para, key) in plates) {
       if (para != i || i == 0) continue;
       if (segs.isNotEmpty) newPage();
-      pages.add(BookPage(chapterIndex, pages.length, const [], chars, plate: key));
+      final end = firstPieceEnd(i);
+      final one = heightOf(i, end) <= h * .3 ? [PageSeg(i, 0, end)] : const <PageSeg>[];
+      pages.add(BookPage(chapterIndex, pages.length, one, chars, plate: key, spotlight: one.isNotEmpty));
+      if (one.isNotEmpty) {
+        chars += end;
+        start = end;
+      }
       used = 0;
       pageStart = chars;
     }
-    final text = ch.paragraphs[i];
-    var start = 0;
+    while (start < text.length && start > 0 && text[start] == ' ') {
+      start++;
+    }
     while (start < text.length) {
       final piece = (start == 0 ? _indent : '') + text.substring(start);
       final tp = TextPainter(text: TextSpan(text: piece, style: spec.body), textDirection: TextDirection.ltr, textAlign: TextAlign.justify, textScaler: spec.scaler)
@@ -411,6 +461,12 @@ class PageView extends StatelessWidget {
           ),
           if (plateTitle.isNotEmpty)
             Text(plateTitle, textAlign: TextAlign.center, style: spec.body.copyWith(fontSize: (spec.body.fontSize ?? 14) * 1.05), textScaler: spec.scaler),
+          // a frase lida junto com a pintura
+          for (final s in page.segs) ...[
+            SizedBox(height: spec.gap),
+            Text.rich(_seg(s), textAlign: TextAlign.justify, style: spec.body, textScaler: spec.scaler),
+          ],
+          if (page.segs.isNotEmpty) SizedBox(height: spec.gap),
           if (plateCredit.isNotEmpty)
             Text(plateCredit,
                 textAlign: TextAlign.center,
@@ -448,13 +504,27 @@ class PageView extends StatelessWidget {
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Expanded(
           child: ClipRect(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                // páginas de texto: o que sobrar de espaço fica dividido em cima e embaixo (texto centralizado)
+                mainAxisAlignment: page.first ? MainAxisAlignment.start : MainAxisAlignment.center,
+                children: [
               if (page.first && chapter.title.isNotEmpty) ...[
                 SizedBox(height: spec.gap),
                 Text(chapter.title, textAlign: TextAlign.center, style: spec.title, textScaler: spec.scaler),
                 SizedBox(height: spec.gap),
               ],
-              if (page.first && art != null) ...[
+              if (page.first && art != null && page.spotlight) ...[
+                // pintura grande, com uma frase só embaixo
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.all(5),
+                    decoration: BoxDecoration(border: Border.all(color: look.faint.withValues(alpha: .6))),
+                    child: Image.file(art!, fit: BoxFit.contain, cacheWidth: 1000, gaplessPlayback: true, errorBuilder: (_, _, _) => const SizedBox()),
+                  ),
+                ),
+                SizedBox(height: spec.gap * 2),
+              ] else if (page.first && art != null) ...[
                 Container(
                   height: spec.artHeight,
                   decoration: BoxDecoration(border: Border.all(color: look.faint.withValues(alpha: .6))),
