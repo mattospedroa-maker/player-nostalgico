@@ -45,7 +45,7 @@ void main() {
   testWidgets('mexer nos controles só vale depois de Aplicar; marquinhas andam de 1 em 1 s', (t) async {
     final s = await open(t);
     expect(find.textContaining(': 4 s', findRichText: true), findsNWidgets(2));
-    expect(find.text('Versão 2.1.0'), findsOneWidget); // no build do GitHub: 2.1.<número do build>
+    expect(find.text('Versão 3.0.0'), findsOneWidget); // no build do GitHub: 3.0.<número do build>
     final out = find.byKey(const Key('options-out'));
     final box = t.getRect(out);
     await t.tapAt(Offset(box.right - 2, box.center.dy)); // ponta direita = 15 s

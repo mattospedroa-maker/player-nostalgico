@@ -51,7 +51,7 @@ jobs:
             code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $MISTRAL_KEY" https://api.mistral.ai/v1/models || echo erro)
             if [ "$code" = 200 ]; then echo "MISTRAL_KEY: a Mistral aceitou a chave (HTTP 200)"; else echo "::warning::MISTRAL_KEY: a Mistral recusou a chave (HTTP $code)"; fi
           fi
-      - run: flutter build apk --release --target-platform android-arm64 --build-name=2.1.${{ github.run_number }} --build-number=${{ github.run_number }} --dart-define=APP_VERSION=2.1.${{ github.run_number }} --dart-define=LASTFM_KEY="$LASTFM_KEY" --dart-define=GIPHY_KEY="$GIPHY_KEY" --dart-define=GEMINI_KEY="$GEMINI_KEY" --dart-define=MISTRAL_KEY="$MISTRAL_KEY"
+      - run: flutter build apk --release --target-platform android-arm64 --build-name=3.0.${{ github.run_number }} --build-number=${{ github.run_number }} --dart-define=APP_VERSION=3.0.${{ github.run_number }} --dart-define=LASTFM_KEY="$LASTFM_KEY" --dart-define=GIPHY_KEY="$GIPHY_KEY" --dart-define=GEMINI_KEY="$GEMINI_KEY" --dart-define=MISTRAL_KEY="$MISTRAL_KEY"
         env:
           LASTFM_KEY: ${{ secrets.LASTFM_KEY }}
           GIPHY_KEY: ${{ secrets.GIPHY_KEY }}
@@ -84,7 +84,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cp build/app/outputs/flutter-apk/app-release.apk player-nostalgico.apk
-          gh release create "v2.1.${{ github.run_number }}" player-nostalgico.apk \
-            --title "Player Nostálgico 2.1.${{ github.run_number }}" \
+          gh release create "v3.0.${{ github.run_number }}" player-nostalgico.apk \
+            --title "Player Nostálgico 3.0.${{ github.run_number }}" \
             --notes "APK gerado automaticamente a partir de ${{ github.sha }}. Baixe player-nostalgico.apk e abra no celular." \
             --latest

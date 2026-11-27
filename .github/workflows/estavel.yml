@@ -1,6 +1,6 @@
 name: Marcar versão estável
 
-# Copia o APK de uma versão já publicada (ex.: 2.1.170) para a release "estavel".
+# Copia o APK de uma versão já publicada (ex.: 3.0.200) para a release "estavel".
 # Link fixo, que sempre aponta para a última versão marcada como estável:
 #   https://github.com/mattospedroa-maker/player-nostalgico/releases/download/estavel/player-nostalgico.apk
 # Não gera APK novo nem mexe na "latest" (as versões de teste continuam saindo normalmente).
@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       versao:
-        description: 'Versão que vira estável (ex.: 2.1.170)'
+        description: 'Versão que vira estável (ex.: 3.0.200)'
         required: true
 
 permissions:
