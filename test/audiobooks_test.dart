@@ -752,6 +752,49 @@ void main() {
       expect(BookService.needsArt(const BookInfo(artDone: true, artVersion: BookService.artVersion)), isFalse); // não insiste
     });
 
+    test('com destaque, a página acaba no fim de um trecho (nenhum trecho dividido)', () {
+      final pars = [for (var i = 0; i < 6; i++) List.generate(12, (k) => 'trecho $i.$k com algumas palavras a mais,').join(' ')];
+      final sentences = [for (final t in pars) [for (final st in pieceStarts(t)) ...[st, 0]]];
+      final ch = BookChapter('I', pars, [for (var i = 0; i < pars.length; i++) i * 1000], sentences);
+      const spec = PageSpec(size: Size(320, 400), body: TextStyle(fontSize: 14, height: 1.4), title: TextStyle(fontSize: 12), padding: EdgeInsets.all(10), reserveLine: true);
+      final pages = paginate(0, ch, spec);
+      expect(pages.length, greaterThan(3));
+      var splits = 0;
+      for (final pg in pages) {
+        final last = pg.segs.last;
+        if (last.end >= pars[last.para].length) continue;
+        splits++;
+        expect(pieceStarts(pars[last.para]), contains(last.end)); // corta bem no começo de um trecho
+      }
+      expect(splits, greaterThan(0));
+      int letters(List<BookPage> ps) => ps.fold(0, (a, p) => a + p.segs.fold(0, (b, s) => b + s.end - s.start));
+      expect(letters(pages), greaterThan(pars.fold<int>(0, (a, t) => a + t.length) - pages.length * 2)); // nada some
+      // sem destaque: corta onde a linha acabar, como antes
+      const plain = PageSpec(size: Size(320, 400), body: TextStyle(fontSize: 14, height: 1.4), title: TextStyle(fontSize: 12), padding: EdgeInsets.all(10));
+      expect(paginate(0, ch, plain).any((pg) => pg.segs.last.end < pars[pg.segs.last.para].length && !pieceStarts(pars[pg.segs.last.para]).contains(pg.segs.last.end)), isTrue);
+    });
+
+    test('pintura aparece com uma frase só (começo do capítulo e prancha)', () {
+      final pars = [for (var i = 0; i < 6; i++) 'Frase $i de abertura, ${'e depois vem mais texto, ' * 12}fim.'];
+      const spec = PageSpec(size: Size(320, 400), body: TextStyle(fontSize: 14, height: 1.4), title: TextStyle(fontSize: 12), padding: EdgeInsets.all(10), artHeight: 140);
+      final ch = BookChapter('I', pars);
+      final pages = paginate(0, ch, spec, hasArt: true, plates: const [(3, 1000)]);
+      // 1ª página: pintura + 'Frase 0 de abertura,' e mais nada
+      expect(pages.first.spotlight, isTrue);
+      expect(pages.first.segs, hasLength(1));
+      expect(pars[0].substring(pages.first.segs.single.start, pages.first.segs.single.end).trim(), 'Frase 0 de abertura,');
+      expect(pages[1].segs.first.para, 0); // o resto do parágrafo segue
+      // prancha: pintura + 1ª frase do parágrafo da cena
+      final plate = pages.firstWhere((p) => p.plate != null);
+      expect(plate.spotlight, isTrue);
+      expect(pars[3].substring(plate.segs.single.start, plate.segs.single.end).trim(), 'Frase 3 de abertura,');
+      expect(pages[pages.indexOf(plate) + 1].segs.first, isA<PageSeg>().having((s) => s.para, 'para', 3).having((s) => s.start, 'start', greaterThan(0)));
+      int letters(List<BookPage> ps) => ps.fold(0, (a, p) => a + p.segs.fold(0, (b, s) => b + s.end - s.start));
+      expect(letters(pages), greaterThan(pars.fold<int>(0, (a, t) => a + t.length) - pages.length * 2)); // nada some
+      // sem pintura: começa direto no texto
+      expect(paginate(0, ch, spec).first.spotlight, isFalse);
+    });
+
     test('prancha vira uma página inteira antes do parágrafo, sem perder texto', () {
       final ch = BookChapter('I', [for (var i = 0; i < 6; i++) 'Parágrafo $i ${'palavra ' * 30}'.trim()]);
       const spec = PageSpec(size: Size(320, 400), body: TextStyle(fontSize: 14, height: 1.4), title: TextStyle(fontSize: 12), padding: EdgeInsets.all(10));
