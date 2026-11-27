@@ -309,6 +309,23 @@ List<BookPage> paginate(int chapterIndex, BookChapter ch, PageSpec spec, {bool h
       final prefix = start == 0 ? _indent.length : 0;
       var end = start + math.max<int>(1, endInPiece - prefix);
       if (end >= text.length) end = text.length;
+      // com destaque: a página acaba no fim de um trecho (nenhum trecho fica dividido entre duas páginas, então
+      // a página vira na hora exata em que o próximo trecho começa)
+      if (spec.reserveLine && ch.hasSentences && end < text.length) {
+        final f = ch.sentences[i];
+        var cut = -1;
+        for (var j = 0; j < f.length; j += 2) {
+          if (f[j] > start && f[j] <= end) cut = f[j];
+        }
+        if (cut > start) {
+          end = cut;
+        } else if (start == 0 && segs.isNotEmpty) {
+          // o 1º trecho do parágrafo não cabe nesta página: o parágrafo começa na próxima
+          newPage();
+          continue;
+        }
+        // trecho maior que a página inteira: corta onde der (a página vira pelo tempo das palavras)
+      }
       segs.add(PageSeg(i, start, end));
       chars += end - start;
       start = end;
@@ -885,7 +902,7 @@ class _BookReaderState extends State<BookReader> {
   void _follow(Duration pos, {bool jump = false}) {
     if (!mounted || (!_following && !jump)) return;
     final now = DateTime.now();
-    if (!jump && now.difference(_lastFollow).inMilliseconds < 900) return;
+    if (!jump && now.difference(_lastFollow).inMilliseconds < 400) return;
     _lastFollow = now;
     final t = _target(pos);
     if (t == null) return;
