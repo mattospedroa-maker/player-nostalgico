@@ -170,7 +170,11 @@ class AppState extends ChangeNotifier {
         await bookService.fetchText(t.path);
         return;
       }
-      if (bookService.needsPolish(t.path)) unawaited(bookService.polish(t.path));
+      if (bookService.needsWordTimes(t.path)) {
+        await bookService.addWordTimes(t.path); // transcrição antiga: ganha o tempo das palavras (destaque da frase)
+      } else if (bookService.needsPolish(t.path)) {
+        unawaited(bookService.polish(t.path));
+      }
       if (!info.artDone) await bookService.fetchArt(t.path);
     }());
   }

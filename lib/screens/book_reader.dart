@@ -29,7 +29,13 @@ class ReaderLook {
   /// 0 = pequena, 1 = média, 2 = grande.
   final int size;
   final ReaderPaper paper;
-  const ReaderLook({this.font = ReaderFont.serif, this.size = 1, this.paper = ReaderPaper.paper});
+
+  /// Destacar a frase que está sendo lida (texto da transcrição do vídeo).
+  final bool highlight;
+
+  /// Ajuste fino do destaque (ms): positivo = destaque vai na frente da voz; negativo = atrás.
+  final int syncMs;
+  const ReaderLook({this.font = ReaderFont.serif, this.size = 1, this.paper = ReaderPaper.paper, this.highlight = true, this.syncMs = 0});
 
   static const _sizes = [14.5, 17.0, 20.0];
 
@@ -40,6 +46,9 @@ class ReaderLook {
   Color get ink => switch (paper) { ReaderPaper.paper => const Color(0xFF2B2416), ReaderPaper.white => const Color(0xFF1A1A1A), ReaderPaper.dark => const Color(0xFFD9D4C5) };
   Color get faint => switch (paper) { ReaderPaper.paper => const Color(0xFF8A7A55), ReaderPaper.white => const Color(0xFF888888), ReaderPaper.dark => const Color(0xFF8C8FA0) };
 
+  /// Fundo da frase destacada.
+  Color get mark => switch (paper) { ReaderPaper.paper => const Color(0x66F2C230), ReaderPaper.white => const Color(0x55FFD54A), ReaderPaper.dark => const Color(0x664D7BE0) };
+
   /// Verso da folha (o que aparece na dobra).
   Color get back => switch (paper) { ReaderPaper.paper => const Color(0xFFEDE1BF), ReaderPaper.white => const Color(0xFFEDEDED), ReaderPaper.dark => const Color(0xFF2C3142) };
 
@@ -47,25 +56,37 @@ class ReaderLook {
         font: ReaderFont.values.asNameMap()[app.prefs.getString('leitorFonte')] ?? ReaderFont.serif,
         size: app.prefs.getInt('leitorTamanho') ?? 1,
         paper: ReaderPaper.values.asNameMap()[app.prefs.getString('leitorPapel')] ?? ReaderPaper.paper,
+        highlight: app.prefs.getBool('leitorDestaque') ?? true,
+        syncMs: app.prefs.getInt('leitorAtraso') ?? 0,
       );
 
   Future<void> save(AppState app) async {
     await app.prefs.setString('leitorFonte', font.name);
     await app.prefs.setInt('leitorTamanho', size);
     await app.prefs.setString('leitorPapel', paper.name);
+    await app.prefs.setBool('leitorDestaque', highlight);
+    await app.prefs.setInt('leitorAtraso', syncMs);
     app.touch();
   }
 
-  ReaderLook copyWith({ReaderFont? font, int? size, ReaderPaper? paper}) =>
-      ReaderLook(font: font ?? this.font, size: size ?? this.size, paper: paper ?? this.paper);
+  ReaderLook copyWith({ReaderFont? font, int? size, ReaderPaper? paper, bool? highlight, int? syncMs}) => ReaderLook(
+        font: font ?? this.font,
+        size: size ?? this.size,
+        paper: paper ?? this.paper,
+        highlight: highlight ?? this.highlight,
+        syncMs: syncMs ?? this.syncMs,
+      );
 
   @override
-  bool operator ==(Object other) => other is ReaderLook && other.font == font && other.size == size && other.paper == paper;
+  bool operator ==(Object other) =>
+      other is ReaderLook && other.font == font && other.size == size && other.paper == paper && other.highlight == highlight && other.syncMs == syncMs;
   @override
-  int get hashCode => Object.hash(font, size, paper);
+  int get hashCode => Object.hash(font, size, paper, highlight, syncMs);
 }
 
-/// Janelinha do "Aa": fonte, tamanho e papel.
+String _syncLabel(int ms) => ms == 0 ? '(no tempo)' : '(${ms > 0 ? '+' : '−'}${(ms.abs() / 1000).toStringAsFixed(2).replaceAll('.', ',')} s)';
+
+/// Janelinha do "Aa": fonte, tamanho, papel e o destaque da frase.
 Future<void> showReaderLook(BuildContext context) {
   final app = context.read<AppState>();
   return showDialog<void>(
@@ -110,6 +131,21 @@ Future<void> showReaderLook(BuildContext context) {
             opt('Branco', look.paper == ReaderPaper.white, look.copyWith(paper: ReaderPaper.white)),
             opt('Escuro', look.paper == ReaderPaper.dark, look.copyWith(paper: ReaderPaper.dark)),
           ]),
+          const SizedBox(height: 6),
+          const Text('Destacar a frase lida (texto da transcrição)', style: TextStyle(fontSize: 12.5, color: Xp.blueText)),
+          Wrap(children: [
+            opt('Sim', look.highlight, look.copyWith(highlight: true)),
+            opt('Não', !look.highlight, look.copyWith(highlight: false)),
+          ]),
+          if (look.highlight) ...[
+            const SizedBox(height: 6),
+            Text('Destaque fora do tempo da voz? ${_syncLabel(look.syncMs)}', style: const TextStyle(fontSize: 12.5, color: Xp.blueText)),
+            Wrap(children: [
+              opt('◀ Atrasar', false, look.copyWith(syncMs: (look.syncMs - 250).clamp(-3000, 3000))),
+              opt('Normal', look.syncMs == 0, look.copyWith(syncMs: 0)),
+              opt('Adiantar ▶', false, look.copyWith(syncMs: (look.syncMs + 250).clamp(-3000, 3000))),
+            ]),
+          ],
         ]),
         actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
       );
@@ -148,18 +184,29 @@ class PageSpec {
 
   /// Espaço da ilustração no topo da 1ª página do capítulo (0 = sem).
   final double artHeight;
-  const PageSpec({required this.size, required this.body, required this.title, required this.padding, this.artHeight = 0});
+
+  /// Tamanho de letra do Android (Configurações > Tela > Tamanho da fonte). As páginas são medidas com ele,
+  /// igual ao texto desenhado; sem isso, com a letra do celular maior, o texto passava do fim da página.
+  final TextScaler scaler;
+  const PageSpec({required this.size, required this.body, required this.title, required this.padding, this.artHeight = 0, this.scaler = TextScaler.noScaling});
 
   double get width => size.width - padding.horizontal;
-  double get height => size.height - padding.vertical - footer;
+  // 2 px de folga para arredondamentos entre a medida e o desenho
+  double get height => size.height - padding.vertical - footer - 2;
   double get footer => (body.fontSize ?? 14) * 1.4;
   double get gap => (body.fontSize ?? 14) * .45;
 
   @override
   bool operator ==(Object other) =>
-      other is PageSpec && other.size == size && other.body == body && other.title == title && other.padding == padding && other.artHeight == artHeight;
+      other is PageSpec &&
+      other.size == size &&
+      other.body == body &&
+      other.title == title &&
+      other.padding == padding &&
+      other.artHeight == artHeight &&
+      other.scaler == scaler;
   @override
-  int get hashCode => Object.hash(size, body, title, padding, artHeight);
+  int get hashCode => Object.hash(size, body, title, padding, artHeight, scaler);
 }
 
 const _indent = '  ';
@@ -174,7 +221,8 @@ List<BookPage> paginate(int chapterIndex, BookChapter ch, PageSpec spec, {bool h
   var chars = 0, pageStart = 0;
   // cabeçalho da 1ª página: título do capítulo e ilustração
   if (ch.title.isNotEmpty) {
-    final tp = TextPainter(text: TextSpan(text: ch.title, style: spec.title), textDirection: TextDirection.ltr, textAlign: TextAlign.center)..layout(maxWidth: w);
+    final tp = TextPainter(text: TextSpan(text: ch.title, style: spec.title), textDirection: TextDirection.ltr, textAlign: TextAlign.center, textScaler: spec.scaler)
+      ..layout(maxWidth: w);
     used += tp.height + spec.gap * 2;
     tp.dispose();
   }
@@ -191,7 +239,8 @@ List<BookPage> paginate(int chapterIndex, BookChapter ch, PageSpec spec, {bool h
     var start = 0;
     while (start < text.length) {
       final piece = (start == 0 ? _indent : '') + text.substring(start);
-      final tp = TextPainter(text: TextSpan(text: piece, style: spec.body), textDirection: TextDirection.ltr, textAlign: TextAlign.justify)..layout(maxWidth: w);
+      final tp = TextPainter(text: TextSpan(text: piece, style: spec.body), textDirection: TextDirection.ltr, textAlign: TextAlign.justify, textScaler: spec.scaler)
+        ..layout(maxWidth: w);
       final room = h - used;
       if (tp.height <= room) {
         segs.add(PageSeg(i, start, text.length));
@@ -211,6 +260,11 @@ List<BookPage> paginate(int chapterIndex, BookChapter ch, PageSpec spec, {bool h
       }
       if (fit == 0) {
         tp.dispose();
+        if (segs.isEmpty && used > 0) {
+          // título e ilustração encheram a 1ª página: o texto começa na próxima (nunca some do fim da página)
+          newPage();
+          continue;
+        }
         if (segs.isEmpty) {
           // nem uma linha cabe numa página vazia (tela minúscula): põe assim mesmo para não travar
           segs.add(PageSeg(i, start, text.length));
@@ -222,7 +276,9 @@ List<BookPage> paginate(int chapterIndex, BookChapter ch, PageSpec spec, {bool h
         continue;
       }
       final lastLine = lines[fit - 1];
-      final pos = tp.getPositionForOffset(Offset(w - 1, lastLine.baseline - lastLine.ascent / 2 + (y - lastLine.height)));
+      // baseline já é contada do topo do parágrafo (somar a altura das linhas de cima pulava para uma linha
+      // mais embaixo, e o fim da página saía cortado)
+      final pos = tp.getPositionForOffset(Offset(w - 1, lastLine.baseline - lastLine.ascent / 2));
       final endInPiece = tp.getLineBoundary(pos).end;
       tp.dispose();
       final prefix = start == 0 ? _indent.length : 0;
@@ -239,6 +295,22 @@ List<BookPage> paginate(int chapterIndex, BookChapter ch, PageSpec spec, {bool h
   }
   if (segs.isNotEmpty || pages.isEmpty) newPage();
   return pages;
+}
+
+/// Página onde está a letra [char] do parágrafo [para] (null = não está em nenhuma).
+int? pageForChar(List<BookPage> pages, int para, int char) {
+  for (var i = 0; i < pages.length; i++) {
+    for (final s in pages[i].segs) {
+      if (s.para == para && char >= s.start && (char < s.end || (char == s.end && s.end == s.start))) return i;
+    }
+  }
+  // letra num espaço entre dois pedaços (o corte da página pula espaços): a página seguinte
+  for (var i = 0; i < pages.length; i++) {
+    for (final s in pages[i].segs) {
+      if (s.para == para && s.start > char) return i;
+    }
+  }
+  return null;
 }
 
 /// Página que contém a fração [fraction] (0..1) do capítulo.
@@ -259,7 +331,23 @@ class PageView extends StatelessWidget {
   final ReaderLook look;
   final File? art;
   final String footer;
-  const PageView({super.key, required this.chapter, required this.page, required this.spec, required this.look, required this.footer, this.art});
+  /// Frase destacada neste capítulo: parágrafo e letras [start, end).
+  final ({int para, int start, int end})? highlight;
+  const PageView({super.key, required this.chapter, required this.page, required this.spec, required this.look, required this.footer, this.art, this.highlight});
+
+  /// Texto de um pedaço de parágrafo, com a frase lida marcada (mesmas letras e estilo: as páginas não mudam).
+  InlineSpan _seg(PageSeg s) {
+    final text = chapter.paragraphs[s.para];
+    final indent = s.start == 0 ? _indent : '';
+    final h = highlight;
+    if (h == null || h.para != s.para || h.end <= s.start || h.start >= s.end) return TextSpan(text: indent + text.substring(s.start, s.end));
+    final a = math.max(h.start, s.start), b = math.min(h.end, s.end);
+    return TextSpan(children: [
+      TextSpan(text: indent + text.substring(s.start, a)),
+      TextSpan(text: text.substring(a, b), style: TextStyle(backgroundColor: look.mark)),
+      TextSpan(text: text.substring(b, s.end)),
+    ]);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -272,7 +360,7 @@ class PageView extends StatelessWidget {
             child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               if (page.first && chapter.title.isNotEmpty) ...[
                 SizedBox(height: spec.gap),
-                Text(chapter.title, textAlign: TextAlign.center, style: spec.title),
+                Text(chapter.title, textAlign: TextAlign.center, style: spec.title, textScaler: spec.scaler),
                 SizedBox(height: spec.gap),
               ],
               if (page.first && art != null) ...[
@@ -284,10 +372,11 @@ class PageView extends StatelessWidget {
                 SizedBox(height: spec.gap),
               ],
               for (final s in page.segs) ...[
-                Text(
-                  (s.start == 0 ? _indent : '') + chapter.paragraphs[s.para].substring(s.start, s.end),
+                Text.rich(
+                  _seg(s),
                   textAlign: TextAlign.justify,
                   style: spec.body,
+                  textScaler: spec.scaler,
                 ),
                 SizedBox(height: spec.gap),
               ],
@@ -631,8 +720,31 @@ class _BookReaderState extends State<BookReader> {
       _loading = false;
     });
     final ps = context.read<PlayerService>();
-    _sub = ps.player.positionStream.listen((pos) => _follow(pos));
+    _sub = ps.player.positionStream.listen((pos) {
+      _mark(pos);
+      _follow(pos);
+    });
+    _mark(ps.player.position);
     _follow(ps.player.position, jump: true);
+  }
+
+  /// Frase sendo lida agora (null = sem destaque).
+  ({int chapter, int para, int start, int end})? _hl;
+
+  ({int chapter, int para, int start, int end})? _sentence(Duration pos) {
+    final text = _text;
+    if (text == null || !mounted) return null;
+    final app = context.read<AppState>();
+    final look = ReaderLook.of(app);
+    if (!look.highlight || context.read<PlayerService>().current?.id != widget.track.id) return null;
+    return sentenceAt(text, pos.inMilliseconds + look.syncMs);
+  }
+
+  void _mark(Duration pos) {
+    if (!mounted) return;
+    final s = _sentence(pos);
+    if (s == _hl) return;
+    setState(() => _hl = s);
   }
 
   @override
@@ -671,6 +783,12 @@ class _BookReaderState extends State<BookReader> {
     final ps = context.read<PlayerService>();
     if (ps.current?.id != widget.track.id) return null;
     final total = ps.player.duration ?? Duration(milliseconds: widget.track.durationMs);
+    // com a frase exata (transcrição com tempos): a página que tem o começo dela
+    final s = sentenceAt(text, pos.inMilliseconds + ReaderLook.of(context.read<AppState>()).syncMs);
+    if (s != null) {
+      final pg = pageForChar(_pagesOf(s.chapter), s.para, s.start);
+      if (pg != null) return (s.chapter, pg);
+    }
     final at = textPosition(text: text, audio: _info.chapters, match: _matchNow(), pos: pos, total: total);
     final pages = _pagesOf(at.chapter);
     return (at.chapter, pageForFraction(pages, text.chapters[at.chapter].length, at.fraction));
@@ -756,6 +874,7 @@ class _BookReaderState extends State<BookReader> {
             title: TextStyle(fontSize: fs * .85, letterSpacing: 1.2, color: look.faint, fontFamily: look.family, fontWeight: FontWeight.w600, decoration: TextDecoration.none),
             padding: compact ? const EdgeInsets.fromLTRB(14, 8, 14, 2) : const EdgeInsets.fromLTRB(22, 14, 22, 4),
             artHeight: box.biggest.height * (compact ? .34 : .36),
+            scaler: MediaQuery.textScalerOf(context),
           );
           if (spec != _spec) {
             final hadSpec = _spec != null;
@@ -789,6 +908,7 @@ class _BookReaderState extends State<BookReader> {
                     spec: spec,
                     look: look,
                     art: pg == 0 ? _artFor(c) : null,
+                    highlight: _hl != null && _hl!.chapter == c ? (para: _hl!.para, start: _hl!.start, end: _hl!.end) : null,
                     footer: 'pág. ${pg + 1} de ${pages.length} · cap. ${c + 1} de ${text.chapters.length}',
                   );
                 },
