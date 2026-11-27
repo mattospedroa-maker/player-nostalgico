@@ -165,6 +165,7 @@ class AppState extends ChangeNotifier {
         info = bookInfoOf(t);
         await bookService.save(t.path, info);
       }
+      await bookService.resplit(t.path); // destaque antigo (só no ponto): corta até a vírgula, sem internet
       if (!net.allows(NetFeature.books)) return;
       if (bookService.shouldSearchText(info)) {
         await bookService.fetchText(t.path);
