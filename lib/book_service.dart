@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -593,27 +594,54 @@ Responda só com JSON: {"titulo_en": "White Nights", "autor_en": "Fyodor Dostoye
     return [for (var k = 0; k < maxArt; k++) (k * chapters / maxArt).floor()];
   }
 
-  /// Pedido para o Gemini: uma cena e uma busca (em inglês, para o Wikimedia Commons) por capítulo.
-  static String artPrompt(String title, String author, List<(int, String, String)> chapters) => '''
+  /// Ilustrações v2: pinturas da época/país da obra e pranchas das cenas fortes.
+  static const artVersion = 2;
+
+  /// Primeira chave das pranchas (as de capítulo usam o número do capítulo).
+  static const sceneBase = 1000;
+
+  /// Uma prancha a cada ~10 min de leitura, com o que sobrar do teto depois das ilustrações dos capítulos.
+  @visibleForTesting
+  static List<int> sceneTimes({required int totalMs, required int chapterArt}) {
+    final room = maxArt - chapterArt;
+    final count = math.min(room, totalMs ~/ 600000);
+    if (count <= 0) return const [];
+    return [for (var k = 0; k < count; k++) ((k + .5) * totalMs / count).round()];
+  }
+
+  /// Pedido para o Gemini: uma cena e uma busca (em inglês, para o Wikimedia Commons) por capítulo ou trecho.
+  static String artPrompt(String title, String author, List<(int, String, String)> chapters) => """
 Livro de domínio público: "$title", de $author.
-Para cada capítulo abaixo, escolha UMA cena marcante e escreva uma busca curta EM INGLÊS para achar uma ilustração ou
-pintura antiga (domínio público) no Wikimedia Commons. Prefira coisas concretas (lugar, objeto, animal, época, tipo de pessoa).
-Responda só com JSON: {"cenas": [{"i": 0, "cena": "frase curta em português", "busca": "19th century engraving hippopotamus"}]}
+Para cada item abaixo (capítulo ou trecho), escolha UMA cena marcante e escreva uma busca curta EM INGLÊS para achar
+uma PINTURA antiga (óleo, aquarela; domínio público) no Wikimedia Commons, de preferência da mesma época e do mesmo
+país da obra (ex.: para Dostoiévski, "19th century Russian painting ..."). Prefira coisas concretas (lugar, paisagem,
+tipo de pessoa, momento do dia).
+Responda só com JSON: {"cenas": [{"i": 0, "cena": "nome curto da cena em português", "busca": "19th century Russian painting white night river embankment"}]}
 
-Capítulos (i: título — começo do texto):
+Itens (i: título — texto):
 ${chapters.map((c) => '${c.$1}: ${c.$2} — ${c.$3}').join('\n')}
-''';
+""";
 
-  /// Busca as ilustrações que faltam (uma vez por livro; respeita a aba Internet e o teto de [maxArt]).
+  /// Texto perto de [ms] (para o Gemini escolher a cena daquele trecho).
+  static String excerptAt(BookText text, int ms, {int max = 350}) {
+    final at = sentenceAt(text, ms);
+    if (at == null) return '';
+    final ch = text.chapters[at.chapter];
+    final s = ch.paragraphs.skip(at.para).take(2).join(' ');
+    return s.length > max ? s.substring(0, max) : s;
+  }
+
+  /// Busca as ilustrações que faltam (uma vez por livro; respeita a aba Internet e o teto de [maxArt]):
+  /// uma por capítulo e, no texto da transcrição, pranchas das cenas fortes a cada ~10 min.
   Future<void> fetchArt(String path, {bool manual = false}) async {
     var info = infoFor(path);
-    if (info == null || (!manual && (info.artDone || !allowNet()))) return;
+    if (info == null || (!manual && ((info.artDone && info.artVersion >= artVersion) || !allowNet()))) return;
     if (!_working.add('$path#art')) return;
     try {
       final text = await loadText(path);
       final n = info.chapters.isNotEmpty ? info.chapters.length : (text?.chapters.length ?? 0);
       if (n == 0) return;
-      final slots = artSlots(n);
+      final slots = [for (final i in artSlots(n)) if (!info.art.containsKey(i)) i];
       final match = text == null ? const <int>[] : matchChapters(info.chapters, text.chapters);
       String opening(int i) {
         if (text == null) return '';
@@ -624,20 +652,32 @@ ${chapters.map((c) => '${c.$1}: ${c.$2} — ${c.$3}').join('\n')}
       }
 
       String titleOf(int i) => info!.chapters.isNotEmpty ? info.chapters[i].title : (text?.chapters[i].title ?? 'Capítulo ${i + 1}');
-      final queries = <int, String>{};
+      // pranchas: só no texto com tempos (transcrição), onde dá para pôr a cena no lugar certo
+      final total = text != null && text.timed && text.chapters.isNotEmpty
+          ? [for (final c in text.chapters) if (c.times.isNotEmpty) c.times.last].fold(0, math.max) + 60000
+          : 0;
+      final sceneMs = info.scenes.isNotEmpty || total == 0 ? const <int>[] : sceneTimes(totalMs: total, chapterArt: artSlots(n).length);
+      final items = <(int, String, String)>[
+        for (final i in slots) (i, titleOf(i), opening(i)),
+        for (var k = 0; k < sceneMs.length; k++) (sceneBase + k, 'Trecho aos ${sceneMs[k] ~/ 60000} min', excerptAt(text!, sceneMs[k])),
+      ];
+      final queries = <int, String>{}, names = <int, String>{};
       final key = geminiKey().trim();
-      if (key.isNotEmpty && allowAi()) {
+      if (items.isNotEmpty && key.isNotEmpty && allowAi()) {
         try {
-          final ai = await GeminiClient(client, key).generateJson(artPrompt(info.title, info.author, [for (final i in slots) (i, titleOf(i), opening(i))]));
+          final ai = await GeminiClient(client, key).generateJson(artPrompt(info.title, info.author, items));
           for (final c in (ai['cenas'] as List?) ?? const []) {
-            if (c is Map && c['i'] is num && '${c['busca'] ?? ''}'.trim().isNotEmpty) queries[(c['i'] as num).toInt()] = '${c['busca']}'.trim();
+            if (c is! Map || c['i'] is! num || '${c['busca'] ?? ''}'.trim().isEmpty) continue;
+            final i = (c['i'] as num).toInt();
+            queries[i] = '${c['busca']}'.trim();
+            names[i] = '${c['cena'] ?? ''}'.trim();
           }
         } catch (e) {
           errorLog.info('Audiolivros', 'O Gemini não escolheu as cenas de "${info.title}"', e);
         }
       }
       // sem IA: ilustrações da própria obra/autor espalhadas pelos capítulos
-      if (queries.isEmpty) {
+      if (queries.isEmpty && info.art.isEmpty) {
         final generic = '${info.title} ${info.author}'.trim();
         for (final i in slots.take(6)) {
           queries[i] = generic;
@@ -646,6 +686,7 @@ ${chapters.map((c) => '${c.$1}: ${c.$2} — ${c.$3}').join('\n')}
       final dir = Directory(bookArtDir(path));
       await dir.create(recursive: true);
       final art = {...info.art}, credit = {...info.artCredit};
+      final scenes = {...info.scenes};
       final used = <String>{...art.values};
       for (final e in queries.entries) {
         if (art.containsKey(e.key) || art.length >= maxArt) continue;
@@ -654,17 +695,20 @@ ${chapters.map((c) => '${c.$1}: ${c.$2} — ${c.$3}').join('\n')}
         try {
           final r = await client.get(Uri.parse(img.url), headers: _ua).timeout(const Duration(seconds: 40));
           if (r.statusCode != 200 || r.bodyBytes.length < 2000) continue;
-          final name = 'cap_${e.key}${img.ext}';
+          final scene = e.key >= sceneBase;
+          final name = '${scene ? 'cena' : 'cap'}_${e.key}${img.ext}';
           await File(p.join(dir.path, name)).writeAsBytes(r.bodyBytes);
           art[e.key] = name;
           credit[e.key] = img.credit;
           used.add(img.id);
+          if (scene) scenes[e.key] = (sceneMs[e.key - sceneBase], names[e.key]?.isNotEmpty == true ? names[e.key]! : 'Cena');
+          notifyListeners();
         } catch (err) {
           errorLog.info('Audiolivros', 'Não deu para baixar uma ilustração', err);
         }
       }
       info = infoFor(path) ?? info;
-      await save(path, info.copyWith(art: art, artCredit: credit, artDone: true));
+      await save(path, info.copyWith(art: art, artCredit: credit, scenes: scenes, artDone: true, artVersion: artVersion));
     } finally {
       _working.remove('$path#art');
       notifyListeners();
@@ -739,7 +783,7 @@ ${chapters.map((c) => '${c.$1}: ${c.$2} — ${c.$3}').join('\n')}
   List<File> allArt(String path) {
     final info = infoFor(path);
     if (info == null) return const [];
-    final keys = info.art.keys.toList()..sort();
+    final keys = info.art.keys.where((k) => k < sceneBase).toList()..sort();
     return [for (final k in keys) ?artFile(path, k)];
   }
 }

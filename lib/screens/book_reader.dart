@@ -171,7 +171,10 @@ class BookPage {
 
   /// Letras do capítulo antes desta página (para achar a página pela fração lida).
   final int charStart;
-  const BookPage(this.chapter, this.index, this.segs, this.charStart);
+
+  /// Prancha (página inteira com a pintura de uma cena): a chave da ilustração. Null = página de texto.
+  final int? plate;
+  const BookPage(this.chapter, this.index, this.segs, this.charStart, {this.plate});
   bool get first => index == 0;
 }
 
@@ -212,7 +215,8 @@ class PageSpec {
 const _indent = '  ';
 
 /// Divide um capítulo em páginas que cabem na tela, sem cortar no meio de uma linha.
-List<BookPage> paginate(int chapterIndex, BookChapter ch, PageSpec spec, {bool hasArt = false}) {
+/// [plates]: pranchas das cenas, (parágrafo antes do qual entra, chave da ilustração).
+List<BookPage> paginate(int chapterIndex, BookChapter ch, PageSpec spec, {bool hasArt = false, List<(int, int)> plates = const []}) {
   final pages = <BookPage>[];
   final w = spec.width, h = spec.height;
   if (w <= 20 || h <= 20) return [BookPage(chapterIndex, 0, const [], 0)];
@@ -235,6 +239,14 @@ List<BookPage> paginate(int chapterIndex, BookChapter ch, PageSpec spec, {bool h
   }
 
   for (var i = 0; i < ch.paragraphs.length; i++) {
+    // prancha da cena antes deste parágrafo: página inteira, e o texto continua na página seguinte
+    for (final (para, key) in plates) {
+      if (para != i || i == 0) continue;
+      if (segs.isNotEmpty) newPage();
+      pages.add(BookPage(chapterIndex, pages.length, const [], chars, plate: key));
+      used = 0;
+      pageStart = chars;
+    }
     final text = ch.paragraphs[i];
     var start = 0;
     while (start < text.length) {
@@ -333,7 +345,54 @@ class PageView extends StatelessWidget {
   final String footer;
   /// Frase destacada neste capítulo: parágrafo e letras [start, end).
   final ({int para, int start, int end})? highlight;
-  const PageView({super.key, required this.chapter, required this.page, required this.spec, required this.look, required this.footer, this.art, this.highlight});
+
+  /// Prancha: nome da cena e crédito da pintura.
+  final String plateTitle;
+  final String plateCredit;
+  const PageView({
+    super.key,
+    required this.chapter,
+    required this.page,
+    required this.spec,
+    required this.look,
+    required this.footer,
+    this.art,
+    this.highlight,
+    this.plateTitle = '',
+    this.plateCredit = '',
+  });
+
+  /// Página inteira com a pintura da cena, o nome dela e o pintor (como as pranchas dos livros antigos).
+  Widget _plate() => Container(
+        color: look.background,
+        padding: spec.padding,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Expanded(
+            child: Padding(
+              padding: EdgeInsets.all(spec.gap * 2),
+              child: Container(
+                padding: const EdgeInsets.all(5),
+                decoration: BoxDecoration(border: Border.all(color: look.faint.withValues(alpha: .7))),
+                child: art == null
+                    ? const SizedBox()
+                    : Image.file(art!, fit: BoxFit.contain, cacheWidth: 1000, gaplessPlayback: true, errorBuilder: (_, _, _) => const SizedBox()),
+              ),
+            ),
+          ),
+          if (plateTitle.isNotEmpty)
+            Text(plateTitle, textAlign: TextAlign.center, style: spec.body.copyWith(fontSize: (spec.body.fontSize ?? 14) * 1.05), textScaler: spec.scaler),
+          if (plateCredit.isNotEmpty)
+            Text(plateCredit,
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: (spec.body.fontSize ?? 14) * .68, color: look.faint, decoration: TextDecoration.none)),
+          SizedBox(
+            height: spec.footer,
+            child: Center(child: Text(footer, style: TextStyle(fontSize: (spec.body.fontSize ?? 14) * .7, color: look.faint, decoration: TextDecoration.none))),
+          ),
+        ]),
+      );
 
   /// Texto de um pedaço de parágrafo, com a frase lida marcada (mesmas letras e estilo: as páginas não mudam).
   InlineSpan _seg(PageSeg s) {
@@ -351,6 +410,7 @@ class PageView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (page.plate != null) return _plate();
     return Container(
       color: look.background,
       padding: spec.padding,
@@ -683,6 +743,10 @@ class _BookReaderState extends State<BookReader> {
   List<int> _match = const [];
   BookInfo? _matchedFor;
   DateTime _lastFollow = DateTime(2000);
+  int _artCount = -1;
+
+  /// Seguindo a narração, a prancha fica uns segundos na tela antes de virar.
+  DateTime _plateUntil = DateTime(2000);
 
   late final BookService _books = context.read<AppState>().bookService;
 
@@ -696,6 +760,15 @@ class _BookReaderState extends State<BookReader> {
   /// O texto mudou (a transcrição ganhou mais um pedaço arrumado pelo Gemini): troca sem perder o lugar.
   void _onBooks() {
     if (!mounted || _loading) return;
+    // chegou ilustração nova: as pranchas mudam as páginas
+    final artCount = _books.infoFor(widget.track.path)?.art.length ?? 0;
+    if (artCount != _artCount) {
+      _artCount = artCount;
+      if (_spec != null) {
+        setState(() => _pages.clear());
+        if (_following) _follow(context.read<PlayerService>().player.position, jump: true);
+      }
+    }
     final t = _books.textIfLoaded(widget.track.path);
     if (t == null || identical(t, _text)) return;
     setState(() {
@@ -804,7 +877,11 @@ class _BookReaderState extends State<BookReader> {
     final (c, pg) = t;
     if (c == _chapter && pg == _page) return;
     final cur = _globalIndex(_chapter, _page), dest = _globalIndex(c, pg);
-    if (!jump && dest == cur + 1) {
+    if (!jump && now.isBefore(_plateUntil)) return; // mostrando a prancha
+    final pages = _pagesOf(_chapter);
+    final plateNext = c == _chapter && _page + 1 < pages.length && pages[_page + 1].plate != null;
+    if (!jump && (dest == cur + 1 || (dest == cur + 2 && plateNext))) {
+      if (plateNext) _plateUntil = now.add(const Duration(seconds: 7));
       unawaited(_pager.currentState?.turn(forward: true, byUser: false));
     } else {
       setState(() {
@@ -819,7 +896,25 @@ class _BookReaderState extends State<BookReader> {
 
   List<BookPage> _pagesOf(int chapter) {
     final spec = _spec!;
-    return _pages.putIfAbsent(chapter, () => paginate(chapter, _text!.chapters[chapter], spec, hasArt: _artFor(chapter) != null));
+    return _pages.putIfAbsent(chapter, () => paginate(chapter, _text!.chapters[chapter], spec, hasArt: _artFor(chapter) != null, plates: _platesFor(chapter)));
+  }
+
+  /// Pranchas das cenas que caem neste capítulo do texto: (parágrafo, chave da ilustração).
+  List<(int, int)> _platesFor(int chapter) {
+    final text = _text;
+    if (text == null || !text.timed) return const [];
+    final app = context.read<AppState>();
+    final out = <(int, int)>[];
+    for (final e in _info.scenes.entries) {
+      if (app.bookService.artFile(widget.track.path, e.key) == null) continue;
+      final at = sentenceAt(text, e.value.$1);
+      if (at == null || at.chapter != chapter) continue;
+      // a prancha entra antes do parágrafo seguinte ao da cena (não corta a frase no meio)
+      final para = at.para + 1;
+      if (para > 0 && para < text.chapters[chapter].paragraphs.length) out.add((para, e.key));
+    }
+    out.sort((a, b) => a.$1.compareTo(b.$1));
+    return out;
   }
 
   File? _artFor(int textChapter) {
@@ -907,8 +1002,12 @@ class _BookReaderState extends State<BookReader> {
                     page: pages[pg],
                     spec: spec,
                     look: look,
-                    art: pg == 0 ? _artFor(c) : null,
+                    art: pages[pg].plate != null
+                        ? context.read<AppState>().bookService.artFile(widget.track.path, pages[pg].plate!)
+                        : (pg == 0 ? _artFor(c) : null),
                     highlight: _hl != null && _hl!.chapter == c ? (para: _hl!.para, start: _hl!.start, end: _hl!.end) : null,
+                    plateTitle: pages[pg].plate == null ? '' : (_info.scenes[pages[pg].plate]?.$2 ?? ''),
+                    plateCredit: pages[pg].plate == null ? '' : (_info.artCredit[pages[pg].plate] ?? ''),
                     footer: 'pág. ${pg + 1} de ${pages.length} · cap. ${c + 1} de ${text.chapters.length}',
                   );
                 },
