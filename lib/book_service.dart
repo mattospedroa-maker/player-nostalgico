@@ -610,7 +610,30 @@ Responda só com JSON: {"titulo_en": "White Nights", "autor_en": "Fyodor Dostoye
   }
 
   /// Ilustrações v2: pinturas da época/país da obra e pranchas das cenas fortes.
-  static const artVersion = 2;
+  /// v3: busca no Commons com termos cada vez mais simples; livro que ficou sem nenhuma imagem tenta de novo.
+  static const artVersion = 3;
+
+  /// Precisa buscar ilustrações: nunca buscou, busca antiga (v1), ou a v2 não achou nenhuma.
+  static bool needsArt(BookInfo info) => !info.artDone || info.artVersion < 2 || (info.art.isEmpty && info.artVersion < artVersion);
+
+  /// Buscas no Commons, da mais exata à mais simples: a busca longa do Gemini quase nunca acha nada
+  /// ("20th century English painting London street rain"); as curtas acham.
+  @visibleForTesting
+  static List<String> artQueries(String query) {
+    final words = query.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+    if (words.isEmpty) return const [];
+    final hasPainting = words.any((w) => w.toLowerCase().startsWith('paint'));
+    // sem "19th century English": o que se vê na cena + pintura
+    final scene = words.where((w) => !RegExp(r'^(\d+(st|nd|rd|th)|century|painting|paintings|oil|watercolou?r)$', caseSensitive: false).hasMatch(w)).toList();
+    final out = <String>[
+      words.join(' '),
+      if (words.length > 4) words.take(4).join(' '),
+      if (scene.length >= 2) '${scene.skip(scene.length > 3 ? 1 : 0).take(2).join(' ')} painting',
+      if (scene.isNotEmpty) '${scene.last} painting',
+      if (!hasPainting && words.length <= 4) '${words.join(' ')} painting',
+    ];
+    return {for (final q in out) q}.toList();
+  }
 
   /// Primeira chave das pranchas (as de capítulo usam o número do capítulo).
   static const sceneBase = 1000;
@@ -650,7 +673,7 @@ ${chapters.map((c) => '${c.$1}: ${c.$2} — ${c.$3}').join('\n')}
   /// uma por capítulo e, no texto da transcrição, pranchas das cenas fortes a cada ~10 min.
   Future<void> fetchArt(String path, {bool manual = false}) async {
     var info = infoFor(path);
-    if (info == null || (!manual && ((info.artDone && info.artVersion >= artVersion) || !allowNet()))) return;
+    if (info == null || (!manual && (!needsArt(info) || !allowNet()))) return;
     if (!_working.add('$path#art')) return;
     try {
       final text = await loadText(path);
@@ -677,6 +700,7 @@ ${chapters.map((c) => '${c.$1}: ${c.$2} — ${c.$3}').join('\n')}
         for (var k = 0; k < sceneMs.length; k++) (sceneBase + k, 'Trecho aos ${sceneMs[k] ~/ 60000} min', excerptAt(text!, sceneMs[k])),
       ];
       final queries = <int, String>{}, names = <int, String>{};
+      final generic = '${info.title} ${info.author}'.trim();
       final key = geminiKey().trim();
       if (items.isNotEmpty && key.isNotEmpty && allowAi()) {
         try {
@@ -693,7 +717,6 @@ ${chapters.map((c) => '${c.$1}: ${c.$2} — ${c.$3}').join('\n')}
       }
       // sem IA: ilustrações da própria obra/autor espalhadas pelos capítulos
       if (queries.isEmpty && info.art.isEmpty) {
-        final generic = '${info.title} ${info.author}'.trim();
         for (final i in slots.take(6)) {
           queries[i] = generic;
         }
@@ -705,7 +728,11 @@ ${chapters.map((c) => '${c.$1}: ${c.$2} — ${c.$3}').join('\n')}
       final used = <String>{...art.values};
       for (final e in queries.entries) {
         if (art.containsKey(e.key) || art.length >= maxArt) continue;
-        final img = await _commonsImage(e.value, skip: used);
+        ({String url, String ext, String credit, String id})? img;
+        for (final q in artQueries(e.value)) {
+          img = await _commonsImage(q, skip: used);
+          if (img != null) break;
+        }
         if (img == null) continue;
         try {
           final r = await client.get(Uri.parse(img.url), headers: _ua).timeout(const Duration(seconds: 40));
@@ -722,6 +749,26 @@ ${chapters.map((c) => '${c.$1}: ${c.$2} — ${c.$3}').join('\n')}
           errorLog.info('Audiolivros', 'Não deu para baixar uma ilustração', err);
         }
       }
+      // nada achado pelas cenas: ao menos uma imagem da obra/do autor no 1º capítulo
+      if (art.isEmpty && slots.isNotEmpty && generic.isNotEmpty) {
+        for (final q in [generic, info.author, '${info.author} portrait']) {
+          if (q.trim().isEmpty) continue;
+          final img = await _commonsImage(q, skip: used);
+          if (img == null) continue;
+          try {
+            final r = await client.get(Uri.parse(img.url), headers: _ua).timeout(const Duration(seconds: 40));
+            if (r.statusCode != 200 || r.bodyBytes.length < 2000) continue;
+            final name = 'cap_${slots.first}${img.ext}';
+            await File(p.join(dir.path, name)).writeAsBytes(r.bodyBytes);
+            art[slots.first] = name;
+            credit[slots.first] = img.credit;
+            break;
+          } catch (err) {
+            errorLog.info('Audiolivros', 'Não deu para baixar uma ilustração', err);
+          }
+        }
+      }
+      if (art.isEmpty) errorLog.info('Audiolivros', 'Nenhuma pintura de domínio público achada para "${info.title}"');
       info = infoFor(path) ?? info;
       await save(path, info.copyWith(art: art, artCredit: credit, scenes: scenes, artDone: true, artVersion: artVersion));
     } finally {
@@ -741,7 +788,7 @@ ${chapters.map((c) => '${c.$1}: ${c.$2} — ${c.$3}').join('\n')}
                 'generator': 'search',
                 'gsrsearch': 'filetype:bitmap $query',
                 'gsrnamespace': '6',
-                'gsrlimit': '12',
+                'gsrlimit': '25',
                 'prop': 'imageinfo',
                 'iiprop': 'url|mime|extmetadata',
                 'iiurlwidth': '800',

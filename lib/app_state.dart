@@ -176,7 +176,7 @@ class AppState extends ChangeNotifier {
       } else if (bookService.needsPolish(t.path)) {
         unawaited(bookService.polish(t.path));
       }
-      if (!info.artDone || info.artVersion < BookService.artVersion) await bookService.fetchArt(t.path);
+      if (BookService.needsArt(bookService.infoFor(t.path) ?? info)) await bookService.fetchArt(t.path);
     }());
   }
 
