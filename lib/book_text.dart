@@ -40,7 +40,13 @@ class BookText {
   final String title;
   final String author;
   final List<BookChapter> chapters;
-  const BookText({this.title = '', this.author = '', this.chapters = const []});
+
+  /// Como os trechos do destaque foram cortados (0 = só no ponto; [piecesVersion] = também na vírgula).
+  final int pieces;
+  const BookText({this.title = '', this.author = '', this.chapters = const [], this.pieces = 0});
+
+  /// Versão de agora do corte dos trechos: livro com versão menor é cortado de novo (no celular, sem internet).
+  static const piecesVersion = 2;
 
   bool get isEmpty => chapters.every((c) => c.paragraphs.isEmpty);
 
@@ -48,10 +54,12 @@ class BookText {
   bool get timed => chapters.isNotEmpty && chapters.every((c) => c.timed || c.paragraphs.isEmpty);
   int get length => chapters.fold(0, (s, c) => s + c.length);
 
-  Map<String, Object> toJson() => {'versao': 1, 'titulo': title, 'autor': author, 'capitulos': [for (final c in chapters) c.toJson()]};
+  Map<String, Object> toJson() =>
+      {'versao': 1, 'titulo': title, 'autor': author, if (pieces > 0) 'trechos': pieces, 'capitulos': [for (final c in chapters) c.toJson()]};
   static BookText fromJson(Map<String, dynamic> m) => BookText(
         title: '${m['titulo'] ?? ''}',
         author: '${m['autor'] ?? ''}',
+        pieces: (m['trechos'] as num?)?.toInt() ?? 0,
         chapters: [for (final c in (m['capitulos'] as List?) ?? const []) BookChapter.fromJson((c as Map).cast<String, dynamic>())],
       );
 
@@ -435,7 +443,11 @@ class Transcript {
   /// Texto do livro: um capítulo do texto por capítulo do áudio (mesmos títulos); sem capítulos, partes de 30 min.
   BookText toBook({required String title, required String author, required List<Chapter> audio}) {
     final pars = paragraphs();
-    return BookText(title: title, author: author, chapters: splitByTime(pars, audio, sentences: sentenceTimes(pars, wordStream())));
+    return BookText(
+        title: title,
+        author: author,
+        pieces: hasWordTimes ? BookText.piecesVersion : 0,
+        chapters: splitByTime(pars, audio, sentences: sentenceTimes(pars, wordStream())));
   }
 }
 
@@ -575,7 +587,12 @@ String wordKey(String w) => normalizeText(w).replaceAll(RegExp(r'[^a-z0-9]'), ''
   return (segs: segs, offsets: offsets);
 }
 
-final _sentenceEnd = RegExp(r'[.!?…]+["”»’)]*\s+');
+// fim de frase ou de trecho: . ! ? … , ; : e travessão (com aspas/parênteses que fecham logo depois)
+final _sentenceEnd = RegExp(r'([.!?…,;:]+["”»’)]*|\s[—–-])\s+');
+
+/// Trechos com menos palavras que isso juntam com o vizinho (o destaque não fica piscando em "Winston,").
+const _minPieceWords = 3;
+final _realWord = RegExp(r'[\p{L}\p{N}]+', unicode: true);
 final _wordRe = RegExp(r'\S+');
 
 /// Quando começa cada frase de cada parágrafo: casa as palavras do texto (pontuado pelo Gemini, que pode trocar uma
@@ -624,8 +641,8 @@ List<List<int>> sentenceTimes(List<(int, String)> pars, List<(String, int)> stre
         p++; // palavra trocada pelo Gemini: anda junto com a legenda
       }
     }
-    // frases: começam no início do parágrafo e depois de . ! ? …
-    final starts = <int>[0, for (final m in _sentenceEnd.allMatches(text)) if (m.end < text.length) m.end];
+    // trechos: começam no início do parágrafo e depois de . ! ? … , ; : —
+    final starts = pieceStarts(text);
     final flat = <int>[];
     var prev = pms;
     for (var si = 0; si < starts.length; si++) {
@@ -648,8 +665,42 @@ List<List<int>> sentenceTimes(List<(int, String)> pars, List<(String, int)> stre
   return out;
 }
 
+/// Onde começa cada trecho destacável do parágrafo (até a vírgula ou o ponto). Trecho curto demais junta com o
+/// anterior (ou com o seguinte, se for o primeiro).
+List<int> pieceStarts(String text) {
+  final cuts = <int>[0, for (final m in _sentenceEnd.allMatches(text)) if (m.end < text.length) m.end];
+  int wordsIn(int a, int b) => _realWord.allMatches(text.substring(a, b)).length;
+  final out = <int>[0];
+  for (var i = 1; i < cuts.length; i++) {
+    final end = i + 1 < cuts.length ? cuts[i + 1] : text.length;
+    // o trecho anterior ainda é curto: este continua nele
+    if (wordsIn(out.last, cuts[i]) < _minPieceWords) continue;
+    // este é curto e é o último: fica com o anterior
+    if (i + 1 == cuts.length && wordsIn(cuts[i], end) < _minPieceWords) continue;
+    out.add(cuts[i]);
+  }
+  return out;
+}
+
 /// A frase que está sendo lida em [ms]: capítulo, parágrafo e letras [start, end). Null = texto sem tempos.
 ({int chapter, int para, int start, int end})? sentenceAt(BookText text, int ms) {
+  final r = _readingAt(text, ms);
+  return r == null ? null : (chapter: r.chapter, para: r.para, start: r.start, end: r.end);
+}
+
+/// A letra sendo lida em [ms], estimada dentro da frase pelo tempo que ela leva (do começo dela ao começo da
+/// próxima). Serve para virar a página na palavra certa quando a frase começa numa página e termina na outra.
+({int chapter, int para, int char})? readingAt(BookText text, int ms) {
+  final r = _readingAt(text, ms);
+  if (r == null) return null;
+  final len = r.end - r.start;
+  // sem o tempo da próxima (fim do livro): umas 14 letras por segundo, fala normal
+  final dur = r.untilMs > r.fromMs ? r.untilMs - r.fromMs : len * 1000 ~/ 14;
+  final done = dur <= 0 ? 0.0 : ((ms - r.fromMs) / dur).clamp(0.0, 1.0);
+  return (chapter: r.chapter, para: r.para, char: math.max(r.start, math.min(r.end - 1, r.start + (len * done).floor())));
+}
+
+({int chapter, int para, int start, int end, int fromMs, int untilMs})? _readingAt(BookText text, int ms) {
   if (!text.timed) return null;
   var c = -1, k = -1;
   for (var i = 0; i < text.chapters.length; i++) {
@@ -666,12 +717,25 @@ List<List<int>> sentenceTimes(List<(int, String)> pars, List<(String, int)> stre
   if (c < 0 || k < 0) return null;
   final ch = text.chapters[c];
   if (!ch.hasSentences) return null;
+  // quando começa o parágrafo seguinte (no mesmo capítulo ou no próximo com tempos; -1 = não tem)
+  var nextPar = -1;
+  if (k + 1 < ch.times.length) {
+    nextPar = ch.times[k + 1];
+  } else {
+    for (var i = c + 1; i < text.chapters.length; i++) {
+      if (text.chapters[i].times.isNotEmpty) {
+        nextPar = text.chapters[i].times.first;
+        break;
+      }
+    }
+  }
   final f = ch.sentences[k];
-  if (f.length < 2) return (chapter: c, para: k, start: 0, end: ch.paragraphs[k].length);
+  if (f.length < 2) return (chapter: c, para: k, start: 0, end: ch.paragraphs[k].length, fromMs: ch.times[k], untilMs: nextPar);
   var si = 0;
   for (var j = 0; j + 1 < f.length; j += 2) {
     if (f[j + 1] <= ms) si = j;
   }
-  final end = si + 2 < f.length ? f[si + 2] : ch.paragraphs[k].length;
-  return (chapter: c, para: k, start: f[si], end: end);
+  final last = si + 2 >= f.length;
+  final end = last ? ch.paragraphs[k].length : f[si + 2];
+  return (chapter: c, para: k, start: f[si], end: end, fromMs: f[si + 1], untilMs: last ? nextPar : f[si + 3]);
 }

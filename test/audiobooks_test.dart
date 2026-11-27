@@ -616,6 +616,11 @@ void main() {
       expect(tr.wordStream(), [('era', 1000), ('uma', 1300), ('vez', 1650), ('um', 2500), ('sonhador', 2700)]);
       final back = Transcript.fromJson(jsonDecode(jsonEncode(tr.toJson())) as Map<String, dynamic>);
       expect(back.offsets, r.offsets);
+      // texto feito agora sabe que os trechos já vão até a vírgula (livros antigos são cortados de novo)
+      final book = tr.toBook(title: 'x', author: 'y', audio: const []);
+      expect(book.pieces, BookText.piecesVersion);
+      expect(BookText.fromJson(jsonDecode(jsonEncode(book.toJson())) as Map<String, dynamic>).pieces, BookText.piecesVersion);
+      expect(BookText.fromJson(const {'capitulos': []}).pieces, 0);
       expect(Transcript(r.segs).hasWordTimes, isFalse);
     });
 
@@ -633,6 +638,26 @@ void main() {
       expect(f[3], 10000 + 11 * 400); // "ele" é a 12ª palavra da legenda
       // sem legenda com tempos: nada de destaque
       expect(sentenceTimes(pars, const []).single, isEmpty);
+    });
+
+    test('destaque vai até a vírgula ou o ponto, sem trechos minúsculos', () {
+      const t = 'Mostrava simplesmente um rosto enorme, mais de 1 m de largura. O rosto de um homem de cerca de 45 anos, '
+          'com um bigode preto farto e traços acidentalmente bonitos. Winston, porém, alcançou as escadas.';
+      List<String> pieces(String s) {
+        final st = pieceStarts(s);
+        return [for (var i = 0; i < st.length; i++) s.substring(st[i], i + 1 < st.length ? st[i + 1] : s.length).trim()];
+      }
+
+      expect(pieces(t), [
+        'Mostrava simplesmente um rosto enorme,',
+        'mais de 1 m de largura.',
+        'O rosto de um homem de cerca de 45 anos,',
+        'com um bigode preto farto e traços acidentalmente bonitos.',
+        'Winston, porém, alcançou as escadas.', // "Winston," e "porém," sozinhos piscariam
+      ]);
+      expect(pieces('Ele parou — e olhou para trás; ninguém vinha: estava só.'), ['Ele parou — e olhou para trás;', 'ninguém vinha: estava só.']);
+      expect(pieces('Sim.'), ['Sim.']);
+      expect(pieces('Era uma frase longa sem vírgula nenhuma'), ['Era uma frase longa sem vírgula nenhuma']);
     });
 
     test('frase lida pelo tempo e a página onde ela está', () {
@@ -656,6 +681,13 @@ void main() {
       expect(pageForChar(pages, 0, 16), 0);
       expect(pageForChar(pages, 0, 20), 1); // espaço pulado no corte
       expect(pageForChar(pages, 1, 0), 1);
+      // frase dividida entre as páginas 0 e 1 (letras 16 a 30, lida de 4 s a 8 s): vira no meio dela
+      expect(readingAt(text, 4000), (chapter: 0, para: 0, char: 16));
+      expect(pageForChar(pages, 0, readingAt(text, 4500)!.char), 0); // começo da frase, ainda na página 0
+      expect(pageForChar(pages, 0, readingAt(text, 7000)!.char), 1); // narração já na parte de baixo: página 1
+      expect(readingAt(text, 7999)!.char, lessThan(30));
+      expect(readingAt(text, 8000), (chapter: 0, para: 1, char: 0));
+      expect(readingAt(text, 9000)!.char, 14); // fim do livro, sem próximo tempo: ~14 letras por segundo
     });
 
     test('transcrição é o padrão: livro com texto do Gutenberg e vídeo tenta de novo', () {
@@ -680,6 +712,30 @@ void main() {
       final back = BookInfo.fromJson(jsonDecode(jsonEncode(info.toJson())) as Map<String, dynamic>);
       expect(back.scenes, {1000: (60000, 'O encontro na ponte')});
       expect(back.artVersion, 2);
+    });
+
+    test('com destaque, cada página deixa uma linha livre e cabe mesmo com a frase em negrito e itálico', () {
+      final ch = BookChapter('I', [for (var i = 0; i < 8; i++) 'Parágrafo $i, ${'palavra larga, ' * 30}fim.'.trim()]);
+      const body = TextStyle(fontSize: 14, height: 1.4);
+      const plain = PageSpec(size: Size(320, 400), body: body, title: TextStyle(fontSize: 12), padding: EdgeInsets.all(10));
+      const spec = PageSpec(size: Size(320, 400), body: body, title: TextStyle(fontSize: 12), padding: EdgeInsets.all(10), reserveLine: true);
+      expect(plain.height - spec.height, closeTo(14 * 1.4, .01));
+      expect(spec == plain, isFalse); // muda a opção: divide de novo
+      final pages = paginate(0, ch, spec);
+      for (final pg in pages.skip(1)) {
+        // pior caso: a página inteira destacada (letras mais largas) ainda cabe na altura sem a folga
+        final tp = TextPainter(
+          text: TextSpan(style: body, children: [
+            for (final s in pg.segs)
+              TextSpan(
+                  text: '${s.start == 0 ? '  ' : ''}${ch.paragraphs[s.para].substring(s.start, s.end)}\n',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontStyle: FontStyle.italic)),
+          ]),
+          textDirection: TextDirection.ltr,
+        )..layout(maxWidth: spec.width);
+        expect(tp.height, lessThanOrEqualTo(plain.height + pg.segs.length * spec.gap + 1));
+        tp.dispose();
+      }
     });
 
     test('prancha vira uma página inteira antes do parágrafo, sem perder texto', () {

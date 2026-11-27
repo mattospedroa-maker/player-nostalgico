@@ -256,6 +256,21 @@ class BookService extends ChangeNotifier {
   }
 
   /// Transcrição guardada antes do destaque da frase (sem o tempo de cada palavra)?
+  /// Transcrição com o tempo das palavras, mas trechos do destaque cortados do jeito antigo (só no ponto):
+  /// corta de novo, até a vírgula, sem internet.
+  Future<void> resplit(String path) async {
+    final info = infoFor(path);
+    if (info == null || info.textSource != transcriptSource || _working.contains(path)) return;
+    final text = await loadText(path);
+    if (text == null || !text.timed || text.pieces >= BookText.piecesVersion) return;
+    final tr = Transcript.read(path);
+    if (tr == null || !tr.hasWordTimes) return;
+    final fresh = tr.toBook(title: info.title, author: info.author, audio: info.chapters);
+    await fresh.save(path);
+    _text[path] = fresh;
+    notifyListeners();
+  }
+
   bool needsWordTimes(String path) {
     final info = infoFor(path);
     if (info == null || info.textSource != transcriptSource || info.searchVersion >= searchVersion) return false;

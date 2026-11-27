@@ -191,11 +191,23 @@ class PageSpec {
   /// Tamanho de letra do Android (Configurações > Tela > Tamanho da fonte). As páginas são medidas com ele,
   /// igual ao texto desenhado; sem isso, com a letra do celular maior, o texto passava do fim da página.
   final TextScaler scaler;
-  const PageSpec({required this.size, required this.body, required this.title, required this.padding, this.artHeight = 0, this.scaler = TextScaler.noScaling});
+
+  /// Deixa uma linha livre no pé da página: a frase destacada fica em negrito e itálico (letras mais largas)
+  /// e pode empurrar uma palavra para a linha de baixo; com a folga, nada sai cortado.
+  final bool reserveLine;
+  const PageSpec(
+      {required this.size,
+      required this.body,
+      required this.title,
+      required this.padding,
+      this.artHeight = 0,
+      this.scaler = TextScaler.noScaling,
+      this.reserveLine = false});
 
   double get width => size.width - padding.horizontal;
   // 2 px de folga para arredondamentos entre a medida e o desenho
-  double get height => size.height - padding.vertical - footer - 2;
+  double get height => size.height - padding.vertical - footer - 2 - (reserveLine ? lineHeight : 0);
+  double get lineHeight => scaler.scale(body.fontSize ?? 14) * (body.height ?? 1.2);
   double get footer => (body.fontSize ?? 14) * 1.4;
   double get gap => (body.fontSize ?? 14) * .45;
 
@@ -207,9 +219,10 @@ class PageSpec {
       other.title == title &&
       other.padding == padding &&
       other.artHeight == artHeight &&
-      other.scaler == scaler;
+      other.scaler == scaler &&
+      other.reserveLine == reserveLine;
   @override
-  int get hashCode => Object.hash(size, body, title, padding, artHeight, scaler);
+  int get hashCode => Object.hash(size, body, title, padding, artHeight, scaler, reserveLine);
 }
 
 const _indent = '  ';
@@ -394,7 +407,8 @@ class PageView extends StatelessWidget {
         ]),
       );
 
-  /// Texto de um pedaço de parágrafo, com a frase lida marcada (mesmas letras e estilo: as páginas não mudam).
+  /// Texto de um pedaço de parágrafo, com a frase lida marcada: fundo, negrito e itálico (a linha de folga
+  /// no pé da página segura as palavras que a frase mais larga empurra).
   InlineSpan _seg(PageSeg s) {
     final text = chapter.paragraphs[s.para];
     final indent = s.start == 0 ? _indent : '';
@@ -403,7 +417,7 @@ class PageView extends StatelessWidget {
     final a = math.max(h.start, s.start), b = math.min(h.end, s.end);
     return TextSpan(children: [
       TextSpan(text: indent + text.substring(s.start, a)),
-      TextSpan(text: text.substring(a, b), style: TextStyle(backgroundColor: look.mark)),
+      TextSpan(text: text.substring(a, b), style: TextStyle(backgroundColor: look.mark, fontWeight: FontWeight.bold, fontStyle: FontStyle.italic)),
       TextSpan(text: text.substring(b, s.end)),
     ]);
   }
@@ -856,10 +870,11 @@ class _BookReaderState extends State<BookReader> {
     final ps = context.read<PlayerService>();
     if (ps.current?.id != widget.track.id) return null;
     final total = ps.player.duration ?? Duration(milliseconds: widget.track.durationMs);
-    // com a frase exata (transcrição com tempos): a página que tem o começo dela
-    final s = sentenceAt(text, pos.inMilliseconds + ReaderLook.of(context.read<AppState>()).syncMs);
+    // com a frase exata (transcrição com tempos): a página da palavra que está sendo lida. Frase dividida entre
+    // duas páginas vira no meio, quando a narração chega na parte de baixo (não espera a frase acabar).
+    final s = readingAt(text, pos.inMilliseconds + ReaderLook.of(context.read<AppState>()).syncMs);
     if (s != null) {
-      final pg = pageForChar(_pagesOf(s.chapter), s.para, s.start);
+      final pg = pageForChar(_pagesOf(s.chapter), s.para, s.char);
       if (pg != null) return (s.chapter, pg);
     }
     final at = textPosition(text: text, audio: _info.chapters, match: _matchNow(), pos: pos, total: total);
@@ -970,6 +985,7 @@ class _BookReaderState extends State<BookReader> {
             padding: compact ? const EdgeInsets.fromLTRB(14, 8, 14, 2) : const EdgeInsets.fromLTRB(22, 14, 22, 4),
             artHeight: box.biggest.height * (compact ? .34 : .36),
             scaler: MediaQuery.textScalerOf(context),
+            reserveLine: look.highlight && text.timed,
           );
           if (spec != _spec) {
             final hadSpec = _spec != null;
