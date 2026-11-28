@@ -175,7 +175,7 @@ class BookPage {
   /// Prancha (página inteira com a pintura de uma cena): a chave da ilustração. Null = página de texto.
   final int? plate;
 
-  /// Página da pintura (começo do capítulo ou prancha) com uma frase só: a pintura ocupa o resto da página.
+  /// Página da pintura (começo do capítulo ou prancha) na folha toda, com as 2 primeiras frases de legenda.
   final bool spotlight;
   const BookPage(this.chapter, this.index, this.segs, this.charStart, {this.plate, this.spotlight = false});
   bool get first => index == 0;
@@ -230,6 +230,9 @@ class PageSpec {
 
 const _indent = '  ';
 
+/// Frases na legenda da página da pintura.
+const _captionPieces = 2;
+
 /// Divide um capítulo em páginas que cabem na tela, sem cortar no meio de uma linha.
 /// [plates]: pranchas das cenas, (parágrafo antes do qual entra, chave da ilustração).
 List<BookPage> paginate(int chapterIndex, BookChapter ch, PageSpec spec, {bool hasArt = false, List<(int, int)> plates = const []}) {
@@ -246,7 +249,6 @@ List<BookPage> paginate(int chapterIndex, BookChapter ch, PageSpec spec, {bool h
     used += tp.height + spec.gap * 2;
     tp.dispose();
   }
-  final header = used;
   void newPage() {
     pages.add(BookPage(chapterIndex, pages.length, segs, pageStart));
     segs = <PageSeg>[];
@@ -254,11 +256,12 @@ List<BookPage> paginate(int chapterIndex, BookChapter ch, PageSpec spec, {bool h
     pageStart = chars;
   }
 
-  // fim da 1ª frase do parágrafo (até a vírgula ou o ponto) e a altura dela
+  // fim das 2 primeiras frases do parágrafo (até a vírgula ou o ponto): a legenda da pintura, com tempo
+  // para ver a pintura passar
   int firstPieceEnd(int i) {
     final text = ch.paragraphs[i];
     final starts = ch.hasSentences && ch.sentences[i].length >= 4 ? [for (var j = 0; j < ch.sentences[i].length; j += 2) ch.sentences[i][j]] : pieceStarts(text);
-    return starts.length > 1 ? starts[1] : text.length;
+    return starts.length > _captionPieces ? starts[_captionPieces] : text.length;
   }
 
   double heightOf(int i, int end) {
@@ -273,12 +276,12 @@ List<BookPage> paginate(int chapterIndex, BookChapter ch, PageSpec spec, {bool h
     return out;
   }
 
-  // pintura do começo do capítulo com uma frase só (a pintura fica grande); frase longa demais: pintura menor
-  // e o texto segue na mesma página, como antes
+  // pintura do começo do capítulo na página toda, com 2 frases de legenda no pé; legenda longa demais: pintura
+  // menor e o texto segue na mesma página, como antes
   var firstStart = 0;
   if (hasArt && ch.paragraphs.isNotEmpty) {
     final end = firstPieceEnd(0);
-    if (heightOf(0, end) <= (h - header) * .4) {
+    if (heightOf(0, end) <= h * .4) {
       segs.add(PageSeg(0, 0, end));
       chars += end;
       pages.add(BookPage(chapterIndex, 0, segs, 0, spotlight: true));
@@ -300,7 +303,7 @@ List<BookPage> paginate(int chapterIndex, BookChapter ch, PageSpec spec, {bool h
       if (para != i || i == 0) continue;
       if (segs.isNotEmpty) newPage();
       final end = firstPieceEnd(i);
-      final one = heightOf(i, end) <= h * .3 ? [PageSeg(i, 0, end)] : const <PageSeg>[];
+      final one = heightOf(i, end) <= h * .35 ? [PageSeg(i, 0, end)] : const <PageSeg>[];
       pages.add(BookPage(chapterIndex, pages.length, one, chars, plate: key, spotlight: one.isNotEmpty));
       if (one.isNotEmpty) {
         chars += end;
@@ -461,12 +464,6 @@ class PageView extends StatelessWidget {
           ),
           if (plateTitle.isNotEmpty)
             Text(plateTitle, textAlign: TextAlign.center, style: spec.body.copyWith(fontSize: (spec.body.fontSize ?? 14) * 1.05), textScaler: spec.scaler),
-          // a frase lida junto com a pintura
-          for (final s in page.segs) ...[
-            SizedBox(height: spec.gap),
-            Text.rich(_seg(s), textAlign: TextAlign.justify, style: spec.body, textScaler: spec.scaler),
-          ],
-          if (page.segs.isNotEmpty) SizedBox(height: spec.gap),
           if (plateCredit.isNotEmpty)
             Text(plateCredit,
                 textAlign: TextAlign.center,
@@ -495,8 +492,67 @@ class PageView extends StatelessWidget {
     ]);
   }
 
+  /// Página da pintura (opção A): a pintura enche a folha e passeia devagar para mostrar ela inteira; as 2
+  /// frases lidas ficam de legenda no pé, sobre um degradê de papel.
+  Widget _spotlight(String title, String credit) {
+    final fs = spec.body.fontSize ?? 14;
+    final light = TextStyle(color: Colors.white, decoration: TextDecoration.none, shadows: const [Shadow(blurRadius: 4)]);
+    return Container(
+      color: look.background,
+      child: Stack(fit: StackFit.expand, children: [
+        Positioned.fill(child: KenBurns(file: art!)),
+        // título em cima, sobre uma sombra leve
+        if (title.isNotEmpty)
+          Positioned(
+            left: 0,
+            right: 0,
+            top: 0,
+            child: Container(
+              padding: EdgeInsets.fromLTRB(spec.padding.left, spec.padding.top + 2, spec.padding.right, fs * 1.6),
+              decoration: const BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0x99000000), Color(0x00000000)])),
+              child: Text(title, maxLines: 2, overflow: TextOverflow.ellipsis, style: spec.title.merge(light), textScaler: spec.scaler),
+            ),
+          ),
+        // legenda: as frases lidas, no pé
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: Container(
+            padding: EdgeInsets.fromLTRB(spec.padding.left, fs * 2.6, spec.padding.right, spec.padding.bottom),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [look.background.withValues(alpha: 0), look.background.withValues(alpha: .93), look.background],
+                stops: const [0, .35, 1],
+              ),
+            ),
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              for (final s in page.segs) Text.rich(_seg(s), textAlign: TextAlign.center, style: spec.body, textScaler: spec.scaler),
+              if (credit.isNotEmpty)
+                Padding(
+                  padding: EdgeInsets.only(top: spec.gap),
+                  child: Text(credit,
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: fs * .62, color: look.faint, decoration: TextDecoration.none)),
+                ),
+              SizedBox(
+                height: spec.footer,
+                child: Center(child: Text(footer, style: TextStyle(fontSize: fs * .7, color: look.faint, decoration: TextDecoration.none))),
+              ),
+            ]),
+          ),
+        ),
+      ]),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (page.spotlight && art != null) return _spotlight(page.plate != null ? plateTitle : chapter.title, page.plate != null ? plateCredit : '');
     if (page.plate != null) return _plate();
     return Container(
       color: look.background,
@@ -514,17 +570,7 @@ class PageView extends StatelessWidget {
                 Text(chapter.title, textAlign: TextAlign.center, style: spec.title, textScaler: spec.scaler),
                 SizedBox(height: spec.gap),
               ],
-              if (page.first && art != null && page.spotlight) ...[
-                // pintura grande, com uma frase só embaixo
-                Expanded(
-                  child: Container(
-                    padding: const EdgeInsets.all(5),
-                    decoration: BoxDecoration(border: Border.all(color: look.faint.withValues(alpha: .6))),
-                    child: Image.file(art!, fit: BoxFit.contain, cacheWidth: 1000, gaplessPlayback: true, errorBuilder: (_, _, _) => const SizedBox()),
-                  ),
-                ),
-                SizedBox(height: spec.gap * 2),
-              ] else if (page.first && art != null) ...[
+              if (page.first && art != null) ...[
                 Container(
                   height: spec.artHeight,
                   decoration: BoxDecoration(border: Border.all(color: look.faint.withValues(alpha: .6))),
@@ -551,6 +597,54 @@ class PageView extends StatelessWidget {
       ]),
     );
   }
+}
+
+/// Pintura que enche o espaço (cortando as sobras) e passeia devagar de uma ponta à outra, para mostrar ela
+/// inteira. Só anima enquanto a página está na tela; com "remover animações" do Android, fica parada no meio.
+class KenBurns extends StatefulWidget {
+  final File file;
+  const KenBurns({super.key, required this.file});
+
+  @override
+  State<KenBurns> createState() => _KenBurnsState();
+}
+
+class _KenBurnsState extends State<KenBurns> with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(seconds: 14));
+  late final Animation<double> _t = CurvedAnimation(parent: _c, curve: Curves.easeInOut);
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.of(context).disableAnimations) {
+      _c.stop();
+      _c.value = .5;
+    } else if (!_c.isAnimating) {
+      unawaited(_c.repeat(reverse: true));
+    }
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => RepaintBoundary(
+        child: AnimatedBuilder(
+          animation: _t,
+          builder: (context, _) {
+            final a = _t.value * 2 - 1; // -1 (começo/topo) → 1 (fim/pé)
+            return Image.file(widget.file,
+                fit: BoxFit.cover,
+                alignment: Alignment(a, a),
+                cacheWidth: 1000,
+                gaplessPlayback: true,
+                errorBuilder: (_, _, _) => const SizedBox());
+          },
+        ),
+      );
 }
 
 // ---------------------------------------------------------------------------
