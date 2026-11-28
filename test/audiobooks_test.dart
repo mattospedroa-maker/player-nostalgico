@@ -774,20 +774,20 @@ void main() {
       expect(paginate(0, ch, plain).any((pg) => pg.segs.last.end < pars[pg.segs.last.para].length && !pieceStarts(pars[pg.segs.last.para]).contains(pg.segs.last.end)), isTrue);
     });
 
-    test('pintura aparece com uma frase só (começo do capítulo e prancha)', () {
+    test('pintura na página toda com 2 frases de legenda (começo do capítulo e prancha)', () {
       final pars = [for (var i = 0; i < 6; i++) 'Frase $i de abertura, ${'e depois vem mais texto, ' * 12}fim.'];
       const spec = PageSpec(size: Size(320, 400), body: TextStyle(fontSize: 14, height: 1.4), title: TextStyle(fontSize: 12), padding: EdgeInsets.all(10), artHeight: 140);
       final ch = BookChapter('I', pars);
       final pages = paginate(0, ch, spec, hasArt: true, plates: const [(3, 1000)]);
-      // 1ª página: pintura + 'Frase 0 de abertura,' e mais nada
+      // 1ª página: pintura + as 2 primeiras frases e mais nada
       expect(pages.first.spotlight, isTrue);
       expect(pages.first.segs, hasLength(1));
-      expect(pars[0].substring(pages.first.segs.single.start, pages.first.segs.single.end).trim(), 'Frase 0 de abertura,');
+      expect(pars[0].substring(pages.first.segs.single.start, pages.first.segs.single.end).trim(), 'Frase 0 de abertura, e depois vem mais texto,');
       expect(pages[1].segs.first.para, 0); // o resto do parágrafo segue
-      // prancha: pintura + 1ª frase do parágrafo da cena
+      // prancha: pintura + 2 primeiras frases do parágrafo da cena
       final plate = pages.firstWhere((p) => p.plate != null);
       expect(plate.spotlight, isTrue);
-      expect(pars[3].substring(plate.segs.single.start, plate.segs.single.end).trim(), 'Frase 3 de abertura,');
+      expect(pars[3].substring(plate.segs.single.start, plate.segs.single.end).trim(), 'Frase 3 de abertura, e depois vem mais texto,');
       expect(pages[pages.indexOf(plate) + 1].segs.first, isA<PageSeg>().having((s) => s.para, 'para', 3).having((s) => s.start, 'start', greaterThan(0)));
       int letters(List<BookPage> ps) => ps.fold(0, (a, p) => a + p.segs.fold(0, (b, s) => b + s.end - s.start));
       expect(letters(pages), greaterThan(pars.fold<int>(0, (a, t) => a + t.length) - pages.length * 2)); // nada some
